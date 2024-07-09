@@ -12,7 +12,7 @@ on:
       working-directory:
         required: true
         type: string
-        default: 'libs/'
+        default: 'libs/redis'
 
 env:
   PYTHON_VERSION: "3.11"
@@ -159,7 +159,7 @@ jobs:
 
       - name: Run integration tests
         env:
-          PARTNER_API_KEY: ${{ secrets.PARTNER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: make integration_tests
         working-directory: ${{ inputs.working-directory }}
 
