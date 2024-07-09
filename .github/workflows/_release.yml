@@ -12,7 +12,7 @@ on:
       working-directory:
         required: true
         type: string
-        default: 'libs/'
+        default: 'libs/redis'
 
 env:
   PYTHON_VERSION: "3.11"
@@ -72,6 +72,7 @@ jobs:
       - build
     uses:
       ./.github/workflows/_test_release.yml
+    permissions: write-all
     with:
       working-directory: ${{ inputs.working-directory }}
     secrets: inherit
@@ -81,6 +82,20 @@ jobs:
       - build
       - test-pypi-publish
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version:
+          - "3.8"
+          - "3.9"
+          - "3.10"
+          - "3.11"
+        redis-stack-version: ['latest']
+    services:
+      redis:
+        image: redis/redis-stack-server:${{matrix.redis-stack-version}}
+        ports:
+          - 6379:6379
+
     steps:
       - uses: actions/checkout@v4
 
@@ -111,7 +126,7 @@ jobs:
           PKG_NAME: ${{ needs.build.outputs.pkg-name }}
           VERSION: ${{ needs.build.outputs.version }}
         # Here we use:
-        # - The default regular PyPI index as the *primary* index, meaning 
+        # - The default regular PyPI index as the *primary* index, meaning
         #   that it takes priority (https://pypi.org/simple)
         # - The test PyPI index as an extra index, so that any dependencies that
         #   are not found on test PyPI can be resolved and installed anyway.
@@ -158,7 +173,7 @@ jobs:
 
       - name: Run integration tests
         env:
-          PARTNER_API_KEY: ${{ secrets.PARTNER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: make integration_tests
         working-directory: ${{ inputs.working-directory }}
 
