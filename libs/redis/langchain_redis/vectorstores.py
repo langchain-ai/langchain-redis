@@ -269,6 +269,20 @@ class RedisVectorStore(VectorStore):
             **kwargs,
         )
 
+    @classmethod
+    def from_existing_index(
+        cls,
+        index_name: str,
+        embedding: Embeddings,
+        **kwargs: Any,
+    ) -> RedisVectorStore:
+        """Create a RedisVectorStore from an existing Redis Search Index."""
+        config = RedisConfig.from_kwargs(**kwargs)
+        config.index_name = index_name
+        config.from_existing = True
+
+        return RedisVectorStore(embedding, config=config)
+
     def delete(self, ids: Optional[List[str]] = None, **kwargs: Any) -> Optional[bool]:
         """Delete keys from the vector store."""
         return self._index.delete(ids)

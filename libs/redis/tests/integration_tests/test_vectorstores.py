@@ -137,6 +137,33 @@ def test_redis_from_existing(texts: List[str], redis_url: str) -> None:
     assert output == TEST_SINGLE_RESULT
 
 
+def test_redis_from_existing_with_class_method(
+    texts: List[str], redis_url: str
+) -> None:
+    """Test adding a new document"""
+    # Create a unique index name for testing
+    index_name = f"test_index_{str(ULID())}"
+    vector_store = RedisVectorStore.from_texts(
+        texts,
+        OpenAIEmbeddings(),
+        index_name=index_name,
+        key_prefix="tst3",
+        redis_url=redis_url,
+    )
+
+    # write schema for the next test
+    vector_store.index.schema.to_yaml("test_schema.yml")
+
+    # Test creating from an existing
+    vector_store2 = RedisVectorStore.from_existing_index(
+        index_name=index_name,
+        embedding=OpenAIEmbeddings(),
+        redis_url=redis_url,
+    )
+    output = vector_store2.similarity_search("foo", k=1, return_metadata=False)
+    assert output == TEST_SINGLE_RESULT
+
+
 def test_redis_add_texts_to_existing(redis_url: str) -> None:
     """Test adding a new document"""
     # Test creating from an existing with yaml from file
