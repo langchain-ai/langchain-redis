@@ -46,17 +46,11 @@ class CustomTestEmbeddings(Embeddings):
             return [0.0, 0.0]
 
 
-# @pytest.fixture
-# def redis_url() -> str:
-#     return "redis://localhost:6379"
-
-
 @pytest.fixture
 def texts() -> List[str]:
     return ["foo", "bar", "baz"]
 
 
-# @pytest.mark.usefixtures("redis_container")
 def test_with_redis_url(texts: List[str], redis_url: str) -> None:
     """Test end to end construction and search."""
     # Create a unique index name for testing
