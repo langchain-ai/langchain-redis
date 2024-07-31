@@ -46,7 +46,10 @@ class MockStorage:
 
 class MockSearchIndex:
     def __init__(
-        self, schema: Optional[Dict[str, Any]] = None, client: Optional[Any] = None
+        self,
+        schema: Optional[Dict[str, Any]] = None,
+        client: Optional[Any] = None,
+        lib_name: Optional[str] = None,
     ) -> None:
         self.data: List[Dict[str, Any]] = []
         default_schema = {
