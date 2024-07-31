@@ -14,6 +14,7 @@ from redisvl.query.filter import FilterExpression  # type: ignore[import]
 from redisvl.redis.utils import buffer_to_array, convert_bytes  # type: ignore[import]
 
 from langchain_redis.config import RedisConfig
+from langchain_redis.version import __lib_name__
 
 Matrix = Union[List[List[float]], List[np.ndarray], np.ndarray]
 
@@ -103,16 +104,20 @@ class RedisVectorStore(VectorStore):
             )
 
         if self.config.index_schema:
-            self._index = SearchIndex(self.config.index_schema, self.config.redis())
+            self._index = SearchIndex(
+                self.config.index_schema, self.config.redis(), lib_name=__lib_name__
+            )
             self._index.create(overwrite=False)
 
         elif self.config.schema_path:
-            self._index = SearchIndex.from_yaml(self.config.schema_path)
+            self._index = SearchIndex.from_yaml(
+                self.config.schema_path, lib_name=__lib_name__
+            )
             self._index.set_client(self.config.redis())
             self._index.create(overwrite=False)
         elif self.config.from_existing and self.config.index_name:
             self._index = SearchIndex.from_existing(
-                self.config.index_name, self.config.redis()
+                self.config.index_name, self.config.redis(), lib_name=__lib_name__
             )
             self._index.create(overwrite=False)
         else:
@@ -157,7 +162,8 @@ class RedisVectorStore(VectorStore):
                         },
                         *modified_metadata_schema,
                     ],
-                }
+                },
+                lib_name=__lib_name__,
             )
             self._index.set_client(self.config.redis())
             self._index.create(overwrite=False)
@@ -234,10 +240,7 @@ class RedisVectorStore(VectorStore):
         if metadatas is None:
             metadatas = [{} for _ in range(len(texts))]
 
-        vector_store = cls(
-            embeddings=embedding,
-            config=config,
-        )
+        vector_store = cls(embeddings=embedding, config=config, **kwargs)
         out_keys = vector_store.add_texts(texts, metadatas, keys)  # type: ignore
 
         if return_keys:
@@ -281,7 +284,7 @@ class RedisVectorStore(VectorStore):
         config.index_name = index_name
         config.from_existing = True
 
-        return RedisVectorStore(embedding, config=config)
+        return RedisVectorStore(embedding, config=config, **kwargs)
 
     def delete(self, ids: Optional[List[str]] = None, **kwargs: Any) -> Optional[bool]:
         """Delete keys from the vector store."""

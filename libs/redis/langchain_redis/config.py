@@ -2,7 +2,7 @@ from typing import Any, Dict, List, Optional, Type
 
 from pydantic.v1 import BaseModel, Field, validator
 from redis import Redis
-from redisvl.schema import IndexSchema  # type: ignore[import]
+from redisvl.schema import IndexSchema, StorageType  # type: ignore[import]
 from ulid import ULID
 
 
@@ -34,6 +34,15 @@ class RedisConfig(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
+
+    def __init__(self, **data: Any):
+        super().__init__(**data)
+        if "schema" in data:
+            schema = data["schema"]
+            self.index_name = schema.index.name
+            self.key_prefix = schema.index.prefix
+            self.storage_type = "hash"
+            self.index_schema = schema
 
     @validator("key_prefix", always=True)
     def set_key_prefix(cls, v: Optional[str], values: Dict[str, str]) -> str:
@@ -84,7 +93,17 @@ class RedisConfig(BaseModel):
 
     @classmethod
     def from_schema(cls, schema: IndexSchema, **kwargs: Any) -> "RedisConfig":
-        return cls(schema=schema, **kwargs)
+        if schema.index.storage_type == StorageType.HASH:
+            storage_type = "hash"
+        else:
+            storage_type = "json"
+        return cls(
+            schema=schema,
+            index_name=schema.index.name,
+            key_prefix=schema.index.prefix,
+            storage_type=storage_type,
+            **kwargs,
+        )
 
     @classmethod
     def from_yaml(cls, schema_path: str, **kwargs: Any) -> "RedisConfig":

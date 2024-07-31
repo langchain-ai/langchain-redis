@@ -1,6 +1,8 @@
 from langchain_redis import __all__
 
 EXPECTED_ALL = [
+    "__version__",
+    "__lib_name__",
     "RedisVectorStore",
     "RedisConfig",
     "RedisCache",
