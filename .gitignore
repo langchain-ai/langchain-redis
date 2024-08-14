@@ -217,3 +217,5 @@ pyrightconfig.json
 [Ss]cripts
 pyvenv.cfg
 pip-selfcheck.json
+
+libs/redis/docs/.Trash*
