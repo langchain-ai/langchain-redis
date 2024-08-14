@@ -42,6 +42,9 @@ class MockRedis:
         for key in keys:
             self._json.data.pop(key, None)
 
+    def client_setinfo(self, attr: str, value: str) -> None:
+        pass
+
 
 # Helper functions (make sure these match the ones in your actual implementation)
 def _serialize_generations(generations: List[Generation]) -> str:

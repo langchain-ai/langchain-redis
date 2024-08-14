@@ -11,6 +11,8 @@ from redis.commands.search.field import NumericField, TagField, TextField
 from redis.commands.search.indexDefinition import IndexDefinition, IndexType
 from redis.commands.search.query import Query
 
+from langchain_redis.version import __lib_name__
+
 
 class RedisChatMessageHistory(BaseChatMessageHistory):
     def __init__(
@@ -20,9 +22,15 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         key_prefix: str = "chat:",
         ttl: Optional[int] = None,
         index_name: str = "idx:chat_history",
+        redis: Optional[Redis] = None,
         **kwargs: Any,
     ):
-        self.redis_client = Redis.from_url(redis_url, **kwargs)
+        self.redis_client = redis or Redis.from_url(redis_url, **kwargs)
+        try:
+            self.redis_client.client_setinfo("LIB-NAME", __lib_name__)  # type: ignore
+        except ResponseError:
+            # Fall back to a simple log echo
+            self.redis_client.echo(__lib_name__)
         self.session_id = session_id
         self.key_prefix = key_prefix
         self.ttl = ttl

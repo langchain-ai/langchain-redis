@@ -15,10 +15,13 @@ from langchain_core.load.load import loads
 from pydantic.v1 import Field
 from redis import Redis
 from redis.commands.json.path import Path
+from redis.exceptions import ResponseError
 from redisvl.extensions.llmcache import (  # type: ignore[import]
     SemanticCache as RedisVLSemanticCache,
 )
 from redisvl.utils.vectorize import BaseVectorizer  # type: ignore[import]
+
+from langchain_redis.version import __lib_name__
 
 
 class EmbeddingsVectorizer(BaseVectorizer):
@@ -61,6 +64,11 @@ class RedisCache(BaseCache):
         redis: Optional[Redis] = None,
     ):
         self.redis = redis or Redis.from_url(redis_url)
+        try:
+            self.redis.client_setinfo("LIB-NAME", __lib_name__)  # type: ignore
+        except ResponseError:
+            # Fall back to a simple log echo
+            self.redis.echo(__lib_name__)
         self.ttl = ttl
         self.prefix = prefix
 
@@ -112,13 +120,19 @@ class RedisSemanticCache(BaseCache):
         redis: Optional[Redis] = None,
     ):
         self.redis = redis or Redis.from_url(redis_url)
+        try:
+            self.redis.client_setinfo("LIB-NAME", __lib_name__)  # type: ignore
+        except ResponseError:
+            # Fall back to a simple log echo
+            self.redis.echo(__lib_name__)
+
         self.embeddings = embeddings
         self.prefix = prefix
         vectorizer = EmbeddingsVectorizer(embeddings=self.embeddings)
 
         self.cache = RedisVLSemanticCache(
             vectorizer=vectorizer,
-            redis_url=redis_url,
+            redis_client=self.redis,
             distance_threshold=distance_threshold,
             ttl=ttl,
             name=name,
