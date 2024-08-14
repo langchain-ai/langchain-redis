@@ -57,6 +57,9 @@ class MockRedis:
         else:
             return []
 
+    def client_setinfo(self, attr: str, value: str) -> None:
+        pass
+
 
 class MockFT:
     def __init__(self, redis: MockRedis, index_name: str) -> None:
