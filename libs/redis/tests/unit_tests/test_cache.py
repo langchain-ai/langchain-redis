@@ -7,6 +7,8 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.outputs import Generation
 from langchain_redis import RedisCache, RedisSemanticCache
 from unittest.mock import Mock, patch, MagicMock
+from redis.exceptions import ResponseError
+from langchain_redis.version import __full_lib_name__
 
 
 class MockRedisJSON:
@@ -41,6 +43,9 @@ class MockRedis:
     def delete(self, *keys: str) -> None:
         for key in keys:
             self._json.data.pop(key, None)
+
+    def client_setinfo(self, attr: str, value: str) -> None:
+        pass
 
 
 # Helper functions (make sure these match the ones in your actual implementation)
@@ -95,11 +100,39 @@ class TestRedisCache:
         mock_redis.expire = MagicMock()
         mock_redis.scan = Mock(return_value=(0, []))
         mock_redis.delete = Mock()
+        mock_redis.client_setinfo = Mock()
+        mock_redis.echo = Mock()
 
         with patch("langchain_redis.cache.Redis.from_url", return_value=mock_redis):
             cache = RedisCache(redis_url="redis://localhost:6379", ttl=3600)
             cache.redis = mock_redis
             return cache
+
+    def test_initialization(self, redis_cache: RedisCache) -> None:
+        # Test that client_setinfo was called
+        redis_cache.redis.client_setinfo.assert_called_once_with(  # type: ignore
+            "LIB-NAME", __full_lib_name__
+        )
+
+        # Test that echo was not called (as client_setinfo didn't raise an exception)
+        redis_cache.redis.echo.assert_not_called()  # type: ignore
+
+    def test_initialization_fallback(self, redis_cache: RedisCache) -> None:
+        # Reset the mock to clear previous calls
+        redis_cache.redis.client_setinfo.reset_mock()  # type: ignore
+        redis_cache.redis.echo.reset_mock()  # type: ignore
+
+        # Simulate ResponseError for client_setinfo
+        redis_cache.redis.client_setinfo.side_effect = ResponseError("Test error")  # type: ignore
+
+        # Simulate the initialization process
+        with patch(
+            "langchain_redis.cache.Redis.from_url", return_value=redis_cache.redis
+        ):
+            RedisCache(redis_url="redis://localhost:6379", ttl=3600)
+
+        # Test that echo was called as a fallback
+        redis_cache.redis.echo.assert_called_once_with(__full_lib_name__)  # type: ignore
 
     def test_update_and_lookup(self, redis_cache: RedisCache) -> None:
         prompt = "test prompt"
