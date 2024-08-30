@@ -56,7 +56,53 @@ def maximal_marginal_relevance(
     lambda_mult: float = 0.5,
     k: int = 4,
 ) -> List[int]:
-    """Calculate maximal marginal relevance."""
+    """Calculate maximal marginal relevance.
+
+    Maximal marginal relevance optimizes for similarity to the query AND diversity
+    among selected documents.
+
+    Args:
+        query_embedding: Embedding of the query text.
+        embedding_list: List of embeddings to select from.
+        lambda_mult: Number between 0 and 1 that determines the degree
+            of diversity among the results, where 0 corresponds to
+            maximum diversity and 1 to minimum diversity.
+            Defaults to 0.5.
+        k: Number of results to return. Defaults to 4.
+
+    Returns:
+        List of indices of selected embeddings.
+
+    Example:
+        .. code-block:: python
+
+            from langchain_redis import RedisVectorStore
+            from langchain_openai import OpenAIEmbeddings
+            import numpy as np
+
+            embeddings = OpenAIEmbeddings()
+            vector_store = RedisVectorStore(
+                index_name="langchain-demo",
+                embedding=embeddings,
+                redis_url="redis://localhost:6379",
+            )
+
+            query = "What is the capital of France?"
+            query_embedding = embeddings.embed_query(query)
+
+            # Assuming you have a list of document embeddings
+            doc_embeddings = [embeddings.embed_query(doc) for doc in documents]
+
+            selected_indices = vector_store.maximal_marginal_relevance(
+                query_embedding=np.array(query_embedding),
+                embedding_list=[np.array(emb) for emb in doc_embeddings],
+                lambda_mult=0.5,
+                k=2
+            )
+
+            for idx in selected_indices:
+                print(f"Selected document: {documents[idx]}")
+    """
     if min(k, len(embedding_list)) <= 0:
         return []
     if query_embedding.ndim == 1:
@@ -85,7 +131,134 @@ def maximal_marginal_relevance(
 
 
 class RedisVectorStore(VectorStore):
-    """Redis vector store implementation using RedisVL."""
+    """Redis vector store integration.
+
+    Setup:
+        Install ``langchain-redis`` and running the Redis docker container.
+
+        .. code-block:: bash
+
+            pip install -qU langchain-redis
+            docker run -p 6379:6379 redis/redis-stack-server:latest
+
+    Key init args — indexing params:
+        index_name: str
+            Name of the index to create.
+        embedding: Embeddings
+            Embedding function to use.
+        distance_metric: str
+            Distance metric to use for similarity search. Default is "COSINE".
+        indexing_algorithm: str
+            Indexing algorithm to use. Default is "FLAT".
+        vector_datatype: str
+            Data type of the vector. Default is "FLOAT32".
+
+    Key init args — client params:
+        redis_url: Optional[str]
+            URL of the Redis instance to connect to.
+        redis_client: Optional[Redis]
+            Pre-existing Redis connection.
+
+    Instantiate:
+        .. code-block:: python
+
+            from langchain_redis import RedisVectorStore
+            from langchain_openai import OpenAIEmbeddings
+
+            vector_store = RedisVectorStore(
+                index_name="langchain-demo",
+                embedding=OpenAIEmbeddings(),
+                redis_url="redis://localhost:6379",
+            )
+
+    You can also connect to an existing Redis instance by passing in a
+    pre-existing Redis connection via the redis_client argument.
+
+    Instantiate from existing connection:
+        .. code-block:: python
+
+            from langchain_redis import RedisVectorStore
+            from langchain_openai import OpenAIEmbeddings
+            from redis import Redis
+
+            redis_client = Redis.from_url("redis://localhost:6379")
+
+            store = RedisVectorStore(
+                embedding=OpenAIEmbeddings(),
+                index_name="langchain-demo",
+                redis_client=redis_client
+            )
+
+    Add Documents:
+        .. code-block:: python
+
+            from langchain_core.documents import Document
+
+            document_1 = Document(page_content="foo", metadata={"baz": "bar"})
+            document_2 = Document(page_content="bar", metadata={"foo": "baz"})
+            document_3 = Document(page_content="to be deleted")
+
+            documents = [document_1, document_2, document_3]
+            ids = ["1", "2", "3"]
+            vector_store.add_documents(documents=documents, ids=ids)
+
+    Delete Documents:
+        .. code-block:: python
+
+            vector_store.delete(ids=["3"])
+
+    Search:
+        .. code-block:: python
+
+            results = vector_store.similarity_search(query="foo", k=1)
+            for doc in results:
+                print(f"* {doc.page_content} [{doc.metadata}]")
+
+        .. code-block:: python
+
+            * foo [{'baz': 'bar'}]
+
+    Search with filter:
+        .. code-block:: python
+
+            from redisvl.query.filter import Tag
+
+            results = vector_store.similarity_search(
+                query="foo",
+                k=1,
+                filter=Tag("baz") == "bar"
+            )
+            for doc in results:
+                print(f"* {doc.page_content} [{doc.metadata}]")
+
+        .. code-block:: python
+
+            * foo [{'baz': 'bar'}]
+
+    Search with score:
+        .. code-block:: python
+
+            results = vector_store.similarity_search_with_score(query="foo", k=1)
+            for doc, score in results:
+                print(f"* [SIM={score:.3f}] {doc.page_content} [{doc.metadata}]")
+
+        .. code-block:: python
+
+            * [SIM=0.916] foo [{'baz': 'bar'}]
+
+    Use as Retriever:
+        .. code-block:: python
+
+            retriever = vector_store.as_retriever(
+                search_type="mmr",
+                search_kwargs={"k": 1, "fetch_k": 2, "lambda_mult": 0.5},
+            )
+            retriever.get_relevant_documents("foo")
+
+        .. code-block:: python
+
+            [Document(page_content='foo', metadata={'baz': 'bar'})]
+    """
 
     def __init__(
         self,
@@ -187,10 +360,66 @@ class RedisVectorStore(VectorStore):
         keys: Optional[List[dict]] = None,
         **kwargs: Any,
     ) -> List[str]:
-        """Add text documents to the vector store."""
-        # Embed the documents in bulk
+        """Add text documents to the vector store.
+
+        Args:
+            texts: Iterable of strings to add to the vector store.
+            metadatas: Optional list of metadata dicts associated with the texts.
+            keys: Optional list of keys to associate with the documents.
+            **kwargs: Additional keyword arguments:
+                - ids: Optional list of ids to associate with the documents.
+                - refresh_indices: Whether to refresh the Redis indices
+                after adding the texts. Defaults to True.
+                - create_index_if_not_exists: Whether to create the Redis
+                index if it doesn't already exist. Defaults to True.
+                - batch_size: Optional. Number of texts to add to the
+                index at a time. Defaults to 1000.
+
+        Returns:
+            List of ids from adding the texts into the vector store.
+
+        Example:
+            .. code-block:: python
+
+                from langchain_redis import RedisVectorStore
+                from langchain_openai import OpenAIEmbeddings
+
+                vector_store = RedisVectorStore(
+                    index_name="langchain-demo",
+                    embedding=OpenAIEmbeddings(),
+                    redis_url="redis://localhost:6379",
+                )
+
+                texts = [
+                    "The quick brown fox jumps over the lazy dog",
+                    "Hello world",
+                    "Machine learning is fascinating"
+                ]
+                metadatas = [
+                    {"source": "book", "page": 1},
+                    {"source": "greeting", "language": "english"},
+                    {"source": "article", "topic": "AI"}
+                ]
+
+                ids = vector_store.add_texts(
+                    texts=texts,
+                    metadatas=metadatas,
+                    batch_size=2
+                )
+
+                print(f"Added documents with ids: {ids}")
+
+        Note:
+            - If `metadatas` is provided, it must have the same length as `texts`.
+            - If `keys` is provided, it must have the same length as `texts`.
+            - The `batch_size` parameter can be used to control the number of
+            documents added in each batch, which can be useful for managing
+            memory usage when adding a large number of documents.
+        """
+
         # Convert texts to a list if it's not already
         texts_list = list(texts)
+        # Embed the documents in bulk
         embeddings = self._embeddings.embed_documents(texts_list)
 
         datas = [
@@ -234,7 +463,69 @@ class RedisVectorStore(VectorStore):
         return_keys: bool = False,
         **kwargs: Any,
     ) -> RedisVectorStore:
-        """Create a RedisVectorStore from a list of texts."""
+        """Create a RedisVectorStore from a list of texts.
+
+        Args:
+            texts: List of texts to add to the vector store.
+            embedding: Embedding function to use for encoding the texts.
+            metadatas: Optional list of metadata dicts associated with the texts.
+            config: Optional RedisConfig object. If not provided, one will be created
+                from kwargs.
+            keys: Optional list of keys to associate with the documents.
+            return_keys: Whether to return the keys of the added documents.
+            **kwargs: Additional keyword arguments to pass to RedisConfig if config is
+                not provided.
+                Commonly used kwargs include:
+                - index_name: Name of the Redis index to create.
+                - redis_url: URL of the Redis instance to connect to.
+                - distance_metric: Distance metric to use for similarity search.
+                    Default is "COSINE".
+                - indexing_algorithm: Indexing algorithm to use. Default is "FLAT".
+
+        Returns:
+            RedisVectorStore: A new RedisVectorStore instance with the texts added.
+
+        Example:
+            .. code-block:: python
+
+                from langchain_redis import RedisVectorStore
+                from langchain_openai import OpenAIEmbeddings
+
+                texts = [
+                    "The quick brown fox jumps over the lazy dog",
+                    "Hello world",
+                    "Machine learning is fascinating"
+                ]
+                metadatas = [
+                    {"source": "book", "page": 1},
+                    {"source": "greeting", "language": "english"},
+                    {"source": "article", "topic": "AI"}
+                ]
+
+                embeddings = OpenAIEmbeddings()
+
+                vector_store = RedisVectorStore.from_texts(
+                    texts=texts,
+                    embedding=embeddings,
+                    metadatas=metadatas,
+                    index_name="langchain-demo",
+                    redis_url="redis://localhost:6379",
+                    distance_metric="COSINE"
+                )
+
+                # Now you can use the vector_store for similarity search
+                results = vector_store.similarity_search("AI and machine learning", k=1)
+                print(results[0].page_content)
+
+        Note:
+            - This method creates a new RedisVectorStore instance and adds the
+                provided texts to it.
+            - If `metadatas` is provided, it must have the same length as `texts`.
+            - If `keys` is provided, it must have the same length as `texts`.
+            - The `return_keys` parameter determines whether the method returns just the
+            RedisVectorStore instance or a tuple of (RedisVectorStore, List[str]) where
+            the second element is the list of keys for the added documents.
+        """
         config = config or RedisConfig.from_kwargs(**kwargs)
 
         if metadatas is None:
@@ -279,7 +570,61 @@ class RedisVectorStore(VectorStore):
         embedding: Embeddings,
         **kwargs: Any,
     ) -> RedisVectorStore:
-        """Create a RedisVectorStore from an existing Redis Search Index."""
+        """Create a RedisVectorStore from an existing Redis Search Index.
+
+        This method allows you to connect to an already existing index in Redis,
+        which can be useful for continuing work with previously created indexes
+        or for connecting to indexes created outside of this client.
+
+        Args:
+            index_name: Name of the existing index to use.
+            embedding: Embedding function to use for encoding queries.
+            **kwargs: Additional keyword arguments to pass to RedisConfig.
+                Common kwargs include:
+                - redis_url: URL of the Redis instance to connect to.
+                - redis_client: Pre-existing Redis client to use.
+                - vector_query_field: Name of the field containing the vector
+                    representations.
+                - content_field: Name of the field containing the document content.
+
+        Returns:
+            RedisVectorStore: A new RedisVectorStore instance connected to the
+                existing index.
+
+        Example:
+            .. code-block:: python
+
+                from langchain_redis import RedisVectorStore
+                from langchain_openai import OpenAIEmbeddings
+                from redis import Redis
+
+                embeddings = OpenAIEmbeddings()
+
+                # Connect to an existing index
+                vector_store = RedisVectorStore.from_existing_index(
+                    index_name="my-existing-index",
+                    embedding=embeddings,
+                    redis_url="redis://localhost:6379",
+                    vector_query_field="embedding",
+                    content_field="text"
+                )
+
+                # Now you can use the vector_store for similarity search
+                results = vector_store.similarity_search("AI and machine learning", k=1)
+                print(results[0].page_content)
+
+        Note:
+            - This method assumes that the index already exists in Redis.
+            - The embedding function provided should be compatible with the embeddings
+            stored in the existing index.
+            - If you're using custom field names for vectors or content in your
+                existing index, make sure to specify them using `vector_query_field` and
+                `content_field` respectively.
+            - This method is useful for scenarios where you want to reuse an
+                existing index, such as when the index was created by another process
+                or when you want to use the same index across different sessions
+                or applications.
+        """
         config = RedisConfig.from_kwargs(**kwargs)
         config.index_name = index_name
         config.from_existing = True
