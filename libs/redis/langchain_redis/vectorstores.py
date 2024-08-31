@@ -548,7 +548,67 @@ class RedisVectorStore(VectorStore):
         return_keys: bool = False,
         **kwargs: Any,
     ) -> RedisVectorStore:
-        """Create a RedisVectorStore from a list of texts."""
+        """Create a RedisVectorStore from a list of Documents.
+
+        Args:
+            documents: List of Document objects to add to the vector store.
+            embedding: Embeddings object to use for encoding the documents.
+            config: Optional RedisConfig object. If not provided, one will be
+                    created from kwargs.
+            return_keys: Whether to return the keys of the added documents.
+            **kwargs: Additional keyword arguments to pass to RedisConfig if config
+                      is not provided.
+                Common kwargs include:
+                - index_name: Name of the Redis index to create.
+                - redis_url: URL of the Redis instance to connect to.
+                - distance_metric: Distance metric to use for similarity search.
+                                   Default is "COSINE".
+                - indexing_algorithm: Indexing algorithm to use. Default is "FLAT".
+
+        Returns:
+            RedisVectorStore: A new RedisVectorStore instance with the documents added.
+
+        Example:
+            .. code-block:: python
+
+                from langchain_redis import RedisVectorStore
+                from langchain_openai import OpenAIEmbeddings
+                from langchain_core.documents import Document
+
+                documents = [
+                    Document(
+                      page_content="The quick brown fox",
+                      metadata={"animal": "fox"}
+                    ),
+                    Document(
+                      page_content="jumps over the lazy dog",
+                      metadata={"animal": "dog"}
+                    )
+                ]
+
+                embeddings = OpenAIEmbeddings()
+
+                vector_store = RedisVectorStore.from_documents(
+                    documents=documents,
+                    embedding=embeddings,
+                    index_name="animal-docs",
+                    redis_url="redis://localhost:6379"
+                )
+
+                # Now you can use the vector_store for similarity search
+                results = vector_store.similarity_search("quick animal", k=1)
+                print(results[0].page_content)
+
+        Note:
+            - This method creates a new RedisVectorStore instance and adds the provided
+              documents to it.
+            - The method extracts the text content and metadata from
+              each Document object.
+            - If a RedisConfig object is not provided, one will be created using
+              the additional kwargs passed to this method.
+            - The embedding function is used to convert the document text into vector
+              representations for efficient similarity search.
+        """
         texts = [doc.page_content for doc in documents]
         metadatas = [doc.metadata for doc in documents]
 
@@ -632,8 +692,52 @@ class RedisVectorStore(VectorStore):
         return RedisVectorStore(embedding, config=config, **kwargs)
 
     def delete(self, ids: Optional[List[str]] = None, **kwargs: Any) -> Optional[bool]:
-        """Delete keys from the vector store."""
-        return self._index.delete(ids)
+        """Delete ids from the vector store.
+
+        Args:
+            ids: Optional list of ids of the documents to delete.
+            **kwargs: Additional keyword arguments (not used in the
+                      current implementation).
+
+        Returns:
+            Optional[bool]: True if one or more keys are deleted,
+            False otherwise
+
+        Example:
+            .. code-block:: python
+
+                from langchain_redis import RedisVectorStore
+                from langchain_openai import OpenAIEmbeddings
+
+                vector_store = RedisVectorStore(
+                    index_name="langchain-demo",
+                    embedding=OpenAIEmbeddings(),
+                    redis_url="redis://localhost:6379",
+                )
+
+                # Assuming documents with these ids exist in the store
+                ids_to_delete = ["doc1", "doc2", "doc3"]
+
+                result = vector_store.delete(ids=ids_to_delete)
+                if result:
+                  print("Documents were succesfully deleted")
+                else:
+                  print("No Documents were deleted")
+
+        Note:
+            - If `ids` is None or an empty list, the method returns False.
+            - If the number of actually deleted keys differs from the number of keys
+              submitted for deletion the method returns False
+            - The method uses the `drop_keys` functionality from RedisVL to delete
+              the keys from Redis.
+            - Keys are constructed by prefixing each id with the `key_prefix` specified
+              in the configuration.
+        """
+        if ids and len(ids) > 0:
+            keys = [f"{self.config.key_prefix}:{id}" for id in ids]
+            return self._index.drop_keys(keys) == len(ids)
+        else:
+            return False
 
     def similarity_search_by_vector(
         self,
@@ -937,7 +1041,58 @@ class RedisVectorStore(VectorStore):
         filter: Optional[FilterExpression] = None,
         **kwargs: Any,
     ) -> Union[List[Tuple[Document, float]], List[Tuple[Document, float, np.ndarray]]]:
-        """Return docs most similar to query."""
+        """Return documents most similar to query string, along with scores.
+
+        Args:
+            query: Text to look up documents similar to.
+            k: Number of Documents to return. Defaults to 4.
+            filter: Optional filter expression to apply to the query.
+            **kwargs: Other keyword arguments to pass to the search function:
+                - custom_query: Optional callable that can be used
+                                to customize the query.
+                - doc_builder: Optional callable to customize Document creation.
+                - return_metadata: Whether to return metadata. Defaults to True.
+                - distance_threshold: Optional distance threshold for filtering results.
+                - return_all: Whether to return all data in the Hash/JSON including
+                non-indexed fields. Defaults to False.
+
+        Returns:
+            List of tuples of (Document, score) most similar to the query.
+
+        Example:
+            .. code-block:: python
+
+                from langchain_redis import RedisVectorStore
+                from langchain_openai import OpenAIEmbeddings
+
+                vector_store = RedisVectorStore(
+                    index_name="langchain-demo",
+                    embedding=OpenAIEmbeddings(),
+                    redis_url="redis://localhost:6379",
+                )
+
+                results = vector_store.similarity_search_with_score(
+                    "What is machine learning?",
+                    k=2,
+                    filter=None
+                )
+
+                for doc, score in results:
+                    print(f"Score: {score}")
+                    print(f"Content: {doc.page_content}")
+                    print(f"Metadata: {doc.metadata}\n")
+
+        Note:
+            - The method returns scores along with documents. Lower scores indicate
+            higher similarity.
+            - The actual search is performed using the vector representation of the
+              query, which is why an embedding function must be provided during
+              initialization.
+            - The `filter` parameter allows for additional filtering of results
+              based on metadata.
+            - If `return_all` is set to True, all fields stored in Redis will be
+              returned, which may include non-indexed fields.
+        """
         embedding = self._embeddings.embed_query(query)
         return self.similarity_search_with_score_by_vector(
             embedding,

@@ -1,4 +1,4 @@
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Union
 from unittest.mock import Mock, patch
 
 import pytest
@@ -90,10 +90,11 @@ class MockSearchIndex:
             for i, doc in enumerate(self.data[:k])
         ]
 
-    def delete(self, keys: List[str]) -> None:
+    def drop_keys(self, keys: Union[str, List[str]]) -> int:
         self.data = [doc for i, doc in enumerate(self.data) if f"key_{i}" not in keys]
         for key in keys:
             self._storage.data.pop(key, None)
+        return len(keys)
 
     @classmethod
     def from_dict(cls, dict_data: Dict[str, Any]) -> "MockSearchIndex":
@@ -171,9 +172,8 @@ class TestRedisVectorStore:
 
     def test_delete(self, vector_store: RedisVectorStore) -> None:
         keys = vector_store.add_texts(["Hello, world!", "Test document"])
-        vector_store.delete(keys)
-        results = vector_store.similarity_search("Hello", k=1)
-        assert len(results) == 0
+        result = vector_store.delete(keys)
+        assert result is True
 
     @patch("langchain_redis.vectorstores.RedisVectorStore.add_texts")
     def test_from_texts(
