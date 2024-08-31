@@ -1230,3 +1230,38 @@ def test_similarity_search_k(redis_url: str) -> None:
 
     # Clean up
     vector_store.index.delete(drop=True)
+
+
+def test_delete(redis_url: str) -> None:
+    """Test deleting documents from the vector store"""
+    # Create a unique index name for testing
+    index_name = f"test_index_{str(ULID())}"
+    texts = ["foo", "bar", "baz"]
+    ids = ["id1", "id2", "id3"]
+
+    vector_store = RedisVectorStore.from_texts(
+        texts, OpenAIEmbeddings(), index_name=index_name, redis_url=redis_url, keys=ids
+    )
+
+    # Verify documents are present
+    assert len(vector_store.similarity_search("foo", k=3)) == 3
+
+    # Delete two documents
+    result = vector_store.delete(ids=["id1", "id2"])
+    assert result is True
+
+    # Verify only one document remains
+    remaining_docs = vector_store.similarity_search("foo", k=3)
+    assert len(remaining_docs) == 1
+    assert remaining_docs[0].page_content == "baz"
+
+    # Try to delete a non-existent document
+    result = vector_store.delete(ids=["non_existent_id"])
+    assert result is False
+
+    # Try to delete with an empty list
+    result = vector_store.delete(ids=[])
+    assert result is False
+
+    # Clean up
+    vector_store.index.delete(drop=True)
