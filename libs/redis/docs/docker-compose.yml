@@ -10,7 +10,7 @@ services:
       - ./:/home/jupyter/workspace/libs/redis/docs
     environment:
       - REDIS_URL=redis://redis:6379
-      - USER_AGENT=LangChainRedisJupyterNotebooks/0.0.2
+      - USER_AGENT=LangChainRedisJupyterNotebooks/0.0.3
     user: jupyter
     working_dir: /home/jupyter/workspace/libs/redis/docs
     depends_on:
