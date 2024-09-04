@@ -252,15 +252,20 @@ class RedisCache(BaseCache):
             - If no keys match the prefix, the method will complete without any errors.
         """
         cursor = 0
+        pipe = self.redis.pipeline()
         while True:
-            pipe = self.redis.pipeline()
-            cursor, keys = self.redis.scan(cursor, match=f"{self.prefix}:*", count=100)  # type: ignore[misc]
-            if keys:
-                pipe.delete(*keys)
-                pipe.execute()
+            try:
+                cursor, keys = self.redis.scan(
+                    cursor, match=f"{self.prefix}:*", count=100
+                )  # type: ignore[misc]
+                if keys:
+                    pipe.delete(*keys)
+                    pipe.execute()
 
-            if cursor == 0:
-                break
+                if cursor == 0:
+                    break
+            finally:
+                pipe.reset()
 
 
 class RedisSemanticCache(BaseCache):
