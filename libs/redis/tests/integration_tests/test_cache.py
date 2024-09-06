@@ -13,6 +13,7 @@ from langchain_core.messages.ai import AIMessage
 from langchain_core.messages.base import BaseMessage
 from langchain_core.outputs import ChatGeneration, Generation
 from langchain_openai.embeddings.base import OpenAIEmbeddings
+from redis import Redis
 from ulid import ULID
 
 from langchain_redis import RedisCache, RedisSemanticCache
@@ -181,3 +182,38 @@ class TestRedisCacheBasicIntegration:
         assert isinstance(cached_result2[0], ChatGeneration)
         assert cached_result1[0].message.content == "Hello from cache"
         assert cached_result2[0].message.content == "How are you from cache"
+
+
+def test_redis_cache_with_preconfigured_client(redis_url: str) -> None:
+    redis_client = Redis.from_url(redis_url)
+    cache = RedisCache(redis=redis_client)
+
+    cache.update("test_prompt", "test_llm", [Generation(text="test_response")])
+    result = cache.lookup("test_prompt", "test_llm")
+
+    assert result is not None
+    assert len(result) == 1
+    assert result[0].text == "test_response"
+
+    cache.clear()
+
+
+def test_redis_semantic_cache_with_preconfigured_client(
+    openai_embeddings: OpenAIEmbeddings, redis_url: str
+) -> None:
+    redis_client = Redis.from_url(redis_url)
+    cache = RedisSemanticCache(
+        embeddings=openai_embeddings,
+        redis=redis_client,
+    )
+
+    prompt = "What is the capital of France?"
+    llm_string = "test_llm"
+    cache.update(prompt, llm_string, [Generation(text="Paris")])
+
+    result = cache.lookup(prompt, llm_string)
+    assert result is not None
+    assert len(result) == 1
+    assert result[0].text == "Paris"
+
+    cache.clear()

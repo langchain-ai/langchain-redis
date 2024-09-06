@@ -1265,3 +1265,63 @@ def test_delete(redis_url: str) -> None:
 
     # Clean up
     vector_store.index.delete(drop=True)
+
+
+def test_redis_vector_store_with_preconfigured_config_with_redis_client(
+    redis_url: str, texts: List[str]
+) -> None:
+    redis_client = Redis.from_url(redis_url)
+    config = RedisConfig(
+        index_name=f"test_index_{str(ULID())}", redis_client=redis_client
+    )
+    vector_store = RedisVectorStore(OpenAIEmbeddings(), config=config)
+    vector_store.add_texts(texts)
+
+    count_query = CountQuery(FilterExpression("*"))
+    count = vector_store.index.query(count_query)
+    assert count == len(texts)
+
+    # Clean up
+    vector_store.index.delete(drop=True)
+
+
+def test_redis_vector_store_with_preconfigured_redis_client(
+    redis_url: str, texts: List[str]
+) -> None:
+    redis_client = Redis.from_url(redis_url)
+    config = RedisConfig(
+        index_name=f"test_index_{str(ULID())}", redis_client=redis_client
+    )
+    vector_store = RedisVectorStore(OpenAIEmbeddings(), config=config)
+    vector_store.add_texts(texts)
+
+    count_query = CountQuery(FilterExpression("*"))
+    count = vector_store.index.query(count_query)
+    assert count == len(texts)
+
+    # Clean up
+    vector_store.index.delete(drop=True)
+
+
+def test_redis_from_documents_with_preconfigured_redis_client(
+    redis_url: str, texts: List[str]
+) -> None:
+    """Test from_documents constructor."""
+    redis_client = Redis.from_url(redis_url)
+    docs = [Document(page_content=t, metadata={"a": "b"}) for t in texts]
+    metadata_schema = [
+        {"name": "a", "type": "tag"},
+    ]
+    vector_store = RedisVectorStore.from_documents(
+        docs,
+        OpenAIEmbeddings(),
+        key_prefix="tst5",
+        metadata_schema=metadata_schema,
+        redis_client=redis_client,
+    )
+    output = vector_store.similarity_search("foo", k=1, return_metadata=True)
+
+    assert "a" in output[0].metadata.keys()
+    assert "b" in output[0].metadata.values()
+    # Clean up
+    vector_store.index.delete(drop=True)
