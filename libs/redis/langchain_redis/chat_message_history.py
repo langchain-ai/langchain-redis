@@ -323,5 +323,5 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         return [json.loads(doc.json)["data"] for doc in results.docs]
 
     def __len__(self) -> int:
-        query = Query(f"@session_id:{{{self.session_id}}}")
+        query = Query(f"@session_id:{{{self.session_id}}}").no_content()
         return self.redis_client.ft(self.index_name).search(query).total
