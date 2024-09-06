@@ -103,9 +103,9 @@ class RedisCache(BaseCache):
         redis_url: str = "redis://localhost:6379",
         ttl: Optional[int] = None,
         prefix: Optional[str] = "redis",
-        redis: Optional[Redis] = None,
+        redis_client: Optional[Redis] = None,
     ):
-        self.redis = redis or Redis.from_url(redis_url)
+        self.redis = redis_client or Redis.from_url(redis_url)
         try:
             self.redis.client_setinfo("LIB-NAME", __full_lib_name__)  # type: ignore
         except ResponseError:
@@ -330,9 +330,9 @@ class RedisSemanticCache(BaseCache):
         ttl: Optional[int] = None,
         name: Optional[str] = "llmcache",
         prefix: Optional[str] = "llmcache",
-        redis: Optional[Redis] = None,
+        redis_client: Optional[Redis] = None,
     ):
-        self.redis = redis or Redis.from_url(redis_url)
+        self.redis = redis_client or Redis.from_url(redis_url)
         self.embeddings = embeddings
         self.prefix = prefix
         vectorizer = EmbeddingsVectorizer(embeddings=self.embeddings)

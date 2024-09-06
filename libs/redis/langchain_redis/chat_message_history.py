@@ -84,10 +84,10 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         key_prefix: str = "chat:",
         ttl: Optional[int] = None,
         index_name: str = "idx:chat_history",
-        redis: Optional[Redis] = None,
+        redis_client: Optional[Redis] = None,
         **kwargs: Any,
     ):
-        self.redis_client = redis or Redis.from_url(redis_url, **kwargs)
+        self.redis_client = redis_client or Redis.from_url(redis_url, **kwargs)
         try:
             self.redis_client.client_setinfo("LIB-NAME", __full_lib_name__)  # type: ignore
         except ResponseError:

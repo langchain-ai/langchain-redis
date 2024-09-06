@@ -186,7 +186,7 @@ class TestRedisCacheBasicIntegration:
 
 def test_redis_cache_with_preconfigured_client(redis_url: str) -> None:
     redis_client = Redis.from_url(redis_url)
-    cache = RedisCache(redis=redis_client)
+    cache = RedisCache(redis_client=redis_client)
 
     cache.update("test_prompt", "test_llm", [Generation(text="test_response")])
     result = cache.lookup("test_prompt", "test_llm")
@@ -204,7 +204,7 @@ def test_redis_semantic_cache_with_preconfigured_client(
     redis_client = Redis.from_url(redis_url)
     cache = RedisSemanticCache(
         embeddings=openai_embeddings,
-        redis=redis_client,
+        redis_client=redis_client,
     )
 
     prompt = "What is the capital of France?"
