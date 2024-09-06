@@ -413,7 +413,7 @@ class RedisConfig(BaseModel):
 
                 config = RedisConfig.from_existing_index(
                     index_name="my_existing_index",
-                    redis=redis_client
+                    redis_client=redis_client
                 )
 
                 print(config.index_name)  # Output: my_existing_index

@@ -252,3 +252,21 @@ def test_add_message_to_existing_session(redis_url: str) -> None:
 
     assert len(history1.messages) == 2
     assert len(history2.messages) == 2
+
+
+def test_chat_history_with_preconfigured_client(redis_url: str) -> None:
+    redis_client = Redis.from_url(redis_url)
+    session_id = f"test_session_{str(ULID())}"
+    history = RedisChatMessageHistory(session_id=session_id, redis_client=redis_client)
+
+    history.add_message(HumanMessage(content="Hello, AI!"))
+    history.add_message(AIMessage(content="Hello, human!"))
+
+    messages = history.messages
+    assert len(messages) == 2
+    assert isinstance(messages[0], HumanMessage)
+    assert isinstance(messages[1], AIMessage)
+    assert messages[0].content == "Hello, AI!"
+    assert messages[1].content == "Hello, human!"
+
+    history.clear()
