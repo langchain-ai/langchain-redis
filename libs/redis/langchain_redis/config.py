@@ -97,7 +97,7 @@ class RedisConfig(BaseModel):
             schema = data["schema"]
             self.index_name = schema.index.name
             self.key_prefix = schema.index.prefix
-            self.storage_type = "hash"
+            self.storage_type = schema.index.storage_type.value
             self.index_schema = schema
 
     @validator("key_prefix", always=True)

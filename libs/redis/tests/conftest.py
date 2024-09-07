@@ -9,7 +9,6 @@ try:
 except ImportError:
     TESTCONTAINERS_AVAILABLE = False
 
-
 if TESTCONTAINERS_AVAILABLE:
 
     @pytest.fixture(scope="session", autouse=True)
