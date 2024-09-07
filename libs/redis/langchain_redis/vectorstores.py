@@ -12,6 +12,7 @@ from redisvl.index import SearchIndex  # type: ignore[import]
 from redisvl.query import RangeQuery, VectorQuery  # type: ignore[import]
 from redisvl.query.filter import FilterExpression  # type: ignore[import]
 from redisvl.redis.utils import buffer_to_array, convert_bytes  # type: ignore[import]
+from redisvl.schema import StorageType  # type: ignore[import]
 
 from langchain_redis.config import RedisConfig
 from langchain_redis.version import __lib_name__
@@ -425,9 +426,9 @@ class RedisVectorStore(VectorStore):
         datas = [
             {
                 self.config.content_field: text,
-                self.config.embedding_field: np.array(
-                    embedding, dtype=np.float32
-                ).tobytes(),
+                self.config.embedding_field: embedding
+                if self.config.storage_type == StorageType.JSON.value
+                else np.array(embedding, dtype=np.float32).tobytes(),
                 **{
                     field_name: (
                         self.config.default_tag_separator.join(metadata[field_name])
@@ -821,21 +822,49 @@ class RedisVectorStore(VectorStore):
                 for doc in results
             ]
         else:
-            # Fetch full hash data for each document
-            pipe = self._index.client.pipeline()
-            for doc in results:
-                pipe.hgetall(doc["id"])
-            full_docs = convert_bytes(pipe.execute())
+            if self.config.storage_type == StorageType.HASH.value:
+                # Fetch full hash data for each document
+                if not results:
+                    full_docs = []
+                else:
+                    with self._index.client.pipeline(transaction=False) as pipe:
+                        for doc in results:
+                            pipe.hgetall(doc["id"])
+                        full_docs = convert_bytes(pipe.execute())
 
-            return [
-                Document(
-                    page_content=doc[self.config.content_field],
-                    metadata={
-                        k: v for k, v in doc.items() if k != self.config.content_field
-                    },
-                )
-                for doc in full_docs
-            ]
+                return [
+                    Document(
+                        page_content=doc[self.config.content_field],
+                        metadata={
+                            k: v
+                            for k, v in doc.items()
+                            if k != self.config.content_field
+                        },
+                    )
+                    for doc in full_docs
+                ]
+            else:
+                # Fetch full JSON data for each document
+                if not results:
+                    full_docs = []
+                else:
+                    with self._index.client.json().pipeline(transaction=False) as pipe:
+                        for doc in results:
+                            pipe.get(doc["id"], ".")
+                        full_docs = pipe.execute()
+
+                return [
+                    Document(
+                        page_content=doc[self.config.content_field],
+                        metadata={
+                            k: v
+                            for k, v in doc.items()
+                            if k != self.config.content_field
+                        },
+                    )
+                    for doc in full_docs
+                    if doc is not None  # Handle potential missing documents
+                ]
 
     def similarity_search(
         self,
@@ -934,7 +963,9 @@ class RedisVectorStore(VectorStore):
 
                 # Create a dictionary mapping document ids to their embeddings
                 doc_embeddings_dict = {
-                    doc_id: buffer_to_array(doc[self.config.embedding_field])
+                    doc_id: doc[self.config.embedding_field]
+                    if self.config.storage_type == StorageType.JSON.value
+                    else buffer_to_array(doc[self.config.embedding_field])
                     for doc_id, doc in zip(doc_ids, docs_from_storage)
                 }
 
@@ -989,34 +1020,15 @@ class RedisVectorStore(VectorStore):
                     for doc in results
                 ]
         else:
-            # Fetch full hash data for each document
-            pipe = self._index.client.pipeline()
-            for doc in results:
-                pipe.hgetall(doc["id"])
-            full_docs = convert_bytes(pipe.execute())
+            if self.config.storage_type == StorageType.HASH.value:
+                # Fetch full hash data for each document
+                pipe = self._index.client.pipeline()
+                for doc in results:
+                    pipe.hgetall(doc["id"])
+                full_docs = convert_bytes(pipe.execute())
 
-            if with_vectors:
-                docs_with_scores = [
-                    (
-                        Document(
-                            page_content=doc[self.config.content_field],
-                            metadata={
-                                k: v
-                                for k, v in doc.items()
-                                if k != self.config.content_field
-                            },
-                        ),
-                        float(result.get("vector_distance", 0)),
-                        buffer_to_array(doc.get(self.config.embedding_field)),
-                    )
-                    for doc, result in zip(full_docs, results)
-                ]
-            else:
-                docs_with_scores = [
-                    cast(  # type: ignore[misc]
-                        Union[
-                            Tuple[Document, float], Tuple[Document, float, np.ndarray]
-                        ],
+                if with_vectors:
+                    docs_with_scores = [
                         (
                             Document(
                                 page_content=doc[self.config.content_field],
@@ -1027,10 +1039,73 @@ class RedisVectorStore(VectorStore):
                                 },
                             ),
                             float(result.get("vector_distance", 0)),
-                        ),
-                    )
-                    for doc, result in zip(full_docs, results)
-                ]
+                            buffer_to_array(doc.get(self.config.embedding_field)),
+                        )
+                        for doc, result in zip(full_docs, results)
+                    ]
+                else:
+                    docs_with_scores = [
+                        cast(  # type: ignore[misc]
+                            Union[
+                                Tuple[Document, float],
+                                Tuple[Document, float, np.ndarray],
+                            ],
+                            (
+                                Document(
+                                    page_content=doc[self.config.content_field],
+                                    metadata={
+                                        k: v
+                                        for k, v in doc.items()
+                                        if k != self.config.content_field
+                                    },
+                                ),
+                                float(result.get("vector_distance", 0)),
+                            ),
+                        )
+                        for doc, result in zip(full_docs, results)
+                    ]
+            else:
+                # Fetch full JSON data for each document
+                doc_ids = [doc["id"] for doc in results]
+                full_docs = self._index.client.json().mget(doc_ids, ".")
+
+                if with_vectors:
+                    docs_with_scores = [
+                        (
+                            Document(
+                                page_content=doc[self.config.content_field],
+                                metadata={
+                                    k: v
+                                    for k, v in doc.items()
+                                    if k != self.config.content_field
+                                },
+                            ),
+                            float(result.get("vector_distance", 0)),
+                            doc.get(self.config.embedding_field),
+                        )
+                        for doc, result in zip(full_docs, results)
+                    ]
+                else:
+                    docs_with_scores = [
+                        cast(  # type: ignore[misc]
+                            Union[
+                                Tuple[Document, float],
+                                Tuple[Document, float, np.ndarray],
+                            ],
+                            (
+                                Document(
+                                    page_content=doc[self.config.content_field],
+                                    metadata={
+                                        k: v
+                                        for k, v in doc.items()
+                                        if k != self.config.content_field
+                                    },
+                                ),
+                                float(result.get("vector_distance", 0)),
+                            ),
+                        )
+                        for doc, result in zip(full_docs, results)
+                    ]
 
         return docs_with_scores
 
