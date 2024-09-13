@@ -12,6 +12,7 @@ from langchain_core.caches import RETURN_VAL_TYPE, BaseCache
 from langchain_core.embeddings import Embeddings
 from langchain_core.load.dump import dumps
 from langchain_core.load.load import loads
+from pydantic import ConfigDict
 from pydantic.v1 import Field
 from redis import Redis
 from redis.commands.json.path import Path
@@ -22,15 +23,15 @@ from redisvl.extensions.llmcache import (  # type: ignore[import]
 from redisvl.utils.vectorize import BaseVectorizer  # type: ignore[import]
 
 from langchain_redis.version import __full_lib_name__
-from pydantic import ConfigDict
-
 
 
 class EmbeddingsVectorizer(BaseVectorizer):
     embeddings: Embeddings = Field(...)
     model: str = Field(default="custom_embeddings")
 
-    model_config = ConfigDict(arbitrary_types_allowed=True,)
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+    )
 
     def __init__(self, embeddings: Embeddings):
         dims = len(embeddings.embed_query("test"))
