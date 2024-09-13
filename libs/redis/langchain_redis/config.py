@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional, Type
 
-from pydantic import BaseModel, ConfigDict, Field, validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, validator
 from redis import Redis
 from redisvl.schema import IndexSchema, StorageType  # type: ignore[import]
 from ulid import ULID
@@ -101,7 +101,7 @@ class RedisConfig(BaseModel):
             self.storage_type = schema.index.storage_type.value
             self.index_schema = schema
 
-    @validator("key_prefix", always=True)
+    @field_validator("key_prefix")
     def set_key_prefix(cls, v: Optional[str], values: Dict[str, str]) -> str:
         if v is None:
             return values["index_name"]
