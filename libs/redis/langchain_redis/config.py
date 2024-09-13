@@ -1,7 +1,6 @@
 from typing import Any, Dict, List, Optional, Type
 
-from pydantic import ConfigDict
-from pydantic.v1 import BaseModel, Field, validator
+from pydantic import BaseModel, ConfigDict, Field, validator
 from redis import Redis
 from redisvl.schema import IndexSchema, StorageType  # type: ignore[import]
 from ulid import ULID
@@ -177,7 +176,7 @@ class RedisConfig(BaseModel):
         """
         # Get the default values from the class attributes
         default_config = {}
-        for field_name, field in cls.__fields__.items():
+        for field_name, field in cls.model_fields.items():
             if field.default is not None:
                 default_config[field_name] = field.default
             elif field.default_factory is not None:
