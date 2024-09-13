@@ -22,14 +22,15 @@ from redisvl.extensions.llmcache import (  # type: ignore[import]
 from redisvl.utils.vectorize import BaseVectorizer  # type: ignore[import]
 
 from langchain_redis.version import __full_lib_name__
+from pydantic import ConfigDict
+
 
 
 class EmbeddingsVectorizer(BaseVectorizer):
     embeddings: Embeddings = Field(...)
     model: str = Field(default="custom_embeddings")
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True,)
 
     def __init__(self, embeddings: Embeddings):
         dims = len(embeddings.embed_query("test"))

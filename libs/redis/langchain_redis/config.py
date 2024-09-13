@@ -4,6 +4,8 @@ from pydantic.v1 import BaseModel, Field, validator
 from redis import Redis
 from redisvl.schema import IndexSchema, StorageType  # type: ignore[import]
 from ulid import ULID
+from pydantic import ConfigDict
+
 
 
 def generate_ulid() -> str:
@@ -88,8 +90,7 @@ class RedisConfig(BaseModel):
     custom_keys: Optional[List[str]] = None
     embedding_dimensions: Optional[int] = None
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True,)
 
     def __init__(self, **data: Any):
         super().__init__(**data)
