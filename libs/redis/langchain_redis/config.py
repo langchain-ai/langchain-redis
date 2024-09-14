@@ -1,8 +1,9 @@
 from typing import Any, Dict, List, Optional, Type
 
-from pydantic.v1 import BaseModel, Field, validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from redis import Redis
 from redisvl.schema import IndexSchema, StorageType  # type: ignore[import]
+from typing_extensions import Self
 from ulid import ULID
 
 
@@ -88,8 +89,9 @@ class RedisConfig(BaseModel):
     custom_keys: Optional[List[str]] = None
     embedding_dimensions: Optional[int] = None
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+    )
 
     def __init__(self, **data: Any):
         super().__init__(**data)
@@ -100,29 +102,27 @@ class RedisConfig(BaseModel):
             self.storage_type = schema.index.storage_type.value
             self.index_schema = schema
 
-    @validator("key_prefix", always=True)
-    def set_key_prefix(cls, v: Optional[str], values: Dict[str, str]) -> str:
-        if v is None:
-            return values["index_name"]
-        return v
-
-    @validator("index_schema", "schema_path", "metadata_schema")
-    def check_schema_options(
-        cls, v: Optional[str], values: Dict[str, str]
-    ) -> Optional[Any]:
+    @model_validator(mode="before")
+    @classmethod
+    def check_schema_options(cls, values: Dict) -> Dict:
         options = [
             values.get("index_schema"),
             values.get("schema_path"),
             values.get("metadata_schema"),
         ]
-        if sum(1 for option in options if option is not None) > 1:
+        if sum(option is not None for option in options) > 1:
             raise ValueError(
-                """
-                Only one of 'index_schema', 'schema_path', \
-                or 'metadata_schema' can be specified
-                """
+                "Only one of 'index_schema', 'schema_path', "
+                "or 'metadata_schema' can be specified."
             )
-        return v
+
+        return values
+
+    @model_validator(mode="after")
+    def set_key_prefix(self) -> Self:
+        if self.key_prefix is None:
+            self.key_prefix = self.index_schema
+        return self
 
     @classmethod
     def from_kwargs(cls: Type["RedisConfig"], **kwargs: Any) -> "RedisConfig":
@@ -175,7 +175,7 @@ class RedisConfig(BaseModel):
         """
         # Get the default values from the class attributes
         default_config = {}
-        for field_name, field in cls.__fields__.items():
+        for field_name, field in cls.model_fields.items():
             if field.default is not None:
                 default_config[field_name] = field.default
             elif field.default_factory is not None:
