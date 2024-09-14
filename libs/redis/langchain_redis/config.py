@@ -1,8 +1,9 @@
-from typing import Any, Dict, List, Optional, Self, Type
+from typing import Any, Dict, List, Optional, Type
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from redis import Redis
 from redisvl.schema import IndexSchema, StorageType  # type: ignore[import]
+from typing_extensions import Self
 from ulid import ULID
 
 
