@@ -1,6 +1,6 @@
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Self, Type
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from redis import Redis
 from redisvl.schema import IndexSchema, StorageType  # type: ignore[import]
 from ulid import ULID
@@ -101,29 +101,27 @@ class RedisConfig(BaseModel):
             self.storage_type = schema.index.storage_type.value
             self.index_schema = schema
 
-    @field_validator("key_prefix")
-    def set_key_prefix(cls, v: Optional[str], values: Dict[str, str]) -> str:
-        if v is None:
-            return values["index_name"]
-        return v
-
-    @validator("index_schema", "schema_path", "metadata_schema")
-    def check_schema_options(
-        cls, v: Optional[str], values: Dict[str, str]
-    ) -> Optional[Any]:
+    @model_validator(mode="before")
+    @classmethod
+    def check_schema_options(cls, values: Dict) -> Dict:
         options = [
             values.get("index_schema"),
             values.get("schema_path"),
             values.get("metadata_schema"),
         ]
-        if sum(1 for option in options if option is not None) > 1:
+        if sum(option is not None for option in options) > 1:
             raise ValueError(
-                """
-                Only one of 'index_schema', 'schema_path', \
-                or 'metadata_schema' can be specified
-                """
+                "Only one of 'index_schema', 'schema_path', "
+                "or 'metadata_schema' can be specified."
             )
-        return v
+
+        return values
+
+    @model_validator(mode="after")
+    def set_key_prefix(self) -> Self:
+        if self.key_prefix is None:
+            self.key_prefix = self.index_schema
+        return self
 
     @classmethod
     def from_kwargs(cls: Type["RedisConfig"], **kwargs: Any) -> "RedisConfig":
