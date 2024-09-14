@@ -93,15 +93,6 @@ class RedisConfig(BaseModel):
         arbitrary_types_allowed=True,
     )
 
-    def __init__(self, **data: Any):
-        super().__init__(**data)
-        if "schema" in data:
-            schema = data["schema"]
-            self.index_name = schema.index.name
-            self.key_prefix = schema.index.prefix
-            self.storage_type = schema.index.storage_type.value
-            self.index_schema = schema
-
     @model_validator(mode="before")
     @classmethod
     def check_schema_options(cls, values: Dict) -> Dict:
@@ -115,6 +106,12 @@ class RedisConfig(BaseModel):
                 "Only one of 'index_schema', 'schema_path', "
                 "or 'metadata_schema' can be specified."
             )
+        if "schema" in values:
+            schema = values["schema"]
+            values["index_name"] = schema.index.name
+            values["key_prefix"] = schema.index.prefix
+            values["storage_type"] = schema.index.storage_type.value
+            values["index_schema"] = schema
 
         return values
 
