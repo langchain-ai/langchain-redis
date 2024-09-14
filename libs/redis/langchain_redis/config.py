@@ -107,7 +107,7 @@ class RedisConfig(BaseModel):
                 "or 'metadata_schema' can be specified."
             )
         if "schema" in values:
-            schema = values["schema"]
+            schema = values.pop("schema")
             values["index_name"] = schema.index.name
             values["key_prefix"] = schema.index.prefix
             values["storage_type"] = schema.index.storage_type.value
