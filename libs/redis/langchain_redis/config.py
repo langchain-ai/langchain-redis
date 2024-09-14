@@ -118,7 +118,7 @@ class RedisConfig(BaseModel):
     @model_validator(mode="after")
     def set_key_prefix(self) -> Self:
         if self.key_prefix is None:
-            self.key_prefix = self.index_schema
+            self.key_prefix = self.index_name
         return self
 
     @classmethod
