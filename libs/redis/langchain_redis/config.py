@@ -1,9 +1,9 @@
 from typing import Any, Dict, List, Optional, Type
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SkipValidation, model_validator
 from redis import Redis
 from redisvl.schema import IndexSchema, StorageType  # type: ignore[import]
-from typing_extensions import Self
+from typing_extensions import Annotated, Self
 from ulid import ULID
 
 
@@ -83,7 +83,9 @@ class RedisConfig(BaseModel):
     embedding_field: str = "embedding"
     default_tag_separator: str = "|"
     metadata_schema: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
-    index_schema: Optional[IndexSchema] = Field(default=None, alias="schema")
+    index_schema: Annotated[Optional[IndexSchema], SkipValidation()] = Field(
+        default=None, alias="schema"
+    )
     schema_path: Optional[str] = None
     return_keys: bool = False
     custom_keys: Optional[List[str]] = None
@@ -91,6 +93,7 @@ class RedisConfig(BaseModel):
 
     model_config = ConfigDict(
         arbitrary_types_allowed=True,
+        populate_by_name=True,
     )
 
     @model_validator(mode="before")
