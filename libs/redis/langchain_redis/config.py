@@ -93,6 +93,11 @@ class RedisConfig(BaseModel):
         arbitrary_types_allowed=True,
     )
 
+    def __init__(self, **data: Any):
+        super().__init__(**data)
+        if "schema" in data and self.index_schema is None:
+            self.index_schema = data["schema"]
+
     @model_validator(mode="before")
     @classmethod
     def check_schema_options(cls, values: Dict) -> Dict:
