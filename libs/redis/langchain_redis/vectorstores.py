@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable, List, Optional, Tuple, Union, cast
+from typing import Any, Iterable, List, Optional, Tuple, Union, cast,\
+    Sequence, Dict
 
 import numpy as np
 from langchain_core.documents import Document
@@ -739,6 +740,46 @@ class RedisVectorStore(VectorStore):
             return self._index.drop_keys(keys) == len(ids)
         else:
             return False
+        
+    def get_by_ids(self, ids: Sequence[str], /) -> List[Document]:
+        """Get documents by their IDs.
+
+        The returned documents are expected to have the ID field set to the ID of the
+        document in the vector store.
+
+        Fewer documents may be returned than requested if some IDs are not found or
+        if there are duplicated IDs.
+
+        Users should not assume that the order of the returned documents matches
+        the order of the input IDs. Instead, users should rely on the ID field of the
+        returned documents.
+
+        This method should **NOT** raise exceptions if no documents are found for
+        some IDs.
+
+        Args:
+            ids: List of ids to retrieve.
+
+        Returns:
+            List of Documents.
+        """
+
+        result_docs = []
+        for key in ids:
+            doc_dict = self.index.client.hgetall(
+                name = f"{self.config.key_prefix}:{key}"
+            )
+            if doc_dict is None or len(doc_dict)==0:
+                continue
+
+            doc_dict.pop(self.config.embedding_field.encode(),None)
+            doc_dict: Dict = convert_bytes(doc_dict)
+            doc = Document(doc_dict.pop(self.config.content_field),
+                           metadata=doc_dict)
+            result_docs.append(doc)
+
+        return result_docs
+        
 
     def similarity_search_by_vector(
         self,
