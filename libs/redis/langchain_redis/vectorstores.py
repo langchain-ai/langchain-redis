@@ -767,8 +767,9 @@ class RedisVectorStore(VectorStore):
         result_docs = []
         for key in ids:
             doc_dict = self.index.client.hgetall(
-                name = f"{self.config.key_prefix}:{key}"
+                name = key
             )
+            
             if doc_dict is None or len(doc_dict)==0:
                 continue
 
