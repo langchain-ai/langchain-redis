@@ -42,6 +42,9 @@ class MockStorage:
 
     def get(self, client: Any, doc_ids: List[str]) -> List[Dict[str, Any]]:
         return [self.data.get(doc_id, {}) for doc_id in doc_ids]
+    
+    def hgetall(self, name: str) -> Dict[str, Any]:
+        return self.data.get(name,{})
 
 
 class MockSearchIndex:
@@ -63,8 +66,9 @@ class MockSearchIndex:
         self.schema = MockSchema(
             schema["fields"] if schema and "fields" in schema else default_schema
         )
-        self.client = client or Mock()
+
         self._storage = MockStorage()
+        self.client = self._storage
 
     def create(self, overwrite: bool = False) -> None:
         pass
@@ -147,6 +151,16 @@ class TestRedisVectorStore:
         keys = vector_store.add_texts(texts, metadatas)
         assert len(keys) == 2
         assert all(key.startswith("key_") for key in keys)
+
+    def test_get_by_ids(self, vector_store: RedisVectorStore) -> None:
+        texts = ["Hello, world!", "Test document"]
+        metadatas = [{"source": "greeting"}, {"source": "test"}]
+        keys = vector_store.add_texts(texts, metadatas)
+        docs = vector_store.get_by_ids(keys)
+        assert len(keys) == len(docs)
+        assert all(isinstance(doc, Document) for doc in docs)
+        assert all(isinstance(doc.page_content, str) for doc in docs)
+        assert all(isinstance(doc.metadata, dict) for doc in docs)
 
     def test_similarity_search(self, vector_store: RedisVectorStore) -> None:
         vector_store.add_texts(["Hello, world!", "Test document"])
