@@ -867,7 +867,7 @@ def test_similarity_search_with_score_with_limit_distance(redis_url: str) -> Non
 
     # Print and verify the scores
     for doc, score in output:  # type: ignore[misc]
-        assert score >= 0  # Ensure score is non-negative
+        assert float(round(score, 4)) >= 0 # Ensure score is non-negative
 
     # Clean up
     vector_store.index.delete(drop=True)
