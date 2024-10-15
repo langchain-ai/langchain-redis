@@ -1042,7 +1042,10 @@ class RedisVectorStore(VectorStore):
                                 },
                             ),
                             float(result.get("vector_distance", 0)),
-                            buffer_to_array(doc.get(self.config.embedding_field), dtype=self.config.vector_datatype),
+                            buffer_to_array(
+                                doc.get(self.config.embedding_field),
+                                dtype=self.config.vector_datatype
+                            ),
                         )
                         for doc, result in zip(full_docs, results)
                     ]
