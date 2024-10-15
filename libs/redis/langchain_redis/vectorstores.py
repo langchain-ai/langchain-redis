@@ -967,7 +967,7 @@ class RedisVectorStore(VectorStore):
                     if self.config.storage_type == StorageType.JSON.value
                     else buffer_to_array(
                         doc[self.config.embedding_field],
-                        dtype=self.config.vector_datatype
+                        dtype=self.config.vector_datatype,
                     )
                     for doc_id, doc in zip(doc_ids, docs_from_storage)
                 }
@@ -1044,7 +1044,7 @@ class RedisVectorStore(VectorStore):
                             float(result.get("vector_distance", 0)),
                             buffer_to_array(
                                 doc.get(self.config.embedding_field),
-                                dtype=self.config.vector_datatype
+                                dtype=self.config.vector_datatype,
                             ),
                         )
                         for doc, result in zip(full_docs, results)

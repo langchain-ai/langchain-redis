@@ -38,10 +38,7 @@ class EmbeddingsVectorizer(BaseVectorizer):
         super().__init__(model="custom_embeddings", dims=dims, embeddings=embeddings)
 
     def encode(
-        self,
-        texts: Union[str, List[str]],
-        dtype: Union[str, VectorDataType],
-        **kwargs
+        self, texts: Union[str, List[str]], dtype: Union[str, VectorDataType], **kwargs
     ) -> np.ndarray:
         if isinstance(dtype, VectorDataType):
             dtype = dtype.value.lower()
@@ -53,10 +50,7 @@ class EmbeddingsVectorizer(BaseVectorizer):
         return self.encode(text, dtype, **kwargs).tolist()
 
     def embed_many(
-        self,
-        texts: List[str],
-        dtype="float32",
-        **kwargs
+        self, texts: List[str], dtype="float32", **kwargs
     ) -> List[List[float]]:
         return self.encode(texts, dtype, **kwargs).tolist()
 
@@ -64,10 +58,7 @@ class EmbeddingsVectorizer(BaseVectorizer):
         return await asyncio.to_thread(self.embed, text, dtype, **kwargs)
 
     async def aembed_many(
-        self,
-        texts: List[str],
-        dtype="float32",
-        **kwargs
+        self, texts: List[str], dtype="float32", **kwargs
     ) -> List[List[float]]:
         return await asyncio.to_thread(self.embed_many, texts, dtype, **kwargs)
 
