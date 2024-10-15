@@ -19,7 +19,7 @@ from redis.exceptions import ResponseError
 from redisvl.extensions.llmcache import (  # type: ignore[import]
     SemanticCache as RedisVLSemanticCache,
 )
-from redisvl.schema.fields import VectorDataType
+from redisvl.schema.fields import VectorDataType  # type: ignore[import]
 from redisvl.utils.vectorize import BaseVectorizer  # type: ignore[import]
 
 from langchain_redis.version import __full_lib_name__
@@ -46,19 +46,23 @@ class EmbeddingsVectorizer(BaseVectorizer):
             return np.array(self.embeddings.embed_query(texts), dtype=dtype)
         return np.array(self.embeddings.embed_documents(texts), dtype=dtype)
 
-    def embed(self, text: str, dtype="float32", **kwargs) -> List[float]:
+    def embed(
+        self, text: str, dtype: Union[str, VectorDataType] = "float32", **kwargs
+    ) -> List[float]:
         return self.encode(text, dtype, **kwargs).tolist()
 
     def embed_many(
-        self, texts: List[str], dtype="float32", **kwargs
+        self, texts: List[str], dtype: Union[str, VectorDataType] = "float32", **kwargs
     ) -> List[List[float]]:
         return self.encode(texts, dtype, **kwargs).tolist()
 
-    async def aembed(self, text: str, dtype="float32", **kwargs) -> List[float]:
+    async def aembed(
+        self, text: str, dtype: Union[str, VectorDataType] = "float32", **kwargs
+    ) -> List[float]:
         return await asyncio.to_thread(self.embed, text, dtype, **kwargs)
 
     async def aembed_many(
-        self, texts: List[str], dtype="float32", **kwargs
+        self, texts: List[str], dtype: Union[str, VectorDataType] = "float32", **kwargs
     ) -> List[List[float]]:
         return await asyncio.to_thread(self.embed_many, texts, dtype, **kwargs)
 
