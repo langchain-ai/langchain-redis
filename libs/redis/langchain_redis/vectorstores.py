@@ -13,6 +13,7 @@ from redisvl.query import RangeQuery, VectorQuery  # type: ignore[import]
 from redisvl.query.filter import FilterExpression  # type: ignore[import]
 from redisvl.redis.utils import buffer_to_array, convert_bytes  # type: ignore[import]
 from redisvl.schema import StorageType  # type: ignore[import]
+from redisvl.schema.fields import VectorDataType
 
 from langchain_redis.config import RedisConfig
 from langchain_redis.version import __lib_name__
@@ -965,7 +966,7 @@ class RedisVectorStore(VectorStore):
                 doc_embeddings_dict = {
                     doc_id: doc[self.config.embedding_field]
                     if self.config.storage_type == StorageType.JSON.value
-                    else buffer_to_array(doc[self.config.embedding_field])
+                    else buffer_to_array(doc[self.config.embedding_field],dtype=VectorDataType.FLOAT32)
                     for doc_id, doc in zip(doc_ids, docs_from_storage)
                 }
 
