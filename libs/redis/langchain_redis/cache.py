@@ -38,7 +38,10 @@ class EmbeddingsVectorizer(BaseVectorizer):
         super().__init__(model="custom_embeddings", dims=dims, embeddings=embeddings)
 
     def encode(
-        self, texts: Union[str, List[str]], dtype: Union[str, VectorDataType], **kwargs
+        self,
+        texts: Union[str, List[str]],
+        dtype: Union[str, VectorDataType],
+        **kwargs: Any,
     ) -> np.ndarray:
         if isinstance(dtype, VectorDataType):
             dtype = dtype.value.lower()
@@ -47,22 +50,34 @@ class EmbeddingsVectorizer(BaseVectorizer):
         return np.array(self.embeddings.embed_documents(texts), dtype=dtype)
 
     def embed(
-        self, text: str, dtype: Union[str, VectorDataType] = "float32", **kwargs
+        self,
+        text: str,
+        dtype: Union[str, VectorDataType] = "float32",
+        **kwargs: Any,
     ) -> List[float]:
         return self.encode(text, dtype, **kwargs).tolist()
 
     def embed_many(
-        self, texts: List[str], dtype: Union[str, VectorDataType] = "float32", **kwargs
+        self,
+        texts: List[str],
+        dtype: Union[str, VectorDataType] = "float32",
+        **kwargs: Any,
     ) -> List[List[float]]:
         return self.encode(texts, dtype, **kwargs).tolist()
 
     async def aembed(
-        self, text: str, dtype: Union[str, VectorDataType] = "float32", **kwargs
+        self,
+        text: str,
+        dtype: Union[str, VectorDataType] = "float32",
+        **kwargs: Any,
     ) -> List[float]:
         return await asyncio.to_thread(self.embed, text, dtype, **kwargs)
 
     async def aembed_many(
-        self, texts: List[str], dtype: Union[str, VectorDataType] = "float32", **kwargs
+        self,
+        texts: List[str],
+        dtype: Union[str, VectorDataType] = "float32",
+        **kwargs: Any,
     ) -> List[List[float]]:
         return await asyncio.to_thread(self.embed_many, texts, dtype, **kwargs)
 
