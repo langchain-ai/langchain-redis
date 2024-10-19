@@ -490,6 +490,39 @@ def test_similarity_search(redis_url: str) -> None:
     vector_store.index.delete(drop=True)
 
 
+def test_get_by_ids(redis_url: str) -> None:
+    """Test end to end construction and search."""
+    # Create embeddings
+    embeddings = OpenAIEmbeddings()
+
+    # Create a unique index name for testing
+    index_name = f"test_index_{str(ULID())}"
+
+    texts = ["foo", "bar", "baz"]
+
+    keys = ["a", "b", "c"]
+
+    # Create the RedisVectorStore
+    vector_store = RedisVectorStore.from_texts(
+        texts,
+        embeddings,
+        index_name=index_name,
+        key_prefix="tst11",
+        redis_url=redis_url,
+    )
+
+    ids = [f"tst11:{k}" for k in ["a","c"]]
+
+    docs = vector_store.get_by_ids(ids)
+
+    result_texts = [doc.page_content for doc in docs]
+    
+    assert all(txt in result_texts for txt in texts)
+
+    # Clean up
+    vector_store.index.delete(drop=True)
+
+
 def test_similarity_search_with_scores(redis_url: str) -> None:
     """Test end to end construction and search."""
     # Create embeddings
