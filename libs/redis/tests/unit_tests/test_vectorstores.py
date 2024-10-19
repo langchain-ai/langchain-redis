@@ -61,7 +61,7 @@ class MockSearchIndex:
             "metadata": {"type": "text"},
         }
         self.schema = MockSchema(
-            schema["fields"] if schema and "fields" in schema else default_schema
+            schema["fields"] if schema and "fields" in schema else default_schema  # type: ignore
         )
         self.client = client or Mock()
         self._storage = MockStorage()
