@@ -422,7 +422,7 @@ class RedisVectorStore(VectorStore):
         texts_list = list(texts)
         # Embed the documents in bulk
         embeddings = self._embeddings.embed_documents(texts_list)
-
+        keys_or_ids = keys if keys else kwargs.get("ids")
         datas = [
             {
                 self.config.content_field: text,
@@ -445,9 +445,9 @@ class RedisVectorStore(VectorStore):
 
         result = (
             self._index.load(
-                datas, keys=[f"{self.config.key_prefix}:{key}" for key in keys]
+                datas, keys=[f"{self.config.key_prefix}:{key}" for key in keys_or_ids]
             )
-            if keys
+            if keys_or_ids
             else self._index.load(datas)
         )
 
