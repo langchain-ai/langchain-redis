@@ -324,11 +324,7 @@ class RedisVectorStore(VectorStore):
                             "name": self.config.embedding_field,
                             "type": "vector",
                             "attrs": {
-                                "dims": len(
-                                    self._embeddings.embed_query(
-                                        "The quick brown fox jumps over the lazy dog"
-                                    )
-                                ),
+                                "dims": self.config.embedding_dimensions,
                                 "distance_metric": self.config.distance_metric,
                                 "algorithm": self.config.indexing_algorithm,
                                 "datatype": self.config.vector_datatype,
