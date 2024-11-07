@@ -12,6 +12,7 @@ from langchain_core.messages import HumanMessage
 from langchain_core.messages.ai import AIMessage
 from langchain_core.messages.base import BaseMessage
 from langchain_core.outputs import ChatGeneration, Generation
+from langchain_openai import ChatOpenAI
 from langchain_openai.embeddings.base import OpenAIEmbeddings
 from redis import Redis
 from ulid import ULID
@@ -217,3 +218,28 @@ def test_redis_semantic_cache_with_preconfigured_client(
     assert result[0].text == "Paris"
 
     cache.clear()
+
+
+def test_set_llm(openai_embeddings: OpenAIEmbeddings, redis_url: str) -> None:
+    # Initialize RedisSemanticCache with custom settings
+    custom_semantic_cache = RedisSemanticCache(
+        redis_url=redis_url,
+        embeddings=openai_embeddings,
+        distance_threshold=0.1,  # Stricter similarity threshold
+        ttl=3600,  # 1 hour TTL
+        name="custom_cache",  # Custom cache name
+    )
+
+    llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
+
+    # Test the custom semantic cache
+    set_llm_cache(custom_semantic_cache)
+
+    test_prompt = "What's the largest planet in our solar system?"
+    result = llm.invoke(test_prompt)
+
+    # Try a slightly different query
+    similar_test_prompt = "Which planet is the biggest in the solar system?"
+    similar_result = llm.invoke(similar_test_prompt)
+
+    assert result == similar_result
