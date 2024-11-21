@@ -763,25 +763,51 @@ class RedisVectorStore(VectorStore):
         Returns:
             List of Documents.
         """
-
-        result_docs = []
-        for key in ids:
-            doc_dict = self.index.client.hgetall(
-                name = key
-            )
-            
-            if doc_dict is None or len(doc_dict)==0:
-                continue
-
-            doc_dict.pop(self.config.embedding_field.encode(),None)
-            doc_dict: Dict = convert_bytes(doc_dict)
-            doc = Document(doc_dict.pop(self.config.content_field),
-                           metadata=doc_dict)
-            result_docs.append(doc)
-
-        return result_docs
         
+        if self.config.storage_type == StorageType.HASH.value:
+                # Fetch full hash data for each document
+                if not ids:
+                    full_docs = []
+                else:
+                    with self._index.client.pipeline(transaction=False) as pipe:
+                        for doc_id in ids:
+                            pipe.hgetall(doc_id)
+                        full_docs = convert_bytes(pipe.execute())
 
+                return [
+                    Document(
+                        page_content=doc[self.config.content_field],
+                        metadata={
+                            k: v
+                            for k, v in doc.items()
+                            if k != self.config.content_field
+                        },
+                    )
+                    for doc in full_docs
+                ]
+        else:
+            # Fetch full JSON data for each document
+            if not ids:
+                full_docs = []
+            else:
+                with self._index.client.json().pipeline(transaction=False) as pipe:
+                    for doc_id in ids:
+                        pipe.get(doc_id, ".")
+                    full_docs = pipe.execute()
+
+            return [
+                Document(
+                    page_content=doc[self.config.content_field],
+                    metadata={
+                        k: v
+                        for k, v in doc.items()
+                        if k != self.config.content_field
+                    },
+                )
+                for doc in full_docs
+                if doc is not None  # Handle potential missing documents
+            ]
+        
     def similarity_search_by_vector(
         self,
         embedding: List[float],
@@ -864,49 +890,8 @@ class RedisVectorStore(VectorStore):
                 for doc in results
             ]
         else:
-            if self.config.storage_type == StorageType.HASH.value:
-                # Fetch full hash data for each document
-                if not results:
-                    full_docs = []
-                else:
-                    with self._index.client.pipeline(transaction=False) as pipe:
-                        for doc in results:
-                            pipe.hgetall(doc["id"])
-                        full_docs = convert_bytes(pipe.execute())
-
-                return [
-                    Document(
-                        page_content=doc[self.config.content_field],
-                        metadata={
-                            k: v
-                            for k, v in doc.items()
-                            if k != self.config.content_field
-                        },
-                    )
-                    for doc in full_docs
-                ]
-            else:
-                # Fetch full JSON data for each document
-                if not results:
-                    full_docs = []
-                else:
-                    with self._index.client.json().pipeline(transaction=False) as pipe:
-                        for doc in results:
-                            pipe.get(doc["id"], ".")
-                        full_docs = pipe.execute()
-
-                return [
-                    Document(
-                        page_content=doc[self.config.content_field],
-                        metadata={
-                            k: v
-                            for k, v in doc.items()
-                            if k != self.config.content_field
-                        },
-                    )
-                    for doc in full_docs
-                    if doc is not None  # Handle potential missing documents
-                ]
+            ids = [doc["id"] for doc in results]
+            return self.get_by_ids(ids=ids)
 
     def similarity_search(
         self,
