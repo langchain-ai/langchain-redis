@@ -830,6 +830,7 @@ class RedisVectorStore(VectorStore):
 
                 return [
                     Document(
+                        id=result[self.config.id_field],
                         page_content=doc[self.config.content_field],
                         metadata={
                             k: v
@@ -837,7 +838,8 @@ class RedisVectorStore(VectorStore):
                             if k != self.config.content_field
                         },
                     )
-                    for doc in full_docs
+                    for doc, result in zip(full_docs, results)
+                    if doc is not None  # Handle potential missing documents
                 ]
             else:
                 # Fetch full JSON data for each document
@@ -851,6 +853,7 @@ class RedisVectorStore(VectorStore):
 
                 return [
                     Document(
+                        id=result[self.config.id_field],
                         page_content=doc[self.config.content_field],
                         metadata={
                             k: v
@@ -858,7 +861,7 @@ class RedisVectorStore(VectorStore):
                             if k != self.config.content_field
                         },
                     )
-                    for doc in full_docs
+                    for doc, result in zip(full_docs, results)
                     if doc is not None  # Handle potential missing documents
                 ]
 
@@ -1030,6 +1033,7 @@ class RedisVectorStore(VectorStore):
                     docs_with_scores = [
                         (
                             Document(
+                                id=result[self.config.id_field],
                                 page_content=doc[self.config.content_field],
                                 metadata={
                                     k: v
@@ -1044,6 +1048,7 @@ class RedisVectorStore(VectorStore):
                             ),
                         )
                         for doc, result in zip(full_docs, results)
+                        if doc is not None
                     ]
                 else:
                     docs_with_scores = [
@@ -1054,6 +1059,7 @@ class RedisVectorStore(VectorStore):
                             ],
                             (
                                 Document(
+                                    id=result[self.config.id_field],
                                     page_content=doc[self.config.content_field],
                                     metadata={
                                         k: v
@@ -1065,6 +1071,7 @@ class RedisVectorStore(VectorStore):
                             ),
                         )
                         for doc, result in zip(full_docs, results)
+                        if doc is not None
                     ]
             else:
                 # Fetch full JSON data for each document
@@ -1075,6 +1082,7 @@ class RedisVectorStore(VectorStore):
                     docs_with_scores = [
                         (
                             Document(
+                                id=result[self.config.id_field],
                                 page_content=doc[self.config.content_field],
                                 metadata={
                                     k: v
@@ -1086,6 +1094,7 @@ class RedisVectorStore(VectorStore):
                             doc.get(self.config.embedding_field),
                         )
                         for doc, result in zip(full_docs, results)
+                        if doc is not None
                     ]
                 else:
                     docs_with_scores = [
