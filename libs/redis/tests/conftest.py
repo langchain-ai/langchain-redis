@@ -10,7 +10,7 @@ try:
 except ImportError:
     TESTCONTAINERS_AVAILABLE = False
 
-if 0 and TESTCONTAINERS_AVAILABLE:
+if TESTCONTAINERS_AVAILABLE:
 
     @pytest.fixture(scope="session", autouse=True)
     def redis_container() -> DockerCompose:
