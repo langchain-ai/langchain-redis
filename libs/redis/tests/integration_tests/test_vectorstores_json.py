@@ -678,6 +678,80 @@ def test_similarity_search_with_metadata_filtering(redis_url: str) -> None:
     vector_store.index.delete(drop=True)
 
 
+def test_similarity_search_with_sort_by(redis_url: str) -> None:
+    """Test metadata storage and retrieval."""
+    texts = [
+        "The Toyota Camry is a reliable and comfortable family sedan.",
+        "The Honda Civic is a compact car known for its fuel efficiency.",
+        "The Ford Mustang is an iconic American muscle car with powerful engines.",
+    ]
+    metadatas = [
+        {
+            "color": "red",
+            "brand": "Toyota",
+            "model": "Camry",
+            "msrp": 25000,
+            "location": "-122.4194,37.7749",
+            "review": "The Camry offers a smooth ride and great value for money.",
+        },
+        {
+            "color": "blue",
+            "brand": "Honda",
+            "model": "Civic",
+            "msrp": 22000,
+            "location": "-122.3301,47.6062",
+            "review": "The Civic is a reliable choice for daily commutes.",
+        },
+        {
+            "color": "green",
+            "brand": "Ford",
+            "model": "Mustang",
+            "msrp": 35000,
+            "location": "-84.3880,33.7490",
+            "review": "The Mustang is a thrilling car to drive with its \
+                powerful engine.",
+        },
+    ]
+
+    embeddings = OpenAIEmbeddings()
+    index_name = f"test_index_{str(ULID())}"
+
+    # Define the index schema with metadata fields
+    metadata_schema = [
+        {"name": "color", "type": "tag"},
+        {"name": "brand", "type": "tag"},
+        {"name": "model", "type": "text"},
+        {"name": "msrp", "type": "numeric"},
+        {"name": "location", "type": "geo"},
+        {"name": "review", "type": "text"},
+    ]
+
+    vector_store = RedisVectorStore.from_texts(
+        texts,
+        embeddings,
+        index_name=index_name,
+        key_prefix="car",
+        metadatas=metadatas,
+        redis_url=redis_url,
+        metadata_schema=metadata_schema,
+        storage_type="json",
+    )
+
+    # Perform similarity search with metadata filtering
+    sort_by = "msrp"
+
+    output1 = vector_store.similarity_search(
+        "", k=3, sort_by=sort_by
+    )
+
+    assert len(output1) == 3
+    assert output1[0].metadata["msrp"] == '22000'
+    assert output1[1].metadata["msrp"] == '25000'
+    assert output1[2].metadata["msrp"] == '35000'
+
+    # Clean up
+    vector_store.index.delete(drop=True)
+
 def test_max_marginal_relevance_search(redis_url: str) -> None:
     """Test max marginal relevance search."""
 
