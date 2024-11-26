@@ -741,6 +741,7 @@ class RedisVectorStore(VectorStore):
         embedding: List[float],
         k: int = 4,
         filter: Optional[FilterExpression] = None,
+        sort_by: Optional[str] = None,
         **kwargs: Any,
     ) -> List[Document]:
         """Return docs most similar to embedding vector.
@@ -749,6 +750,7 @@ class RedisVectorStore(VectorStore):
             embedding: Embedding to look up documents similar to.
             k: Number of Documents to return. Defaults to 4.
             filter: Optional filter expression to apply.
+            sort_by: Optional sort_by expression to apply.
             **kwargs: Other keyword arguments:
                 - return_metadata: Whether to return metadata. Defaults to True.
                 - distance_threshold: Optional distance threshold for filtering results.
@@ -783,6 +785,7 @@ class RedisVectorStore(VectorStore):
                     return_fields=return_fields,
                     num_results=k,
                     filter_expression=filter,
+                    sort_by=sort_by
                 )
             )
         else:
@@ -794,6 +797,7 @@ class RedisVectorStore(VectorStore):
                     num_results=k,
                     filter_expression=filter,
                     distance_threshold=distance_threshold,
+                    sort_by=sort_by
                 )
             )
 
@@ -870,6 +874,7 @@ class RedisVectorStore(VectorStore):
         query: str,
         k: int = 4,
         filter: Optional[FilterExpression] = None,
+        sort_by: Optional[str] = None,
         **kwargs: Any,
     ) -> List[Document]:
         """Return docs most similar to query.
@@ -878,19 +883,21 @@ class RedisVectorStore(VectorStore):
             query: Text to look up documents similar to.
             k: Number of Documents to return. Defaults to 4.
             filter: Optional filter expression to apply.
+            sort_by: Optional sort_by expression to apply.
             **kwargs: Other keyword arguments to pass to the search function.
 
         Returns:
             List of Documents most similar to the query.
         """
         embedding = self._embeddings.embed_query(query)
-        return self.similarity_search_by_vector(embedding, k, filter, **kwargs)
+        return self.similarity_search_by_vector(embedding, k, filter, sort_by, **kwargs)
 
     def similarity_search_with_score_by_vector(
         self,
         embedding: List[float],
         k: int = 4,
         filter: Optional[FilterExpression] = None,
+        sort_by: Optional[str] = None,
         **kwargs: Any,
     ) -> Union[List[Tuple[Document, float]], List[Tuple[Document, float, np.ndarray]]]:
         """Return docs most similar to embedding vector.
@@ -899,6 +906,7 @@ class RedisVectorStore(VectorStore):
             embedding: Embedding to look up documents similar to.
             k: Number of Documents to return. Defaults to 4.
             filter: Optional filter expression to apply.
+            sort_by: Optional sort_by expression to apply.
             **kwargs: Other keyword arguments:
                 with_vectors: Whether to return document vectors. Defaults to False.
                 return_metadata: Whether to return metadata. Defaults to True.
@@ -936,6 +944,7 @@ class RedisVectorStore(VectorStore):
                     return_fields=return_fields,
                     num_results=k,
                     filter_expression=filter,
+                    sort_by=sort_by
                 )
             )
         else:
@@ -946,6 +955,7 @@ class RedisVectorStore(VectorStore):
                     return_fields=return_fields,
                     num_results=k,
                     filter_expression=filter,
+                    sort_by=sort_by,
                     distance_threshold=distance_threshold,
                 )
             )
@@ -1125,6 +1135,7 @@ class RedisVectorStore(VectorStore):
         query: str,
         k: int = 4,
         filter: Optional[FilterExpression] = None,
+        sort_by: Optional[str] = None,
         **kwargs: Any,
     ) -> Union[List[Tuple[Document, float]], List[Tuple[Document, float, np.ndarray]]]:
         """Return documents most similar to query string, along with scores.
@@ -1133,6 +1144,7 @@ class RedisVectorStore(VectorStore):
             query: Text to look up documents similar to.
             k: Number of Documents to return. Defaults to 4.
             filter: Optional filter expression to apply to the query.
+            sort_by: Optional sort_by expression to apply to the query.
             **kwargs: Other keyword arguments to pass to the search function:
                 - custom_query: Optional callable that can be used
                                 to customize the query.
@@ -1184,6 +1196,7 @@ class RedisVectorStore(VectorStore):
             embedding,
             k,
             filter,
+            sort_by,
             **kwargs,
         )
 
