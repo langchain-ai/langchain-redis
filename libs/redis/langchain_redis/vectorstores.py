@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any, Iterable, List, Optional, Sequence, Tuple, Union, cast
 
 import numpy as np
@@ -1307,16 +1306,19 @@ class RedisVectorStore(VectorStore):
             full_ids = [f"{self.config.key_prefix}:{id}" for id in ids]
         else:
             full_ids = list(ids)
-        pipe = redis.pipeline()
-        for id_ in full_ids:
-            pipe.hgetall(id_)
-        values = pipe.execute()
+        if self.config.storage_type == StorageType.JSON.value:
+            values = redis.json().mget(full_ids, ".")
+        else:
+            pipe = redis.pipeline()
+            for id_ in full_ids:
+                pipe.hgetall(id_)
+            values = pipe.execute()
         documents = []
         for id_, value in zip(ids, values):
             if value is None:
                 continue
             if self.config.storage_type == StorageType.JSON.value:
-                doc = json.loads(value)
+                doc = cast(dict, value)
             else:
                 doc = convert_bytes(value)
             documents.append(
