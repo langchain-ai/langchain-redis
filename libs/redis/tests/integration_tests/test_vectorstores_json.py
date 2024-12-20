@@ -585,6 +585,40 @@ def test_similarity_search_with_scores(redis_url: str) -> None:
     vector_store.index.delete(drop=True)
 
 
+# TODO: Parameterize for json + hash
+def test_get_by_ids(redis_url: str) -> None:
+    """Test end to end construction and getting by ids."""
+    # Create embeddings
+    embeddings = OpenAIEmbeddings()
+
+    # Create a unique index name for testing
+    index_name = f"test_index_{str(ULID())}"
+
+    doc_1_id = "doc-1"
+    doc_1_content = "foo"
+    documents = [
+        Document(page_content=doc_1_content, id=doc_1_id),
+    ]
+
+    vector_store = RedisVectorStore(
+        embeddings=embeddings,
+        index_name=index_name,
+        key_prefix="tst12",
+        redis_url=redis_url,
+        # storage_type="json",
+    )
+    vector_store.add_documents(documents, keys=[doc.id for doc in documents])
+
+    # Perform similarity search
+    docs = vector_store.get_by_ids([doc_1_id])
+    assert docs == [
+        Document(page_content=doc_1_content, id=doc_1_id),
+    ]
+
+    # Clean up
+    vector_store.index.delete(drop=True)
+
+
 def test_add_texts(redis_url: str) -> None:
     """Test adding texts to an existing index."""
     embeddings = OpenAIEmbeddings()
