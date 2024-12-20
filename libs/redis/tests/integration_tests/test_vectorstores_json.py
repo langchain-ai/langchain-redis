@@ -585,7 +585,6 @@ def test_similarity_search_with_scores(redis_url: str) -> None:
     vector_store.index.delete(drop=True)
 
 
-# TODO: Parameterize for json + hash
 def test_get_by_ids(redis_url: str) -> None:
     """Test end to end construction and getting by ids."""
     # Create embeddings
@@ -605,7 +604,7 @@ def test_get_by_ids(redis_url: str) -> None:
         index_name=index_name,
         key_prefix="tst12",
         redis_url=redis_url,
-        # storage_type="json",
+        storage_type="json",
     )
     vector_store.add_documents(documents, keys=[doc.id for doc in documents])
 
