@@ -170,6 +170,19 @@ class TestRedisVectorStore:
         assert len(results) == 2
         assert all(isinstance(doc, Document) for doc in results)
 
+    def test_get_by_ids(self, vector_store: RedisVectorStore) -> None:
+        doc_1_id = "doc-1"
+        doc_1_content = "Hello, world!"
+        docs = [
+            Document(page_content=doc_1_content, id=doc_1_id),
+            Document(page_content="Test document", id="doc-2"),
+        ]
+        vector_store.add_documents(docs)
+        results = vector_store.get_by_ids([doc_1_id])
+        assert len(results) == 1
+        assert isinstance(results[0], Document)
+        assert results[0].page_content == doc_1_content
+
     def test_delete(self, vector_store: RedisVectorStore) -> None:
         keys = vector_store.add_texts(["Hello, world!", "Test document"])
         result = vector_store.delete(keys)
