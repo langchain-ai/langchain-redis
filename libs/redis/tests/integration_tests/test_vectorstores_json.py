@@ -305,6 +305,49 @@ def test_custom_keys_from_docs(texts: List[str], redis_url: str) -> None:
     assert client.json().get(f"{vector_store.key_prefix}:test_key_1", "a") == "b"
     # test all keys are stored
     assert client.json().get(f"{vector_store.key_prefix}:test_key_2", "text")
+    # test all keys in are the same as the keys_out
+    assert [f"tst8:{key}" for key in keys_in] == keys_out
+    # Clean up
+    vector_store.index.delete(drop=True)
+
+
+def test_similarity_search_returns_keys(redis_url: str) -> None:
+    ids = ["test_key_1", "test_key_2", "test_key_3"]
+    keys = ["wids:test_key_1", "wids:test_key_2", "wids:test_key_3"]
+    texts = [
+        "The quick brown fox jumps over the lazy dog",
+        "The lazy dog is jumped over by the quick brown fox",
+        "The fox is quick and brown, and jumps over dogs",
+    ]
+    docs = [Document(page_content=t) for t in texts]
+
+    index_name = f"test_index_{str(ULID())}"
+    result = RedisVectorStore.from_documents(
+        docs,
+        OpenAIEmbeddings(),
+        index_name=index_name,
+        key_prefix="wids",
+        keys=ids,
+        return_keys=True,
+        redis_url=redis_url,
+        storage_type="json",
+    )
+    vector_store, _ = cast(Tuple[RedisVectorStore, List[str]], result)
+
+    # Create embeddings
+    embeddings = OpenAIEmbeddings()
+
+    # Perform similarity search without return_all
+    query_embedding = embeddings.embed_query("quick fox")
+    results_without_return_all = vector_store.similarity_search_by_vector(
+        query_embedding, k=2, return_all=True
+    )
+
+    assert len(results_without_return_all) == 2
+    for doc in results_without_return_all:
+        assert doc.page_content in texts
+        assert doc.id in keys
+
     # Clean up
     vector_store.index.delete(drop=True)
 
