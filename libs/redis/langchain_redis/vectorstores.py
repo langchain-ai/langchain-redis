@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable, List, Optional, Tuple, Union, cast
+import json
+from typing import Any, Iterable, List, Optional, Sequence, Tuple, Union, cast
 
 import numpy as np
 from langchain_core.documents import Document
@@ -1276,3 +1277,57 @@ class RedisVectorStore(VectorStore):
         return self.max_marginal_relevance_search_by_vector(
             query_embedding, k=k, fetch_k=fetch_k, lambda_mult=lambda_mult, **kwargs
         )
+
+    def get_by_ids(self, ids: Sequence[str]) -> List[Document]:
+        """Get documents by their IDs.
+
+        The returned documents are expected to have the ID field set to the ID of the
+        document in the vector store.
+
+        Fewer documents may be returned than requested if some IDs are not found or
+        if there are duplicated IDs.
+
+        Users should not assume that the order of the returned documents matches
+        the order of the input IDs. Instead, users should rely on the ID field of the
+        returned documents.
+
+        This method should **NOT** raise exceptions if no documents are found for
+        some IDs.
+
+        Args:
+            ids: List of ids to retrieve.
+
+        Returns:
+            List of Documents.
+
+        .. versionadded:: 0.1.2
+        """
+        redis = self.config.redis()
+        if self.config.key_prefix:
+            full_ids = [f"{self.config.key_prefix}:{id}" for id in ids]
+        else:
+            full_ids = list(ids)
+        pipe = redis.pipeline()
+        for id_ in full_ids:
+            pipe.hgetall(id_)
+        values = pipe.execute()
+        documents = []
+        for id_, value in zip(ids, values):
+            if value is None:
+                continue
+            if self.config.storage_type == StorageType.JSON.value:
+                doc = json.loads(value)
+            else:
+                doc = convert_bytes(value)
+            documents.append(
+                Document(
+                    id=id_,
+                    page_content=doc[self.config.content_field],
+                    metadata={
+                        k: v
+                        for k, v in doc.items()
+                        if k != self.config.content_field and k != "embedding"
+                    },
+                )
+            )
+        return documents
