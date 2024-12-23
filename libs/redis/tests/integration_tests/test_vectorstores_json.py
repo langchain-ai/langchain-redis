@@ -783,17 +783,16 @@ def test_similarity_search_with_sort_by(redis_url: str) -> None:
     # Perform similarity search with metadata filtering
     sort_by = "msrp"
 
-    output1 = vector_store.similarity_search(
-        "", k=3, sort_by=sort_by
-    )
+    output1 = vector_store.similarity_search("", k=3, sort_by=sort_by)
 
     assert len(output1) == 3
-    assert output1[0].metadata["msrp"] == '22000'
-    assert output1[1].metadata["msrp"] == '25000'
-    assert output1[2].metadata["msrp"] == '35000'
+    assert output1[0].metadata["msrp"] == "22000"
+    assert output1[1].metadata["msrp"] == "25000"
+    assert output1[2].metadata["msrp"] == "35000"
 
     # Clean up
     vector_store.index.delete(drop=True)
+
 
 def test_max_marginal_relevance_search(redis_url: str) -> None:
     """Test max marginal relevance search."""

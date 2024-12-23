@@ -785,7 +785,7 @@ class RedisVectorStore(VectorStore):
                     return_fields=return_fields,
                     num_results=k,
                     filter_expression=filter,
-                    sort_by=sort_by
+                    sort_by=sort_by,
                 )
             )
         else:
@@ -797,7 +797,7 @@ class RedisVectorStore(VectorStore):
                     num_results=k,
                     filter_expression=filter,
                     distance_threshold=distance_threshold,
-                    sort_by=sort_by
+                    sort_by=sort_by,
                 )
             )
 
@@ -944,7 +944,7 @@ class RedisVectorStore(VectorStore):
                     return_fields=return_fields,
                     num_results=k,
                     filter_expression=filter,
-                    sort_by=sort_by
+                    sort_by=sort_by,
                 )
             )
         else:
