@@ -594,3 +594,72 @@ class RedisSemanticCache(BaseCache):
               interactions with the Redis database outside of this cache interface.
         """
         return self.cache.index.name
+
+    async def alookup(self, prompt: str, llm_string: str) -> Optional[RETURN_VAL_TYPE]:
+        """Async look up based on prompt and llm_string.
+
+        A cache implementation is expected to generate a key from the 2-tuple
+        of prompt and llm_string (e.g., by concatenating them with a delimiter).
+
+        Args:
+            prompt: a string representation of the prompt.
+                In the case of a Chat model, the prompt is a non-trivial
+                serialization of the prompt into the language model.
+            llm_string: A string representation of the LLM configuration.
+                This is used to capture the invocation parameters of the LLM
+                (e.g., model name, temperature, stop tokens, max tokens, etc.).
+                These invocation parameters are serialized into a string
+                representation.
+
+        Returns:
+            On a cache miss, return None. On a cache hit, return the cached value.
+            The cached value is a list of Generations (or subclasses).
+        """
+        vector = await self.cache._avectorize_prompt(prompt)
+        results = await self.cache.acheck(vector=vector)
+
+        if results:
+            for result in results:
+                if result.get("metadata", {}).get("llm_string") == llm_string:
+                    try:
+                        return [
+                            loads(gen_str)
+                            for gen_str in json.loads(result.get("response"))
+                        ]
+                    except (json.JSONDecodeError, TypeError):
+                        return None
+        return None
+
+    async def aupdate(
+        self, prompt: str, llm_string: str, return_val: RETURN_VAL_TYPE
+    ) -> None:
+        """Async update cache based on prompt and llm_string.
+
+        The prompt and llm_string are used to generate a key for the cache.
+        The key should match that of the look up method.
+
+        Args:
+            prompt: a string representation of the prompt.
+                In the case of a Chat model, the prompt is a non-trivial
+                serialization of the prompt into the language model.
+            llm_string: A string representation of the LLM configuration.
+                This is used to capture the invocation parameters of the LLM
+                (e.g., model name, temperature, stop tokens, max tokens, etc.).
+                These invocation parameters are serialized into a string
+                representation.
+            return_val: The value to be cached. The value is a list of Generations
+                (or subclasses).
+        """
+        serialized_response = json.dumps([dumps(gen) for gen in return_val])
+        vector = self.cache._vectorize_prompt(prompt)
+
+        await self.cache.astore(
+            prompt=prompt,
+            response=serialized_response,
+            vector=vector,
+            metadata={"llm_string": llm_string},
+        )
+
+    async def aclear(self, **kwargs: Any) -> None:
+        """Async clear cache that can take additional keyword arguments."""
+        await self.cache.aclear()
