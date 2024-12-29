@@ -11,11 +11,11 @@ license = "MIT"
 "Source Code" = "https://github.com/langchain-ai/langchain-redis/tree/main/libs/redis"
 
 [tool.poetry.dependencies]
-python = ">=3.9,<4.0"
+python = ">=3.9,<3.13"
 langchain-core = "^0.3"
-redisvl = "^0.3.5"
+redisvl = "^0.3.7"
 numpy = "^1"
-python-ulid = "^2.7.0"
+python-ulid = "^3.0.0"
 
 [tool.poetry.group.test]
 optional = true
@@ -48,7 +48,7 @@ optional = true
 ruff = "^0.5.0"
 
 [tool.poetry.group.typing.dependencies]
-mypy = "^1.12.0"
+mypy = "^1.14.0"
 langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
 
 [tool.poetry.group.dev]
@@ -66,7 +66,7 @@ select = [
 ]
 
 [tool.mypy]
-disallow_untyped_defs = "True"
+disallow_untyped_defs = true
 
 [tool.coverage.run]
 omit = ["tests/*"]
