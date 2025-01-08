@@ -70,7 +70,10 @@ class MockSearchIndex:
         pass
 
     def load(
-        self, documents: List[Dict[str, Any]], keys: Optional[List[str]] = None
+        self,
+        documents: List[Dict[str, Any]],
+        keys: Optional[List[str]] = None,
+        ttl: Optional[int] = None,
     ) -> List[str]:
         for i, doc in enumerate(documents):
             key = keys[i] if keys else f"key_{i}"
