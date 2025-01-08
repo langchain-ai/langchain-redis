@@ -159,6 +159,8 @@ class RedisVectorStore(VectorStore):
             URL of the Redis instance to connect to.
         redis_client: Optional[Redis]
             Pre-existing Redis connection.
+        ttl: Optional[int]
+            Time-to-live for the Redis keys.
 
     Instantiate:
         .. code-block:: python
@@ -265,10 +267,12 @@ class RedisVectorStore(VectorStore):
         self,
         embeddings: Embeddings,
         config: Optional[RedisConfig] = None,
+        ttl: Optional[int] = None,
         **kwargs: Any,
     ):
         self.config = config or RedisConfig(**kwargs)
         self._embeddings = embeddings
+        self.ttl = ttl
 
         if self.config.embedding_dimensions is None:
             self.config.embedding_dimensions = len(
@@ -441,10 +445,12 @@ class RedisVectorStore(VectorStore):
 
         result = (
             self._index.load(
-                datas, keys=[f"{self.config.key_prefix}:{key}" for key in keys]
+                datas,
+                keys=[f"{self.config.key_prefix}:{key}" for key in keys],
+                ttl=self.ttl,
             )
             if keys
-            else self._index.load(datas)
+            else self._index.load(datas, ttl=self.ttl)
         )
 
         return list(result) if result is not None else []
