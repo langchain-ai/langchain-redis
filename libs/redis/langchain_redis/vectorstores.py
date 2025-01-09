@@ -894,6 +894,114 @@ class RedisVectorStore(VectorStore):
         embedding = self._embeddings.embed_query(query)
         return self.similarity_search_by_vector(embedding, k, filter, sort_by, **kwargs)
 
+    def prepare_docs_with_scores(
+        self, return_all, with_vectors, results, return_metadata
+    ):
+
+        docs_with_scores = []
+
+        for res in results:
+            if not return_all:
+                metadata = (
+                    {
+                        field.name: res[field.name]
+                        for field in self._index.schema.fields.values()
+                        if field.name
+                        not in [self.config.embedding_field, self.config.content_field]
+                    }
+                    if return_metadata
+                    else {}
+                )
+            else:
+                metadata = {
+                    k: v for k, v in res.items() if k != self.config.content_field
+                }
+
+            print(f"\n {metadata=} \n")
+
+            print(f"\n {res=} \n")
+
+            doc = Document(
+                page_content=res[self.config.content_field],
+                metadata=metadata,
+            )
+
+            vector_distance = float(res.get("vector_distance", 0))
+
+            res_tuple = (doc, vector_distance)
+
+            if with_vectors:
+                vector = res.get(self.config.embedding_field)
+                if isinstance(vector, bytes):
+                    # cosine similarity function assumes float32 which seems like a problem
+                    vector = buffer_to_array(vector, dtype=self.config.vector_datatype)
+                if isinstance(vector, str):
+                    vector = ast.literal_eval(vector)
+
+                res_tuple = (doc, vector_distance, vector)
+
+            print(f"\n {res_tuple=} \n")
+
+            docs_with_scores.append(res_tuple)
+
+        print(f"\n {docs_with_scores=} \n")
+
+        return docs_with_scores
+
+    def prepare_docs_with_scores_full(
+        self, return_all, with_vectors, results, full_docs, return_metadata
+    ):
+        docs_with_scores = []
+
+        for fdoc, res in zip(full_docs, results):
+            if fdoc is None:
+                continue
+
+            if not return_all:
+                metadata = (
+                    {
+                        field.name: res[field.name]
+                        for field in self._index.schema.fields.values()
+                        if field.name
+                        not in [self.config.embedding_field, self.config.content_field]
+                    }
+                    if return_metadata
+                    else {}
+                )
+            else:
+                metadata = {
+                    k: v
+                    for k, v in fdoc.items()
+                    if (
+                        k != self.config.content_field
+                        and k != self.config.embedding_field
+                    )
+                }
+
+            doc = Document(
+                id=res[self.config.id_field],
+                page_content=fdoc[self.config.content_field],
+                metadata=metadata,
+            )
+
+            vector_distance = float(res.get("vector_distance", 0))
+
+            res_tuple = (doc, vector_distance)
+
+            if with_vectors:
+                vector = fdoc.get(self.config.embedding_field)
+                if isinstance(vector, bytes):
+                    # cosine similarity function assumes float32 which seems like a problem
+                    vector = buffer_to_array(vector, dtype=self.config.vector_datatype)
+                if isinstance(vector, str):
+                    vector = ast.literal_eval(vector)
+
+                res_tuple = (doc, vector_distance, vector)
+
+            docs_with_scores.append(res_tuple)
+
+        return docs_with_scores
+
     def similarity_search_with_score_by_vector(
         self,
         embedding: List[float],
@@ -938,8 +1046,6 @@ class RedisVectorStore(VectorStore):
             if with_vectors:
                 return_fields.append(self.config.embedding_field)
 
-        print(f"\n {return_fields=} \n")
-
         if distance_threshold is None:
             query = VectorQuery(
                 vector=embedding,
@@ -973,71 +1079,17 @@ class RedisVectorStore(VectorStore):
 
                 results = self._index.query(query)
 
-                print(f"\n {results=} \n")
-
-                # Prepare the results with embeddings
-                docs_with_scores = [
-                    (
-                        Document(
-                            page_content=doc[self.config.content_field],
-                            metadata=(
-                                {
-                                    field.name: doc[field.name]
-                                    for field in self._index.schema.fields.values()
-                                    if field.name
-                                    not in [
-                                        self.config.embedding_field,
-                                        self.config.content_field,
-                                        "id",
-                                    ]
-                                }
-                                if return_metadata
-                                else {}
-                            ),
-                        ),
-                        float(doc["vector_distance"]),
-                        (
-                            buffer_to_array(
-                                doc[self.config.embedding_field],
-                                dtype=self.config.vector_datatype,
-                            )
-                            if isinstance(doc[self.config.embedding_field], bytes)
-                            else ast.literal_eval(doc[self.config.embedding_field])
-                        ),
-                    )
-                    for doc in results
-                ]
+                docs_with_scores = self.prepare_docs_with_scores(
+                    return_all, with_vectors, results, return_metadata
+                )
             else:
                 results = self._index.query(query)
 
-                # Prepare the results without embeddings
-                docs_with_scores = [
-                    (  # type: ignore[misc]
-                        Document(
-                            page_content=doc[self.config.content_field],
-                            metadata=(
-                                {
-                                    field.name: doc[field.name]
-                                    for field in self._index.schema.fields.values()
-                                    if field.name
-                                    not in [
-                                        self.config.embedding_field,
-                                        self.config.content_field,
-                                        "id",
-                                    ]
-                                }
-                                if return_metadata
-                                else {}
-                            ),
-                        ),
-                        float(doc["vector_distance"]),
-                    )
-                    for doc in results
-                ]
+                docs_with_scores = self.prepare_docs_with_scores(
+                    return_all, with_vectors, results, return_metadata
+                )
         else:
             results = self._index.query(query)
-
-            print(f"\n {results=} \n")
 
             if self.config.storage_type == StorageType.HASH.value:
                 # Fetch full hash data for each document
@@ -1046,94 +1098,17 @@ class RedisVectorStore(VectorStore):
                     pipe.hgetall(doc["id"])
                 full_docs = convert_bytes(pipe.execute())
 
-                if with_vectors:
-                    docs_with_scores = [
-                        (
-                            Document(
-                                id=result[self.config.id_field],
-                                page_content=doc[self.config.content_field],
-                                metadata={
-                                    k: v
-                                    for k, v in doc.items()
-                                    if k != self.config.content_field
-                                },
-                            ),
-                            float(result.get("vector_distance", 0)),
-                            buffer_to_array(
-                                doc.get(self.config.embedding_field),
-                                dtype=self.config.vector_datatype,
-                            ),
-                        )
-                        for doc, result in zip(full_docs, results)
-                        if doc is not None
-                    ]
-                else:
-                    docs_with_scores = [
-                        cast(  # type: ignore[misc]
-                            Union[
-                                Tuple[Document, float],
-                                Tuple[Document, float, np.ndarray],
-                            ],
-                            (
-                                Document(
-                                    id=result[self.config.id_field],
-                                    page_content=doc[self.config.content_field],
-                                    metadata={
-                                        k: v
-                                        for k, v in doc.items()
-                                        if k != self.config.content_field
-                                    },
-                                ),
-                                float(result.get("vector_distance", 0)),
-                            ),
-                        )
-                        for doc, result in zip(full_docs, results)
-                        if doc is not None
-                    ]
+                docs_with_scores = self.prepare_docs_with_scores_full(
+                    return_all, with_vectors, results, full_docs, return_metadata
+                )
             else:
                 # Fetch full JSON data for each document
                 doc_ids = [doc["id"] for doc in results]
                 full_docs = self._index.client.json().mget(doc_ids, ".")
 
-                if with_vectors:
-                    docs_with_scores = [
-                        (
-                            Document(
-                                id=result[self.config.id_field],
-                                page_content=doc[self.config.content_field],
-                                metadata={
-                                    k: v
-                                    for k, v in doc.items()
-                                    if k != self.config.content_field
-                                },
-                            ),
-                            float(result.get("vector_distance", 0)),
-                            doc.get(self.config.embedding_field),
-                        )
-                        for doc, result in zip(full_docs, results)
-                        if doc is not None
-                    ]
-                else:
-                    docs_with_scores = [
-                        cast(  # type: ignore[misc]
-                            Union[
-                                Tuple[Document, float],
-                                Tuple[Document, float, np.ndarray],
-                            ],
-                            (
-                                Document(
-                                    page_content=doc[self.config.content_field],
-                                    metadata={
-                                        k: v
-                                        for k, v in doc.items()
-                                        if k != self.config.content_field
-                                    },
-                                ),
-                                float(result.get("vector_distance", 0)),
-                            ),
-                        )
-                        for doc, result in zip(full_docs, results)
-                    ]
+                docs_with_scores = self.prepare_docs_with_scores_full(
+                    return_all, with_vectors, results, full_docs, return_metadata
+                )
 
         return docs_with_scores
 
