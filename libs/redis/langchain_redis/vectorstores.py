@@ -766,7 +766,8 @@ class RedisVectorStore(VectorStore):
         distance_threshold = kwargs.get("distance_threshold")
         return_all = kwargs.get("return_all", False)
 
-        # Determine the fields to return based on the return_metadata flag
+        return_fields = []
+
         if not return_all:
             return_fields = [self.config.content_field]
             if return_metadata:
@@ -776,53 +777,31 @@ class RedisVectorStore(VectorStore):
                     if field.name
                     not in [self.config.embedding_field, self.config.content_field]
                 ]
-        else:
-            return_fields = []
 
         if distance_threshold is None:
-            results = self._index.query(
-                VectorQuery(
-                    vector=embedding,
-                    vector_field_name=self.config.embedding_field,
-                    return_fields=return_fields,
-                    num_results=k,
-                    filter_expression=filter,
-                    sort_by=sort_by,
-                )
+            query = VectorQuery(
+                vector=embedding,
+                vector_field_name=self.config.embedding_field,
+                return_fields=return_fields,
+                num_results=k,
+                filter_expression=filter,
+                sort_by=sort_by,
             )
         else:
-            results = self._index.query(
-                RangeQuery(
-                    vector=embedding,
-                    vector_field_name=self.config.embedding_field,
-                    return_fields=return_fields,
-                    num_results=k,
-                    filter_expression=filter,
-                    distance_threshold=distance_threshold,
-                    sort_by=sort_by,
-                )
+            query = RangeQuery(
+                vector=embedding,
+                vector_field_name=self.config.embedding_field,
+                return_fields=return_fields,
+                num_results=k,
+                filter_expression=filter,
+                distance_threshold=distance_threshold,
+                sort_by=sort_by,
             )
 
+        results = self._index.query(query)
+
         if not return_all:
-            return [
-                Document(
-                    page_content=doc[self.config.content_field],
-                    metadata=(
-                        {
-                            field.name: doc[field.name]
-                            for field in self._index.schema.fields.values()
-                            if field.name
-                            not in [
-                                self.config.embedding_field,
-                                self.config.content_field,
-                            ]
-                        }
-                        if return_metadata
-                        else {}
-                    ),
-                )
-                for doc in results
-            ]
+            return self.prepare_docs(return_all, results, return_metadata)
         else:
             if self.config.storage_type == StorageType.HASH.value:
                 # Fetch full hash data for each document
@@ -834,19 +813,9 @@ class RedisVectorStore(VectorStore):
                             pipe.hgetall(doc["id"])
                         full_docs = convert_bytes(pipe.execute())
 
-                return [
-                    Document(
-                        id=result[self.config.id_field],
-                        page_content=doc[self.config.content_field],
-                        metadata={
-                            k: v
-                            for k, v in doc.items()
-                            if k != self.config.content_field
-                        },
-                    )
-                    for doc, result in zip(full_docs, results)
-                    if doc is not None  # Handle potential missing documents
-                ]
+                return self.prepare_docs_full(
+                    return_all, results, full_docs, return_metadata
+                )
             else:
                 # Fetch full JSON data for each document
                 if not results:
@@ -857,19 +826,9 @@ class RedisVectorStore(VectorStore):
                             pipe.get(doc["id"], ".")
                         full_docs = pipe.execute()
 
-                return [
-                    Document(
-                        id=result[self.config.id_field],
-                        page_content=doc[self.config.content_field],
-                        metadata={
-                            k: v
-                            for k, v in doc.items()
-                            if k != self.config.content_field
-                        },
-                    )
-                    for doc, result in zip(full_docs, results)
-                    if doc is not None  # Handle potential missing documents
-                ]
+                return self.prepare_docs_full(
+                    return_all, results, full_docs, return_metadata
+                )
 
     def similarity_search(
         self,
@@ -894,11 +853,16 @@ class RedisVectorStore(VectorStore):
         embedding = self._embeddings.embed_query(query)
         return self.similarity_search_by_vector(embedding, k, filter, sort_by, **kwargs)
 
-    def prepare_docs_with_scores(
-        self, return_all, with_vectors, results, return_metadata
+    def prepare_docs(
+        self,
+        return_all,
+        results,
+        return_metadata,
+        with_vectors=False,
+        with_scores=False,
     ):
 
-        docs_with_scores = []
+        docs = []
 
         for res in results:
             if not return_all:
@@ -917,41 +881,45 @@ class RedisVectorStore(VectorStore):
                     k: v for k, v in res.items() if k != self.config.content_field
                 }
 
-            print(f"\n {metadata=} \n")
-
-            print(f"\n {res=} \n")
-
-            doc = Document(
+            lc_doc = Document(
                 page_content=res[self.config.content_field],
                 metadata=metadata,
             )
 
-            vector_distance = float(res.get("vector_distance", 0))
-
-            res_tuple = (doc, vector_distance)
+            if with_scores:
+                vector_distance = float(res.get("vector_distance", 0))
+                parsed = (lc_doc, vector_distance)
 
             if with_vectors:
-                vector = res.get(self.config.embedding_field)
-                if isinstance(vector, bytes):
-                    # cosine similarity function assumes float32 which seems like a problem
-                    vector = buffer_to_array(vector, dtype=self.config.vector_datatype)
-                if isinstance(vector, str):
-                    vector = ast.literal_eval(vector)
+                vector = self.convert_vector(res)
+                parsed = (lc_doc, vector_distance, vector)
 
-                res_tuple = (doc, vector_distance, vector)
+            if not with_scores and not with_vectors:
+                parsed = lc_doc
 
-            print(f"\n {res_tuple=} \n")
+            docs.append(parsed)
 
-            docs_with_scores.append(res_tuple)
+        return docs
 
-        print(f"\n {docs_with_scores=} \n")
+    def convert_vector(self, obj: dict):
+        vector = obj.get(self.config.embedding_field)
+        if isinstance(vector, bytes):
+            vector = buffer_to_array(vector, dtype=self.config.vector_datatype)
+        if isinstance(vector, str):
+            vector = ast.literal_eval(vector)
 
-        return docs_with_scores
+        return vector
 
-    def prepare_docs_with_scores_full(
-        self, return_all, with_vectors, results, full_docs, return_metadata
+    def prepare_docs_full(
+        self,
+        return_all,
+        results,
+        full_docs,
+        return_metadata,
+        with_vectors=False,
+        with_scores=False,
     ):
-        docs_with_scores = []
+        docs = []
 
         for fdoc, res in zip(full_docs, results):
             if fdoc is None:
@@ -978,29 +946,26 @@ class RedisVectorStore(VectorStore):
                     )
                 }
 
-            doc = Document(
+            lc_doc = Document(
                 id=res[self.config.id_field],
                 page_content=fdoc[self.config.content_field],
                 metadata=metadata,
             )
 
-            vector_distance = float(res.get("vector_distance", 0))
-
-            res_tuple = (doc, vector_distance)
+            if with_scores:
+                vector_distance = float(res.get("vector_distance", 0))
+                parsed = (lc_doc, vector_distance)
 
             if with_vectors:
-                vector = fdoc.get(self.config.embedding_field)
-                if isinstance(vector, bytes):
-                    # cosine similarity function assumes float32 which seems like a problem
-                    vector = buffer_to_array(vector, dtype=self.config.vector_datatype)
-                if isinstance(vector, str):
-                    vector = ast.literal_eval(vector)
+                vector = self.convert_vector(fdoc)
+                parsed = (lc_doc, vector_distance, vector)
 
-                res_tuple = (doc, vector_distance, vector)
+            if not with_scores and not with_vectors:
+                parsed = lc_doc
 
-            docs_with_scores.append(res_tuple)
+            docs.append(parsed)
 
-        return docs_with_scores
+        return docs
 
     def similarity_search_with_score_by_vector(
         self,
@@ -1077,17 +1042,15 @@ class RedisVectorStore(VectorStore):
                     ),
                 )
 
-                results = self._index.query(query)
+            results = self._index.query(query)
 
-                docs_with_scores = self.prepare_docs_with_scores(
-                    return_all, with_vectors, results, return_metadata
-                )
-            else:
-                results = self._index.query(query)
-
-                docs_with_scores = self.prepare_docs_with_scores(
-                    return_all, with_vectors, results, return_metadata
-                )
+            docs_with_scores = self.prepare_docs(
+                return_all,
+                results,
+                return_metadata,
+                with_vectors=with_vectors,
+                with_scores=True,
+            )
         else:
             results = self._index.query(query)
 
@@ -1098,16 +1061,26 @@ class RedisVectorStore(VectorStore):
                     pipe.hgetall(doc["id"])
                 full_docs = convert_bytes(pipe.execute())
 
-                docs_with_scores = self.prepare_docs_with_scores_full(
-                    return_all, with_vectors, results, full_docs, return_metadata
+                docs_with_scores = self.prepare_docs_full(
+                    return_all,
+                    results,
+                    full_docs,
+                    return_metadata,
+                    with_vectors=with_vectors,
+                    with_scores=True,
                 )
             else:
                 # Fetch full JSON data for each document
                 doc_ids = [doc["id"] for doc in results]
                 full_docs = self._index.client.json().mget(doc_ids, ".")
 
-                docs_with_scores = self.prepare_docs_with_scores_full(
-                    return_all, with_vectors, results, full_docs, return_metadata
+                docs_with_scores = self.prepare_docs_full(
+                    return_all,
+                    results,
+                    full_docs,
+                    return_metadata,
+                    with_vectors=with_vectors,
+                    with_scores=True,
                 )
 
         return docs_with_scores
