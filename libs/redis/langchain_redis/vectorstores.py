@@ -2,20 +2,20 @@
 
 from __future__ import annotations
 
+import ast
 from typing import Any, Iterable, List, Optional, Sequence, Tuple, Union, cast
 
 import numpy as np
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
+from langchain_redis.config import RedisConfig
+from langchain_redis.version import __lib_name__
 from redisvl.index import SearchIndex  # type: ignore[import]
 from redisvl.query import RangeQuery, VectorQuery  # type: ignore[import]
 from redisvl.query.filter import FilterExpression  # type: ignore[import]
 from redisvl.redis.utils import buffer_to_array, convert_bytes  # type: ignore[import]
 from redisvl.schema import StorageType  # type: ignore[import]
-
-from langchain_redis.config import RedisConfig
-from langchain_redis.version import __lib_name__
 
 Matrix = Union[List[List[float]], List[np.ndarray], np.ndarray]
 
@@ -302,9 +302,9 @@ class RedisVectorStore(VectorStore):
                     if field["type"] == "tag":
                         if "attrs" not in field or "separator" not in field["attrs"]:
                             modified_field = field.copy()
-                            modified_field.setdefault("attrs", {})["separator"] = (
-                                self.config.default_tag_separator
-                            )
+                            modified_field.setdefault("attrs", {})[
+                                "separator"
+                            ] = self.config.default_tag_separator
                             modified_metadata_schema.append(modified_field)
                         else:
                             modified_metadata_schema.append(field)
@@ -422,9 +422,11 @@ class RedisVectorStore(VectorStore):
         datas = [
             {
                 self.config.content_field: text,
-                self.config.embedding_field: embedding
-                if self.config.storage_type == StorageType.JSON.value
-                else np.array(embedding, dtype=np.float32).tobytes(),
+                self.config.embedding_field: (
+                    embedding
+                    if self.config.storage_type == StorageType.JSON.value
+                    else np.array(embedding, dtype=np.float32).tobytes()
+                ),
                 **{
                     field_name: (
                         self.config.default_tag_separator.join(metadata[field_name])
@@ -921,6 +923,8 @@ class RedisVectorStore(VectorStore):
         distance_threshold = kwargs.get("distance_threshold")
         return_all = kwargs.get("return_all", False)
 
+        return_fields = []
+
         if not return_all:
             return_fields = [self.config.content_field]
             if return_metadata:
@@ -933,53 +937,43 @@ class RedisVectorStore(VectorStore):
 
             if with_vectors:
                 return_fields.append(self.config.embedding_field)
-        else:
-            return_fields = []
+
+        print(f"\n {return_fields=} \n")
 
         if distance_threshold is None:
-            results = self._index.query(
-                VectorQuery(
-                    vector=embedding,
-                    vector_field_name=self.config.embedding_field,
-                    return_fields=return_fields,
-                    num_results=k,
-                    filter_expression=filter,
-                    sort_by=sort_by,
-                )
+            query = VectorQuery(
+                vector=embedding,
+                vector_field_name=self.config.embedding_field,
+                return_fields=return_fields,
+                num_results=k,
+                filter_expression=filter,
+                sort_by=sort_by,
             )
         else:
-            results = self._index.query(
-                RangeQuery(
-                    vector=embedding,
-                    vector_field_name=self.config.embedding_field,
-                    return_fields=return_fields,
-                    num_results=k,
-                    filter_expression=filter,
-                    sort_by=sort_by,
-                    distance_threshold=distance_threshold,
-                )
+            query = RangeQuery(
+                vector=embedding,
+                vector_field_name=self.config.embedding_field,
+                return_fields=return_fields,
+                num_results=k,
+                filter_expression=filter,
+                sort_by=sort_by,
+                distance_threshold=distance_threshold,
             )
 
         if not return_all:
             if with_vectors:
-                # Extract the document ids
-                doc_ids = [doc["id"] for doc in results]
-
-                # Retrieve the documents from the storage
-                docs_from_storage = self._index._storage.get(
-                    self._index.client, doc_ids
+                query.return_field(
+                    self.config.embedding_field,
+                    decode_field=(
+                        False
+                        if self.config.storage_type == StorageType.HASH.value
+                        else True
+                    ),
                 )
 
-                # Create a dictionary mapping document ids to their embeddings
-                doc_embeddings_dict = {
-                    doc_id: doc[self.config.embedding_field]
-                    if self.config.storage_type == StorageType.JSON.value
-                    else buffer_to_array(
-                        doc[self.config.embedding_field],
-                        dtype=self.config.vector_datatype,
-                    )
-                    for doc_id, doc in zip(doc_ids, docs_from_storage)
-                }
+                results = self._index.query(query)
+
+                print(f"\n {results=} \n")
 
                 # Prepare the results with embeddings
                 docs_with_scores = [
@@ -1002,11 +996,20 @@ class RedisVectorStore(VectorStore):
                             ),
                         ),
                         float(doc["vector_distance"]),
-                        doc_embeddings_dict[doc[self.config.id_field]],
+                        (
+                            buffer_to_array(
+                                doc[self.config.embedding_field],
+                                dtype=self.config.vector_datatype,
+                            )
+                            if isinstance(doc[self.config.embedding_field], bytes)
+                            else ast.literal_eval(doc[self.config.embedding_field])
+                        ),
                     )
                     for doc in results
                 ]
             else:
+                results = self._index.query(query)
+
                 # Prepare the results without embeddings
                 docs_with_scores = [
                     (  # type: ignore[misc]
@@ -1032,6 +1035,10 @@ class RedisVectorStore(VectorStore):
                     for doc in results
                 ]
         else:
+            results = self._index.query(query)
+
+            print(f"\n {results=} \n")
+
             if self.config.storage_type == StorageType.HASH.value:
                 # Fetch full hash data for each document
                 pipe = self._index.client.pipeline()
