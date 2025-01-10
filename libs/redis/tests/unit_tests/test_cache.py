@@ -1,14 +1,14 @@
 import json  # noqa: I001
 from typing import Any, Dict, List, Optional
+from unittest.mock import MagicMock, Mock, patch
 
 import numpy as np
 import pytest
 from langchain_core.embeddings import Embeddings
 from langchain_core.outputs import Generation
 from langchain_redis import RedisCache, RedisSemanticCache
-from unittest.mock import Mock, patch, MagicMock
-from redis.exceptions import ResponseError
 from langchain_redis.version import __full_lib_name__
+from redis.exceptions import ResponseError
 
 
 class MockRedisJSON:
@@ -148,8 +148,8 @@ class TestRedisCache:
         def mock_get(key: str) -> Any:
             return stored_data.get(key)
 
-        redis_cache.redis.json().set.side_effect = mock_set
-        redis_cache.redis.json().get.side_effect = mock_get
+        redis_cache.redis.json().set.side_effect = mock_set  # type: ignore
+        redis_cache.redis.json().get.side_effect = mock_get  # type: ignore
 
         redis_cache.update(prompt, llm_string, return_val)
         result = redis_cache.lookup(prompt, llm_string)

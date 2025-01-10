@@ -4,6 +4,7 @@ from unittest.mock import Mock, patch
 import pytest
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
+
 from langchain_redis import RedisConfig, RedisVectorStore
 
 
@@ -90,14 +91,11 @@ class MockSearchIndex:
             for i, doc in enumerate(self.data[:k])
         ]
 
-        # This is a hack that I don't love.
-        # Personally I don't think we should really ever use mocks and work directly with the real objects.
-        # however it's beyond the scope of this ticket to refactor all the tests
         if "embedding" in query._return_fields:
             if query._return_fields_decode_as["embedding"] is None:
-                vec = b"\xcd\xccL>\xcd\xccL>\xcd\xccL>"
+                vec = b"\xcd\xccL>\xcd\xccL>\xcd\xccL>"  # type: ignore
             else:
-                vec = [0.2, 0.2, 0.2]
+                vec = [0.2, 0.2, 0.2]  # type: ignore
 
             mock_response = [{**m, "embedding": vec} for m in mock_response]
 
