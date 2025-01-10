@@ -9,13 +9,14 @@ import numpy as np
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
-from langchain_redis.config import RedisConfig
-from langchain_redis.version import __lib_name__
 from redisvl.index import SearchIndex  # type: ignore[import]
 from redisvl.query import RangeQuery, VectorQuery  # type: ignore[import]
 from redisvl.query.filter import FilterExpression  # type: ignore[import]
 from redisvl.redis.utils import buffer_to_array, convert_bytes  # type: ignore[import]
 from redisvl.schema import StorageType  # type: ignore[import]
+
+from langchain_redis.config import RedisConfig
+from langchain_redis.version import __lib_name__
 
 Matrix = Union[List[List[float]], List[np.ndarray], np.ndarray]
 
