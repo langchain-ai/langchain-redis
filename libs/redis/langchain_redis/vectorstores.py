@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import ast
-from typing import Any, Iterable, List, Optional, Sequence, Tuple, Union, cast
+from typing import Any, Iterable, List, Optional, Sequence, Union, cast
 
 import numpy as np
 from langchain_core.documents import Document
@@ -12,7 +12,11 @@ from langchain_core.vectorstores import VectorStore
 from redisvl.index import SearchIndex  # type: ignore[import]
 from redisvl.query import RangeQuery, VectorQuery  # type: ignore[import]
 from redisvl.query.filter import FilterExpression  # type: ignore[import]
-from redisvl.redis.utils import buffer_to_array, convert_bytes  # type: ignore[import]
+from redisvl.redis.utils import (  # type: ignore[import]
+    array_to_buffer,
+    buffer_to_array,
+    convert_bytes,
+)
 from redisvl.schema import StorageType  # type: ignore[import]
 
 from langchain_redis.config import RedisConfig
@@ -303,9 +307,9 @@ class RedisVectorStore(VectorStore):
                     if field["type"] == "tag":
                         if "attrs" not in field or "separator" not in field["attrs"]:
                             modified_field = field.copy()
-                            modified_field.setdefault("attrs", {})[
-                                "separator"
-                            ] = self.config.default_tag_separator
+                            modified_field.setdefault("attrs", {})["separator"] = (
+                                self.config.default_tag_separator
+                            )
                             modified_metadata_schema.append(modified_field)
                         else:
                             modified_metadata_schema.append(field)
@@ -426,7 +430,7 @@ class RedisVectorStore(VectorStore):
                 self.config.embedding_field: (
                     embedding
                     if self.config.storage_type == StorageType.JSON.value
-                    else np.array(embedding, dtype=np.float32).tobytes()
+                    else array_to_buffer(embedding, dtype=self.config.vector_datatype)
                 ),
                 **{
                     field_name: (
@@ -802,7 +806,9 @@ class RedisVectorStore(VectorStore):
         results = self._index.query(query)
 
         if not return_all:
-            return self.prepare_docs(return_all, results, return_metadata)
+            return cast(
+                List[Document], self._prepare_docs(return_all, results, return_metadata)
+            )
         else:
             if self.config.storage_type == StorageType.HASH.value:
                 # Fetch full hash data for each document
@@ -814,8 +820,11 @@ class RedisVectorStore(VectorStore):
                             pipe.hgetall(doc["id"])
                         full_docs = convert_bytes(pipe.execute())
 
-                return self.prepare_docs_full(
-                    return_all, results, full_docs, return_metadata
+                return cast(
+                    List[Document],
+                    self._prepare_docs_full(
+                        return_all, results, full_docs, return_metadata
+                    ),
                 )
             else:
                 # Fetch full JSON data for each document
@@ -827,8 +836,11 @@ class RedisVectorStore(VectorStore):
                             pipe.get(doc["id"], ".")
                         full_docs = pipe.execute()
 
-                return self.prepare_docs_full(
-                    return_all, results, full_docs, return_metadata
+                return cast(
+                    List[Document],
+                    self._prepare_docs_full(
+                        return_all, results, full_docs, return_metadata
+                    ),
                 )
 
     def similarity_search(
@@ -854,15 +866,14 @@ class RedisVectorStore(VectorStore):
         embedding = self._embeddings.embed_query(query)
         return self.similarity_search_by_vector(embedding, k, filter, sort_by, **kwargs)
 
-    def prepare_docs(
+    def _prepare_docs(
         self,
-        return_all,
-        results,
-        return_metadata,
-        with_vectors=False,
-        with_scores=False,
-    ):
-
+        return_all: bool | None,
+        results: List[dict],
+        return_metadata: bool,
+        with_vectors: bool = False,
+        with_scores: bool = False,
+    ) -> Sequence[Any]:
         docs = []
 
         for res in results:
@@ -889,37 +900,37 @@ class RedisVectorStore(VectorStore):
 
             if with_scores:
                 vector_distance = float(res.get("vector_distance", 0))
-                parsed = (lc_doc, vector_distance)
+                parsed = (lc_doc, vector_distance)  # type: ignore
 
             if with_vectors:
                 vector = self.convert_vector(res)
-                parsed = (lc_doc, vector_distance, vector)
+                parsed = (lc_doc, vector_distance, vector)  # type: ignore
 
             if not with_scores and not with_vectors:
-                parsed = lc_doc
+                parsed = lc_doc  # type: ignore
 
             docs.append(parsed)
 
         return docs
 
-    def convert_vector(self, obj: dict):
+    def convert_vector(self, obj: dict) -> List[float]:
         vector = obj.get(self.config.embedding_field)
         if isinstance(vector, bytes):
-            vector = buffer_to_array(vector, dtype=self.config.vector_datatype)
+            vector = buffer_to_array(vector, dtype=self.config.vector_datatype)  # type: ignore
         if isinstance(vector, str):
-            vector = ast.literal_eval(vector)
+            vector = ast.literal_eval(vector)  # type: ignore
 
         return vector
 
-    def prepare_docs_full(
+    def _prepare_docs_full(
         self,
-        return_all,
-        results,
-        full_docs,
-        return_metadata,
-        with_vectors=False,
-        with_scores=False,
-    ):
+        return_all: bool | None,
+        results: List[dict],
+        full_docs: List[dict],
+        return_metadata: bool,
+        with_vectors: bool = False,
+        with_scores: bool = False,
+    ) -> Sequence[Any]:
         docs = []
 
         for fdoc, res in zip(full_docs, results):
@@ -955,14 +966,14 @@ class RedisVectorStore(VectorStore):
 
             if with_scores:
                 vector_distance = float(res.get("vector_distance", 0))
-                parsed = (lc_doc, vector_distance)
+                parsed = (lc_doc, vector_distance)  # type: ignore
 
             if with_vectors:
                 vector = self.convert_vector(fdoc)
-                parsed = (lc_doc, vector_distance, vector)
+                parsed = (lc_doc, vector_distance, vector)  # type: ignore
 
             if not with_scores and not with_vectors:
-                parsed = lc_doc
+                parsed = lc_doc  # type: ignore
 
             docs.append(parsed)
 
@@ -975,7 +986,7 @@ class RedisVectorStore(VectorStore):
         filter: Optional[FilterExpression] = None,
         sort_by: Optional[str] = None,
         **kwargs: Any,
-    ) -> Union[List[Tuple[Document, float]], List[Tuple[Document, float, np.ndarray]]]:
+    ) -> Sequence[Any]:
         """Return docs most similar to embedding vector.
 
         Args:
@@ -1036,16 +1047,12 @@ class RedisVectorStore(VectorStore):
             if with_vectors:
                 query.return_field(
                     self.config.embedding_field,
-                    decode_field=(
-                        False
-                        if self.config.storage_type == StorageType.HASH.value
-                        else True
-                    ),
+                    decode_field=(self.config.storage_type != StorageType.HASH.value),
                 )
 
             results = self._index.query(query)
 
-            docs_with_scores = self.prepare_docs(
+            docs_with_scores = self._prepare_docs(
                 return_all,
                 results,
                 return_metadata,
@@ -1062,7 +1069,7 @@ class RedisVectorStore(VectorStore):
                     pipe.hgetall(doc["id"])
                 full_docs = convert_bytes(pipe.execute())
 
-                docs_with_scores = self.prepare_docs_full(
+                docs_with_scores = self._prepare_docs_full(
                     return_all,
                     results,
                     full_docs,
@@ -1075,7 +1082,7 @@ class RedisVectorStore(VectorStore):
                 doc_ids = [doc["id"] for doc in results]
                 full_docs = self._index.client.json().mget(doc_ids, ".")
 
-                docs_with_scores = self.prepare_docs_full(
+                docs_with_scores = self._prepare_docs_full(
                     return_all,
                     results,
                     full_docs,
@@ -1093,7 +1100,7 @@ class RedisVectorStore(VectorStore):
         filter: Optional[FilterExpression] = None,
         sort_by: Optional[str] = None,
         **kwargs: Any,
-    ) -> Union[List[Tuple[Document, float]], List[Tuple[Document, float, np.ndarray]]]:
+    ) -> Sequence[Any]:
         """Return documents most similar to query string, along with scores.
 
         Args:
