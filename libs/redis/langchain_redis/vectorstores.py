@@ -743,6 +743,35 @@ class RedisVectorStore(VectorStore):
         else:
             return False
 
+    def _query_builder(
+        self,
+        embedding: Union[List[float], bytes],
+        k: int = 10,
+        distance_threshold: Any = None,
+        sort_by: Optional[str] = None,
+        filter: Optional[Union[str, FilterExpression]] = None,
+        return_fields: Optional[List[str]] = None,
+    ) -> Union[VectorQuery, RangeQuery]:
+        if distance_threshold is None:
+            return VectorQuery(
+                vector=embedding,
+                vector_field_name=self.config.embedding_field,
+                return_fields=return_fields,
+                num_results=k,
+                filter_expression=filter,
+                sort_by=sort_by,
+            )
+        else:
+            return RangeQuery(
+                vector=embedding,
+                vector_field_name=self.config.embedding_field,
+                return_fields=return_fields,
+                num_results=k,
+                filter_expression=filter,
+                distance_threshold=distance_threshold,
+                sort_by=sort_by,
+            )
+
     def similarity_search_by_vector(
         self,
         embedding: List[float],
@@ -768,7 +797,7 @@ class RedisVectorStore(VectorStore):
             List of Documents most similar to the query vector.
         """
         return_metadata = kwargs.get("return_metadata", True)
-        distance_threshold = kwargs.get("distance_threshold")
+        distance_threshold = kwargs.get("distance_threshold", None)
         return_all = kwargs.get("return_all", False)
 
         return_fields = []
@@ -783,25 +812,14 @@ class RedisVectorStore(VectorStore):
                     not in [self.config.embedding_field, self.config.content_field]
                 ]
 
-        if distance_threshold is None:
-            query = VectorQuery(
-                vector=embedding,
-                vector_field_name=self.config.embedding_field,
-                return_fields=return_fields,
-                num_results=k,
-                filter_expression=filter,
-                sort_by=sort_by,
-            )
-        else:
-            query = RangeQuery(
-                vector=embedding,
-                vector_field_name=self.config.embedding_field,
-                return_fields=return_fields,
-                num_results=k,
-                filter_expression=filter,
-                distance_threshold=distance_threshold,
-                sort_by=sort_by,
-            )
+        query = self._query_builder(
+            distance_threshold=distance_threshold,
+            embedding=embedding,
+            k=k,
+            sort_by=sort_by,
+            filter=filter,
+            return_fields=return_fields,
+        )
 
         results = self._index.query(query)
 
@@ -1023,25 +1041,14 @@ class RedisVectorStore(VectorStore):
             if with_vectors:
                 return_fields.append(self.config.embedding_field)
 
-        if distance_threshold is None:
-            query = VectorQuery(
-                vector=embedding,
-                vector_field_name=self.config.embedding_field,
-                return_fields=return_fields,
-                num_results=k,
-                filter_expression=filter,
-                sort_by=sort_by,
-            )
-        else:
-            query = RangeQuery(
-                vector=embedding,
-                vector_field_name=self.config.embedding_field,
-                return_fields=return_fields,
-                num_results=k,
-                filter_expression=filter,
-                sort_by=sort_by,
-                distance_threshold=distance_threshold,
-            )
+        query = self._query_builder(
+            distance_threshold=distance_threshold,
+            embedding=embedding,
+            k=k,
+            sort_by=sort_by,
+            filter=filter,
+            return_fields=return_fields,
+        )
 
         if not return_all:
             if with_vectors:
