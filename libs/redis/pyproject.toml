@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "langchain-redis"
-version = "0.1.2"
+version = "0.1.3"
 description = "An integration package connecting Redis and LangChain"
 authors = ["Brian Sam-Bodden <bsb@redis.com>"]
 readme = "README.md"

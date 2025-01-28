@@ -1576,13 +1576,13 @@ ocsp = ["cryptography (>=36.0.1)", "pyopenssl (==23.2.1)", "requests (>=2.31.0)"
 
 [[package]]
 name = "redisvl"
-version = "0.3.7"
+version = "0.3.9"
 description = "Python client library and CLI for using Redis as a vector database"
 optional = false
 python-versions = "<3.13,>=3.9"
 files = [
-    {file = "redisvl-0.3.7-py3-none-any.whl", hash = "sha256:b841e36a14613e79922ceef31f6c7883b21ecbfaa8cf6de8413b5d70a844866a"},
-    {file = "redisvl-0.3.7.tar.gz", hash = "sha256:b237043e973a10d0c680b4d8301f4e3589e5dbe1d328ee1d35dbd7e5617a0c8d"},
+    {file = "redisvl-0.3.9-py3-none-any.whl", hash = "sha256:7607c9d6a449b229b07350e54b22fb1b8de21bdadf440f4c60ad8748229a4a77"},
+    {file = "redisvl-0.3.9.tar.gz", hash = "sha256:6508579f887be95555542a0dbf5759a87bfe2cbd57a48ce978e0460f78665302"},
 ]
 
 [package.dependencies]
@@ -1598,10 +1598,11 @@ tenacity = ">=8.2.2"
 [package.extras]
 bedrock = ["boto3 (>=1.34.0)"]
 cohere = ["cohere (>=4.44)"]
-google-cloud-aiplatform = ["google-cloud-aiplatform (>=1.26)"]
-mistralai = ["mistralai (>=0.2.0)"]
+mistralai = ["mistralai (>=1.0.0)"]
 openai = ["openai (>=1.13.0)"]
 sentence-transformers = ["sentence-transformers (>=2.2.2)"]
+vertexai = ["google-cloud-aiplatform (>=1.26)", "protobuf (>=5.29.1,<6.0.0.dev0)"]
+voyageai = ["voyageai (>=0.2.2)"]
 
 [[package]]
 name = "regex"
