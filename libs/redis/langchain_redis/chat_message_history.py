@@ -107,7 +107,8 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         try:
             self.redis_client.ft(self.index_name).info()
         except ResponseError as e:
-            if str(e).lower() == "unknown index name":
+            msg = str(e).lower()
+            if "unknown index name" in msg or "no such index" in msg:
                 schema = (
                     TagField("$.session_id", as_name="session_id"),
                     TextField("$.data.content", as_name="content"),
