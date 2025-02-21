@@ -294,7 +294,9 @@ class RedisVectorStore(VectorStore):
         # 3. Determine embedding dimensions if not explicitly set
         if self.config.embedding_dimensions is None:
             sample_text = "The quick brown fox jumps over the lazy dog"
-            self.config.embedding_dimensions = len(self._embeddings.embed_query(sample_text))
+            self.config.embedding_dimensions = len(
+                self._embeddings.embed_query(sample_text)
+            )
 
         # 4. Initialize the index based on config settings
         redis_client = self.config.redis()
@@ -303,7 +305,7 @@ class RedisVectorStore(VectorStore):
             self._index = SearchIndex(
                 schema=self.config.index_schema,
                 redis_client=redis_client,
-                lib_name=__lib_name__
+                lib_name=__lib_name__,
             )
             self._index.create(overwrite=False)
         elif self.config.schema_path:
@@ -311,7 +313,7 @@ class RedisVectorStore(VectorStore):
             self._index = SearchIndex.from_yaml(
                 self.config.schema_path,
                 redis_client=redis_client,
-                lib_name=__lib_name__
+                lib_name=__lib_name__,
             )
             self._index.create(overwrite=False)
         elif self.config.from_existing and self.config.index_name:
@@ -319,7 +321,7 @@ class RedisVectorStore(VectorStore):
             self._index = SearchIndex.from_existing(
                 name=self.config.index_name,
                 redis_client=redis_client,
-                lib_name=__lib_name__
+                lib_name=__lib_name__,
             )
             self._index.create(overwrite=False)
         else:
@@ -329,9 +331,13 @@ class RedisVectorStore(VectorStore):
                 for field in self.config.metadata_schema:
                     if field["type"] == "tag":
                         # Ensure a default separator is present
-                        if "attrs" not in field or "separator" not in field.get("attrs", {}):
+                        if "attrs" not in field or "separator" not in field.get(
+                            "attrs", {}
+                        ):
                             updated_field = field.copy()
-                            updated_field.setdefault("attrs", {})["separator"] = self.config.default_tag_separator
+                            updated_field.setdefault("attrs", {})["separator"] = (
+                                self.config.default_tag_separator
+                            )
                             modified_metadata_schema.append(updated_field)
                         else:
                             modified_metadata_schema.append(field)
@@ -361,7 +367,7 @@ class RedisVectorStore(VectorStore):
                     ],
                 },
                 redis_client=redis_client,
-                lib_name=__lib_name__
+                lib_name=__lib_name__,
             )
             self._index.create(overwrite=False)
 
@@ -446,7 +452,9 @@ class RedisVectorStore(VectorStore):
 
         # Validate lengths of metadatas and keys if provided
         if metadatas and len(metadatas) != len(texts_list):
-            raise ValueError("The length of 'metadatas' must match the number of 'texts'.")
+            raise ValueError(
+                "The length of 'metadatas' must match the number of 'texts'."
+            )
         if keys and len(keys) != len(texts_list):
             raise ValueError("The length of 'keys' must match the number of 'texts'.")
 
@@ -470,7 +478,9 @@ class RedisVectorStore(VectorStore):
             }
             for field_name, field_value in metadata.items():
                 if isinstance(field_value, list):
-                    record[field_name] = self.config.default_tag_separator.join(field_value)
+                    record[field_name] = self.config.default_tag_separator.join(
+                        field_value
+                    )
                 else:
                     record[field_name] = field_value
             records.append(record)
