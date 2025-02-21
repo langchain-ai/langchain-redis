@@ -113,7 +113,7 @@ class MockSearchIndex:
     @classmethod
     def from_dict(cls, dict_data: Dict[str, Any]) -> "MockSearchIndex":
         return cls(schema=dict_data)
-    
+
     def key(self, id: str) -> str:
         pass
 
