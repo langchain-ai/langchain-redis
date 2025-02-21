@@ -12,7 +12,7 @@ from langchain_core.caches import RETURN_VAL_TYPE, BaseCache
 from langchain_core.embeddings import Embeddings
 from langchain_core.load.dump import dumps
 from langchain_core.load.load import loads
-from pydantic.v1 import Field as FieldV1
+from pydantic import Field, ConfigDict
 from redis import Redis
 from redis.commands.json.path import Path
 from redis.exceptions import ResponseError
@@ -26,12 +26,11 @@ from langchain_redis.version import __full_lib_name__
 
 
 class EmbeddingsVectorizer(BaseVectorizer):
-    # BaseVectorizer is a pydantic.v1.BaseModel so we need to use pydantic.v1.Field.
-    embeddings: Embeddings = FieldV1(...)
-    model: str = FieldV1(default="custom_embeddings")
+    embeddings: Embeddings = Field(...)
+    model: str = Field(default="custom_embeddings")
+    
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    class Config:
-        arbitrary_types_allowed = True
 
     def __init__(self, embeddings: Embeddings):
         dims = len(embeddings.embed_query("test"))

@@ -3,12 +3,8 @@ from typing import Any, Dict, List, Optional, Type
 from pydantic import BaseModel, ConfigDict, Field, SkipValidation, model_validator
 from redis import Redis
 from redisvl.schema import IndexSchema, StorageType  # type: ignore[import]
+from redisvl.utils.utils import create_ulid
 from typing_extensions import Annotated, Self
-from ulid import ULID
-
-
-def generate_ulid() -> str:
-    return str(ULID())
 
 
 class RedisConfig(BaseModel):
@@ -68,7 +64,7 @@ class RedisConfig(BaseModel):
           simultaneously specified.
     """
 
-    index_name: str = Field(default_factory=lambda: generate_ulid())
+    index_name: str = Field(default_factory=lambda: create_ulid())
     from_existing: bool = False
     key_prefix: Optional[str] = None
     redis_url: str = "redis://localhost:6379"

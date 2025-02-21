@@ -275,46 +275,64 @@ class RedisVectorStore(VectorStore):
         ttl: Optional[int] = None,
         **kwargs: Any,
     ):
+        """
+        Initialize the RedisVectorStore.
+
+        Args:
+            embeddings: The Embeddings instance used for this store.
+            config: Optional RedisConfig object. If not provided, a new one will be created from kwargs.
+            ttl: Optional time-to-live for Redis keys.
+            **kwargs: Additional keyword arguments for RedisConfig if config is not provided.
+        """
+        # 1. Load or create the Redis configuration
         self.config = config or RedisConfig(**kwargs)
+
+        # 2. Store embeddings and TTL
         self._embeddings = embeddings
         self.ttl = ttl
 
+        # 3. Determine embedding dimensions if not explicitly set
         if self.config.embedding_dimensions is None:
-            self.config.embedding_dimensions = len(
-                self._embeddings.embed_query(
-                    "The quick brown fox jumps over the lazy dog"
-                )
-            )
+            sample_text = "The quick brown fox jumps over the lazy dog"
+            self.config.embedding_dimensions = len(self._embeddings.embed_query(sample_text))
 
+        # 4. Initialize the index based on config settings
+        redis_client = self.config.redis()
         if self.config.index_schema:
+            # Create index from the provided schema
             self._index = SearchIndex(
-                self.config.index_schema, self.config.redis(), lib_name=__lib_name__
+                schema=self.config.index_schema,
+                redis_client=redis_client,
+                lib_name=__lib_name__
             )
             self._index.create(overwrite=False)
-
         elif self.config.schema_path:
+            # Create index from a YAML schema file
             self._index = SearchIndex.from_yaml(
-                self.config.schema_path, lib_name=__lib_name__
+                self.config.schema_path,
+                redis_client=redis_client,
+                lib_name=__lib_name__
             )
-            self._index.set_client(self.config.redis())
             self._index.create(overwrite=False)
         elif self.config.from_existing and self.config.index_name:
+            # Create index from an existing index configuration
             self._index = SearchIndex.from_existing(
-                self.config.index_name, self.config.redis(), lib_name=__lib_name__
+                name=self.config.index_name,
+                redis_client=redis_client,
+                lib_name=__lib_name__
             )
             self._index.create(overwrite=False)
         else:
-            # Set the default separator for tag fields where separator is not defined
+            # Build a default schema if no schema or path is provided
             modified_metadata_schema = []
             if self.config.metadata_schema is not None:
                 for field in self.config.metadata_schema:
                     if field["type"] == "tag":
-                        if "attrs" not in field or "separator" not in field["attrs"]:
-                            modified_field = field.copy()
-                            modified_field.setdefault("attrs", {})["separator"] = (
-                                self.config.default_tag_separator
-                            )
-                            modified_metadata_schema.append(modified_field)
+                        # Ensure a default separator is present
+                        if "attrs" not in field or "separator" not in field.get("attrs", {}):
+                            updated_field = field.copy()
+                            updated_field.setdefault("attrs", {})["separator"] = self.config.default_tag_separator
+                            modified_metadata_schema.append(updated_field)
                         else:
                             modified_metadata_schema.append(field)
                     else:
@@ -342,9 +360,9 @@ class RedisVectorStore(VectorStore):
                         *modified_metadata_schema,
                     ],
                 },
-                lib_name=__lib_name__,
+                redis_client=redis_client,
+                lib_name=__lib_name__
             )
-            self._index.set_client(self.config.redis())
             self._index.create(overwrite=False)
 
     @property
@@ -425,41 +443,46 @@ class RedisVectorStore(VectorStore):
 
         # Convert texts to a list if it's not already
         texts_list = list(texts)
-        # Embed the documents in bulk
-        embeddings = self._embeddings.embed_documents(texts_list)
 
-        datas = [
-            {
+        # Validate lengths of metadatas and keys if provided
+        if metadatas and len(metadatas) != len(texts_list):
+            raise ValueError("The length of 'metadatas' must match the number of 'texts'.")
+        if keys and len(keys) != len(texts_list):
+            raise ValueError("The length of 'keys' must match the number of 'texts'.")
+
+        # Generate embeddings for all texts
+        document_embeddings = self._embeddings.embed_documents(texts_list)
+
+        # Build records to load to SearchIndex
+        records = []
+        for text, embedding, metadata in zip(
+            texts_list,
+            document_embeddings,
+            metadatas or [{}] * len(texts_list),
+        ):
+            record = {
                 self.config.content_field: text,
                 self.config.embedding_field: (
                     embedding
                     if self.config.storage_type == StorageType.JSON.value
                     else array_to_buffer(embedding, dtype=self.config.vector_datatype)
                 ),
-                **{
-                    field_name: (
-                        self.config.default_tag_separator.join(metadata[field_name])
-                        if isinstance(metadata.get(field_name), list)
-                        else metadata.get(field_name)
-                    )
-                    for field_name in metadata
-                },
             }
-            for text, embedding, metadata in zip(
-                texts_list, embeddings, metadatas or [{}] * len(texts_list)
-            )
-        ]
+            for field_name, field_value in metadata.items():
+                if isinstance(field_value, list):
+                    record[field_name] = self.config.default_tag_separator.join(field_value)
+                else:
+                    record[field_name] = field_value
+            records.append(record)
 
-        result = (
-            self._index.load(
-                datas,
-                keys=[f"{self.config.key_prefix}:{key}" for key in keys],
-                ttl=self.ttl,
-            )
-            if keys
-            else self._index.load(datas, ttl=self.ttl)
-        )
+        # Load records into the index
+        if keys:
+            record_keys = [f"{self.config.key_prefix}:{key}" for key in keys]
+            result = self._index.load(records, keys=record_keys, ttl=self.ttl)
+        else:
+            result = self._index.load(records, ttl=self.ttl)
 
+        # Return list of IDs or empty list if result is None
         return list(result) if result is not None else []
 
     @classmethod
@@ -744,7 +767,7 @@ class RedisVectorStore(VectorStore):
               in the configuration.
         """
         if ids and len(ids) > 0:
-            keys = [f"{self.config.key_prefix}:{id}" for id in ids]
+            keys = [self._index.key(_id) for _id in ids]
             return self._index.drop_keys(keys) == len(ids)
         else:
             return False
@@ -1292,7 +1315,7 @@ class RedisVectorStore(VectorStore):
         """
         redis = self.config.redis()
         if self.config.key_prefix:
-            full_ids = [f"{self.config.key_prefix}:{id}" for id in ids]
+            full_ids = [self._index.key(_id) for _id in ids]
         else:
             full_ids = list(ids)
         if self.config.storage_type == StorageType.JSON.value:
