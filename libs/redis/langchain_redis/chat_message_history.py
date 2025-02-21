@@ -87,6 +87,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         redis_client: Optional[Redis] = None,
         **kwargs: Any,
     ):
+        # TODO -- switch over to use RedisVL for this all
         self.redis_client = redis_client or Redis.from_url(redis_url, **kwargs)
         try:
             self.redis_client.client_setinfo("LIB-NAME", __full_lib_name__)  # type: ignore

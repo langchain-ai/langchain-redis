@@ -48,7 +48,7 @@ class MockSearchIndex:
     def __init__(
         self,
         schema: Optional[Dict[str, Any]] = None,
-        client: Optional[Any] = None,
+        redis_client: Optional[Any] = None,
         lib_name: Optional[str] = None,
     ) -> None:
         self.data: List[Dict[str, Any]] = []
@@ -63,7 +63,7 @@ class MockSearchIndex:
         self.schema = MockSchema(
             schema["fields"] if schema and "fields" in schema else default_schema  # type: ignore
         )
-        self.client = client or Mock()
+        self.redis_client = redis_client or Mock()
         self._storage = MockStorage()
 
     def create(self, overwrite: bool = False) -> None:
@@ -113,9 +113,9 @@ class MockSearchIndex:
     @classmethod
     def from_dict(cls, dict_data: Dict[str, Any]) -> "MockSearchIndex":
         return cls(schema=dict_data)
-
-    def set_client(self, client: Any) -> None:
-        self.client = client
+    
+    def key(self, id: str) -> str:
+        pass
 
     @classmethod
     def from_yaml(cls, yaml_path: str) -> "MockSearchIndex":
