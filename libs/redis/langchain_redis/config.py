@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional, Type
 from pydantic import BaseModel, ConfigDict, Field, SkipValidation, model_validator
 from redis import Redis
 from redisvl.schema import IndexSchema, StorageType  # type: ignore[import]
-from redisvl.utils.utils import create_ulid
+from redisvl.utils.utils import create_ulid  # type: ignore[import]
 from typing_extensions import Annotated, Self
 
 
@@ -78,7 +78,7 @@ class RedisConfig(BaseModel):
     content_field: str = "text"
     embedding_field: str = "embedding"
     default_tag_separator: str = "|"
-    metadata_schema: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
+    metadata_schema: Optional[List[Dict[str, Any]]] = Field(default_factory=lambda: [])
     index_schema: Annotated[Optional[IndexSchema], SkipValidation()] = Field(
         default=None, alias="schema"
     )
@@ -127,7 +127,8 @@ class RedisConfig(BaseModel):
 
         This class method allows for flexible creation of a RedisConfig object,
         using default values where not specified and overriding with any provided
-        keyword arguments.
+        keyword arguments. If a 'schema' argument is provided, it will be set as
+        'index_schema' in the config.
 
         Args:
             **kwargs: Keyword arguments that match RedisConfig attributes. These will
@@ -157,35 +158,13 @@ class RedisConfig(BaseModel):
 
                 print(config.index_name)  # Output: my_custom_index
                 print(config.distance_metric)  # Output: COSINE
-
-        Note:
-            - This method first sets all attributes to their default values and
-              then overwrites them with provided kwargs.
-            - If a 'schema' argument is provided, it will be set as 'index_schema'
-              in the config.
-            - This method is particularly useful when you want to create a config
-              with mostly default values but need to customize a few specific
-              attributes.
-            - Any attribute of RedisConfig can be set through kwargs, providing full
-              flexibility in configuration.
         """
-        # Get the default values from the class attributes
-        default_config = {}
-        for field_name, field in cls.model_fields.items():
-            if field.default is not None:
-                default_config[field_name] = field.default
-            elif field.default_factory is not None:
-                default_config[field_name] = field.default_factory()
-
         # Handle special case for 'schema' argument
         if "schema" in kwargs:
             kwargs["index_schema"] = kwargs.pop("schema")
 
-        # Update default_config with any provided kwargs
-        default_config.update(kwargs)
-
-        # Create and return the RedisConfig object
-        return cls(**default_config)
+        # Init the class from kwargs letting Pydantic handle the defaults
+        return cls(**kwargs)
 
     @classmethod
     def from_schema(cls, schema: IndexSchema, **kwargs: Any) -> "RedisConfig":
