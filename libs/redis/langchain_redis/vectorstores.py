@@ -280,9 +280,11 @@ class RedisVectorStore(VectorStore):
 
         Args:
             embeddings: The Embeddings instance used for this store.
-            config: Optional RedisConfig object. If not provided, a new one will be created from kwargs.
+            config: Optional RedisConfig object. If not provided, a new
+                one will be created from kwargs.
             ttl: Optional time-to-live for Redis keys.
-            **kwargs: Additional keyword arguments for RedisConfig if config is not provided.
+            **kwargs: Additional keyword arguments for RedisConfig if
+                config is not provided.
         """
         # 1. Load or create the Redis configuration
         self.config = config or RedisConfig(**kwargs)
