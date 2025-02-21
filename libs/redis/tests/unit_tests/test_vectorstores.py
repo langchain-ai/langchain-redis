@@ -115,7 +115,7 @@ class MockSearchIndex:
         return cls(schema=dict_data)
 
     def key(self, id: str) -> str:
-        pass
+        return f"key:{id}"
 
     @classmethod
     def from_yaml(cls, yaml_path: str) -> "MockSearchIndex":
