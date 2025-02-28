@@ -1,6 +1,8 @@
 name: Nightly RedisVL Integration Tests
 
 on:
+  pull_request:
+
   schedule:
     # Run at midnight UTC every day
     - cron: '0 0 * * *'
