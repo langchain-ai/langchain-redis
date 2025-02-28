@@ -1,0 +1,71 @@
+name: Nightly RedisVL Integration Tests
+
+on:
+  schedule:
+    # Run at midnight UTC every day
+    - cron: '0 0 * * *'
+  workflow_dispatch:  # Allow manual triggering
+
+env:
+  POETRY_VERSION: "1.7.1"
+
+jobs:
+  test-with-latest-redisvl:
+    defaults:
+      run:
+        working-directory: libs/redis
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.9"
+          - "3.10"
+          - "3.11"
+          - "3.12"
+        redis-image:
+          - "redis/redis-stack-server:6.2.6-v9"
+          - "redis/redis-stack-server:latest"
+          - "redis:8.0-M03"
+    name: "RedisVL Integration Test - Python ${{ matrix.python-version }} + Redis ${{ matrix.redis-image }}"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }} + Poetry ${{ env.POETRY_VERSION }}
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ matrix.python-version }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: libs/redis
+          cache-key: redisvl-nightly
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          poetry install --with test,test_integration
+          # Remove current redisvl and install latest from main branch
+          poetry run pip uninstall -y redisvl
+          poetry run pip install git+https://github.com/redis/redis-vl-python.git@main
+
+      - name: Start Redis with Docker
+        run: |
+          docker run -d --name redis -p 6379:6379 ${{ matrix.redis-image }}
+          # Wait for Redis to be ready
+          sleep 5
+          docker ps
+
+      - name: Run unit tests
+        shell: bash
+        run: |
+          make test
+
+      - name: Run integration tests
+        shell: bash
+        run: |
+          make integration_tests
+
+      - name: Cleanup Redis Docker container
+        if: always()
+        run: |
+          docker stop redis || true
+          docker rm redis || true 
