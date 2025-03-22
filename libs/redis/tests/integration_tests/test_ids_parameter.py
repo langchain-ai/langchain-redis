@@ -18,7 +18,7 @@ def redis_url() -> str:
 def test_add_texts_with_ids_in_kwargs(redis_url: str) -> None:
     """Test that ids parameter in kwargs works correctly in add_texts."""
     # Create embeddings for tests
-    embeddings = get_embeddings_for_tests()
+    embeddings = get_embeddings_for_tests()  # type: ignore
 
     # Create a unique index name for testing
     index_name = f"test_ids_parameter_{os.urandom(4).hex()}"
@@ -37,7 +37,7 @@ def test_add_texts_with_ids_in_kwargs(redis_url: str) -> None:
     ids = ["id1", "id2", "id3"]
 
     # Add texts with ids parameter in kwargs
-    returned_ids = vector_store.add_texts(texts=texts, ids=ids)
+    returned_ids = vector_store.add_texts(texts=texts, ids=ids)  # type: ignore
 
     # Verify returned IDs match expected format
     assert len(returned_ids) == len(ids)
@@ -58,7 +58,7 @@ def test_add_texts_with_ids_in_kwargs(redis_url: str) -> None:
 def test_add_texts_with_both_keys_and_ids(redis_url: str) -> None:
     """Test that keys parameter takes precedence over ids in kwargs."""
     # Create embeddings for tests
-    embeddings = get_embeddings_for_tests()
+    embeddings = get_embeddings_for_tests()  # type: ignore
 
     # Create a unique index name for testing
     index_name = f"test_ids_parameter_{os.urandom(4).hex()}"
@@ -80,7 +80,9 @@ def test_add_texts_with_both_keys_and_ids(redis_url: str) -> None:
     # Add texts with both keys and ids parameters
     # keys parameter should take precedence
     returned_ids = vector_store.add_texts(
-        texts=texts, keys=explicit_keys, ids=ids_in_kwargs
+        texts=texts,
+        keys=explicit_keys,
+        ids=ids_in_kwargs,  # type: ignore
     )
 
     # Verify returned IDs match expected format from explicit keys
@@ -110,7 +112,7 @@ def test_add_texts_with_both_keys_and_ids(redis_url: str) -> None:
 def test_upsert_with_ids(redis_url: str) -> None:
     """Test updating existing documents with the same ids."""
     # Create embeddings for tests
-    embeddings = get_embeddings_for_tests()
+    embeddings = get_embeddings_for_tests()  # type: ignore
 
     # Create a unique index name for testing
     index_name = f"test_ids_parameter_{os.urandom(4).hex()}"
@@ -129,11 +131,11 @@ def test_upsert_with_ids(redis_url: str) -> None:
     ids = ["id1", "id2", "id3"]
 
     # Add texts with ids parameter in kwargs
-    vector_store.add_texts(texts=texts_original, ids=ids)
+    vector_store.add_texts(texts=texts_original, ids=ids)  # type: ignore
 
     # Now update the texts with the same IDs
     texts_updated = ["foo updated", "bar updated", "baz updated"]
-    vector_store.add_texts(texts=texts_updated, ids=ids)
+    vector_store.add_texts(texts=texts_updated, ids=ids)  # type: ignore
 
     # Search for updated content
     results = vector_store.similarity_search("foo updated", k=1)
