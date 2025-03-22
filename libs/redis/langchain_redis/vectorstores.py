@@ -452,6 +452,10 @@ class RedisVectorStore(VectorStore):
         # Convert texts to a list if it's not already
         texts_list = list(texts)
 
+        # If keys is not provided but ids exists in kwargs, use ids as keys
+        if keys is None and "ids" in kwargs:
+            keys = kwargs["ids"]
+
         # Validate lengths of metadatas and keys if provided
         if metadatas and len(metadatas) != len(texts_list):
             raise ValueError(
