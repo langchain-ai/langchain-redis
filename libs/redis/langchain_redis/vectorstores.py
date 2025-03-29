@@ -1339,7 +1339,7 @@ class RedisVectorStore(VectorStore):
             values = pipe.execute()
         documents = []
         for id_, value in zip(ids, values):
-            if value is None:
+            if value is None or not value:
                 continue
             if self.config.storage_type == StorageType.JSON.value:
                 doc = cast(dict, value)
