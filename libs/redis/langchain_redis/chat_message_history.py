@@ -14,6 +14,28 @@ from redis.commands.search.query import Query
 from langchain_redis.version import __full_lib_name__
 
 
+def _noop_push_handler(response: Any) -> None:
+    """
+    No-op push response handler to prevent _set_info_logger from being called.
+
+    Redis's PubSub functionality creates a special INFO level logger called
+    'push_response' when no handler is provided. This affects global logging config
+    by creating a new INFO level logger while an app might be using DEBUG level.
+
+    This handler simply does nothing with the push responses, preventing Redis from
+    creating its own INFO logger. If an app needs to process push responses,
+    it should provide its own custom handler when instantiating RedisChatMessageHistory.
+
+    Args:
+        response: The push response from Redis that we're ignoring.
+
+    Returns:
+        None
+    """
+    # Explicitly do nothing with the response
+    pass
+
+
 class RedisChatMessageHistory(BaseChatMessageHistory):
     """Redis-based implementation of chat message history.
 
@@ -89,6 +111,11 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
     ):
         # TODO -- switch over to use RedisVL for this all
         self.redis_client = redis_client or Redis.from_url(redis_url, **kwargs)
+
+        # Configure Redis client to use a no-op push handler when PubSub is initialized
+        if hasattr(self.redis_client, "pubsub_configs"):
+            # In newer Redis-py versions, we can set a default pubsub_configs
+            self.redis_client.pubsub_configs = {"push_handler_func": _noop_push_handler}
         try:
             self.redis_client.client_setinfo("LIB-NAME", __full_lib_name__)  # type: ignore
         except ResponseError:
