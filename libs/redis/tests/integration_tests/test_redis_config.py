@@ -4,18 +4,18 @@ from typing import Any, List
 import pytest
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
-from langchain_openai import OpenAIEmbeddings
 from redis import Redis
 from redisvl.query import CountQuery  # type: ignore
 from redisvl.query.filter import FilterExpression  # type: ignore
 from redisvl.schema import IndexSchema, StorageType  # type: ignore
 
 from langchain_redis import RedisConfig, RedisVectorStore
+from tests.integration_tests.embed_patch import get_embeddings_for_tests
 
 
 @pytest.fixture
 def embeddings() -> Embeddings:
-    return OpenAIEmbeddings()
+    return get_embeddings_for_tests()
 
 
 @pytest.fixture
@@ -86,7 +86,7 @@ def test_redis_config_from_existing_index(redis_url: str) -> None:
     # First, create an index
     index_name = f"test_index_{uuid.uuid4().hex}"
     vector_store = RedisVectorStore.from_texts(
-        ["test"], OpenAIEmbeddings(), index_name=index_name, redis_url=redis_url
+        ["test"], get_embeddings_for_tests(), index_name=index_name, redis_url=redis_url
     )
 
     # Now, create a config from the existing index

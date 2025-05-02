@@ -32,6 +32,8 @@ scipy = [
   { version = "^1.15", python = ">=3.10", optional = true }
 ]
 langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
+langchain-openai = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/partners/openai" }
+openai = ">=1.68.2"
 
 [tool.poetry.group.codespell]
 optional = true
@@ -61,6 +63,7 @@ optional = true
 
 [tool.poetry.group.dev.dependencies]
 langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
+langchain-openai = "^0.3.15"
 
 [tool.ruff.lint]
 select = [

@@ -37,3 +37,16 @@ if TESTCONTAINERS_AVAILABLE:
 @pytest.fixture(scope="session")
 def redis_url() -> str:
     return os.getenv("REDIS_URL", "redis://localhost:6379")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def setup_openai_api_key() -> None:
+    """Set up the OpenAI API key for tests if not already set."""
+    # If not already set in the environment, use a default value for testing
+    if "OPENAI_API_KEY" not in os.environ:
+        # This would ideally come from a secrets store or CI/CD environment
+        api_key = os.getenv("OPENAI_API_KEY_FOR_TESTS")
+
+        # If we have a key in the alternate env var, use it
+        if api_key:
+            os.environ["OPENAI_API_KEY"] = api_key
