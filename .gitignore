@@ -221,3 +221,4 @@ pip-selfcheck.json
 **/.claude/settings.local.json
 CLAUDE.md
 **/.idea/*
+temp/*
