@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "langchain-redis"
-version = "0.2.0"
+version = "0.2.1"
 description = "An integration package connecting Redis and LangChain"
 authors = ["Brian Sam-Bodden <bsb@redis.com>"]
 readme = "README.md"
@@ -13,10 +13,16 @@ license = "MIT"
 [tool.poetry.dependencies]
 python = ">=3.9,<3.14"
 langchain-core = "^0.3"
-redisvl = "^0.4.0"
+redisvl = "^0.6.0"
 numpy = "^1"
 python-ulid = "^3"
-jinja2 = "^3.1.5"
+jinja2 = "^3.1.6"
+tenacity = "^9.1.2"
+typing-extensions = "^4.13.2"
+anyio = "^4.9.0"
+httpcore = "^1.0.9"
+certifi = "^2025.4.26"
+urllib3 = "^2.4.0"
 
 [tool.poetry.group.test]
 optional = true
@@ -32,6 +38,8 @@ scipy = [
   { version = "^1.15", python = ">=3.10", optional = true }
 ]
 langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
+langchain-openai = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/partners/openai" }
+openai = ">=1.68.2"
 
 [tool.poetry.group.codespell]
 optional = true
@@ -61,6 +69,7 @@ optional = true
 
 [tool.poetry.group.dev.dependencies]
 langchain-core = { git = "https://github.com/langchain-ai/langchain.git", subdirectory = "libs/core" }
+langchain-openai = "^0.3.15"
 
 [tool.ruff.lint]
 select = [

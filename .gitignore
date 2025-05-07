@@ -217,4 +217,8 @@ pyrightconfig.json
 pyvenv.cfg
 pip-selfcheck.json
 
-libs/redis/docs/.Trash*
+**/.Trash*
+**/.claude/settings.local.json
+CLAUDE.md
+**/.idea/*
+temp/*

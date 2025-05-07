@@ -8,6 +8,7 @@ EXPECTED_ALL = [
     "RedisCache",
     "RedisSemanticCache",
     "RedisChatMessageHistory",
+    "_noop_push_handler",
 ]
 
 
