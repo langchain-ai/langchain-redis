@@ -16,7 +16,7 @@ from pydantic import ConfigDict, Field
 from redis import Redis
 from redis.commands.json.path import Path
 from redis.exceptions import ResponseError
-from redisvl.extensions.cache.llm import (  # type: ignore[import]
+from redisvl.extensions.llmcache import (  # type: ignore[import]
     SemanticCache as RedisVLSemanticCache,
 )
 from redisvl.schema.fields import VectorDataType  # type: ignore[import]
