@@ -64,12 +64,16 @@ class MockRedisVLSemanticCache:
     def __init__(self) -> None:
         self.data: Dict[tuple, List[Dict[str, Any]]] = {}
         self.distance_threshold: float = 0.2  # Default value
+        self.index = Mock()
+        self.index.name = "test_index"
 
     def check(self, vector: List[float]) -> List[Dict[str, Any]]:
         for stored_vector, stored_data in self.data.items():
             distance = np.linalg.norm(np.array(vector) - np.array(stored_vector))
+            # Important: The distance check is now more explicit about threshold
             if distance <= self.distance_threshold:
                 return stored_data
+            # If threshold is not met, return empty list
         return []
 
     def store(
@@ -86,7 +90,39 @@ class MockRedisVLSemanticCache:
 
     def _vectorize_prompt(self, prompt: str) -> List[float]:
         # Simple mock implementation, returns different vectors for different prompts
-        return [hash(prompt) % 10 * 0.1, hash(prompt) % 7 * 0.1, hash(prompt) % 5 * 0.1]
+        # Make sure vectors are different enough to test distance threshold
+        if prompt == "test prompt 1":
+            return [0.1, 0.2, 0.3]
+        elif prompt == "test prompt 2":
+            return [0.5, 0.6, 0.7]  # More than 0.1 distance from first vector
+        else:
+            return [
+                hash(prompt) % 10 * 0.1,
+                hash(prompt) % 7 * 0.1,
+                hash(prompt) % 5 * 0.1,
+            ]
+
+    def acheck(self, vector: List[float]) -> List[Dict[str, Any]]:
+        # Async version with same behavior
+        return self.check(vector)
+
+    async def astore(
+        self,
+        prompt: str,
+        response: str,
+        vector: List[float],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        # Async version with same behavior
+        self.store(prompt, response, vector, metadata)
+
+    async def aclear(self) -> None:
+        # Async version with same behavior
+        self.clear()
+
+    async def _avectorize_prompt(self, prompt: str) -> List[float]:
+        # Async version with same behavior
+        return self._vectorize_prompt(prompt)
 
 
 class TestRedisCache:
@@ -196,9 +232,10 @@ class TestRedisSemanticCache:
             "langchain_redis.cache.RedisVLSemanticCache",
             return_value=MockRedisVLSemanticCache(),
         ):
-            return RedisSemanticCache(
+            cache = RedisSemanticCache(
                 embeddings=mock_embeddings, redis_url="redis://localhost:6379"
             )
+            return cache
 
     def test_update(self, redis_semantic_cache: RedisSemanticCache) -> None:
         prompt = "test prompt"
