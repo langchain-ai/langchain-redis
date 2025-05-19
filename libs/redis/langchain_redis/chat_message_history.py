@@ -195,7 +195,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
               Consider implementing size limits if dealing with potentially
               large messages.
         """
-        common_data_to_store = {
+        common_data_to_store: dict[str, Any] = {
             "type": message.type,
             "data": {
                 "content": message.content,
