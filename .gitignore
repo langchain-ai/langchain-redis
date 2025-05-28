@@ -217,13 +217,8 @@ pyrightconfig.json
 pyvenv.cfg
 pip-selfcheck.json
 
-<<<<<<< Updated upstream
 **/.Trash*
 **/.claude/settings.local.json
-CLAUDE.md
 **/.idea/*
 temp/*
-=======
 libs/redis/docs/.Trash*
-**/.claude/settings.local.json
->>>>>>> Stashed changes
