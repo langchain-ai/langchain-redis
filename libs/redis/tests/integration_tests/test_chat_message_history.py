@@ -270,3 +270,39 @@ def test_chat_history_with_preconfigured_client(redis_url: str) -> None:
     assert messages[1].content == "Hello, human!"
 
     history.clear()
+
+
+def test_session_id_with_special_characters(redis_url: str) -> None:
+    """Test that session IDs with special characters (like UUIDs with hyphens) work
+    correctly."""
+    # Use a UUID with hyphens - this would have caused syntax errors before the fix
+    uuid_session_id = "550e8400-e29b-41d4-a716-446655440000"
+
+    history = RedisChatMessageHistory(session_id=uuid_session_id, redis_url=redis_url)
+
+    try:
+        # Add messages - this should work without syntax errors
+        history.add_message(HumanMessage(content="Hello with UUID session!"))
+        history.add_message(AIMessage(content="Hello back!"))
+
+        # Retrieve messages - this should work without syntax errors
+        messages = history.messages
+        assert len(messages) == 2
+        assert messages[0].content == "Hello with UUID session!"
+        assert messages[1].content == "Hello back!"
+
+        # Test search functionality - this should work without syntax errors
+        search_results = history.search_messages("UUID")
+        assert len(search_results) == 1
+        assert "UUID" in search_results[0]["content"]
+
+        # Test length functionality - this should work without syntax errors
+        assert len(history) == 2
+
+        # Test clear functionality - this should work without syntax errors
+        history.clear()
+        assert len(history.messages) == 0
+
+    finally:
+        # Ensure cleanup even if test fails
+        history.clear()

@@ -10,6 +10,7 @@ from redis.commands.json.path import Path
 from redis.commands.search.field import NumericField, TagField, TextField
 from redis.commands.search.indexDefinition import IndexDefinition, IndexType
 from redis.commands.search.query import Query
+from redisvl.utils.token_escaper import TokenEscaper  # type: ignore[import-untyped]
 
 from langchain_redis.version import __full_lib_name__
 
@@ -97,6 +98,8 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
           specified duration.
         - The session_id is used to group messages belonging to the same conversation
           or user session.
+        - Session IDs containing special characters (such as hyphens in UUIDs) are
+          automatically escaped for Redis search queries to prevent syntax errors.
     """
 
     def __init__(
@@ -125,11 +128,25 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         self.key_prefix = key_prefix
         self.ttl = ttl
         self.index_name = index_name
+        self._token_escaper = TokenEscaper()
         self._ensure_index()
 
     @property
     def id(self) -> str:
         return self.session_id
+
+    def _escape_session_id(self) -> str:
+        r"""Escape the session ID for use in Redis search queries.
+
+        This method uses RedisVL's TokenEscaper to properly escape special characters
+        in the session ID that could be interpreted as operators in Redis search syntax.
+        For example, hyphens (-) are escaped as \- to prevent them from being
+        interpreted as NOT operators.
+
+        Returns:
+            str: The escaped session ID safe for use in Redis search queries.
+        """
+        return self._token_escaper.escape(self.session_id)
 
     def _ensure_index(self) -> None:
         try:
@@ -155,7 +172,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
     @property
     def messages(self) -> List[BaseMessage]:  # type: ignore
         query = (
-            Query(f"@session_id:{{{self.session_id}}}")
+            Query(f"@session_id:{{{self._escape_session_id()}}}")
             .sort_by("timestamp", asc=True)
             .paging(0, 10000)
         )
@@ -276,7 +293,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
             - This operation is irreversible. Make sure you want to remove all messages
               before calling this method.
         """
-        query = Query(f"@session_id:{{{self.session_id}}}").paging(0, 10000)
+        query = Query(f"@session_id:{{{self._escape_session_id()}}}").paging(0, 10000)
         results = self.redis_client.ft(self.index_name).search(query)
         for doc in results.docs:
             self.redis_client.delete(doc.id)
@@ -343,7 +360,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
               conversation without having to iterate through all messages.
         """
         search_query = (
-            Query(f"(@session_id:{{{self.session_id}}}) (@content:{query})")
+            Query(f"(@session_id:{{{self._escape_session_id()}}}) (@content:{query})")
             .sort_by("timestamp", asc=True)
             .paging(0, limit)
         )
@@ -352,5 +369,5 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         return [json.loads(doc.json)["data"] for doc in results.docs]
 
     def __len__(self) -> int:
-        query = Query(f"@session_id:{{{self.session_id}}}").no_content()
+        query = Query(f"@session_id:{{{self._escape_session_id()}}}").no_content()
         return self.redis_client.ft(self.index_name).search(query).total

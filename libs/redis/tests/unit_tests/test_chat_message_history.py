@@ -339,3 +339,43 @@ class TestRedisChatMessageHistory:
         assert isinstance(messages[1], AIMessage)
         assert messages[0].content == "Hello!"
         assert messages[1].content == "Hi there!"
+
+    def test_session_id_escaping(self, mock_redis: MockRedis) -> None:
+        """Test that session IDs with special characters are properly escaped in Redis
+        search queries."""
+        # Test with a UUID containing hyphens (common case that caused the original bug)
+        uuid_session_id = "550e8400-e29b-41d4-a716-446655440000"
+
+        with patch("redis.Redis.from_url", return_value=mock_redis):
+            history = RedisChatMessageHistory(
+                session_id=uuid_session_id, redis_url="redis://localhost:6379"
+            )
+
+        # Test the _escape_session_id method directly
+        escaped_session_id = history._escape_session_id()
+        expected_escaped = "550e8400\\-e29b\\-41d4\\-a716\\-446655440000"
+        assert escaped_session_id == expected_escaped
+
+        # Mock the search to verify escaped session ID is used in queries
+        with patch.object(history.redis_client, "ft") as mock_ft:
+            mock_search_result = Mock()
+            mock_search_result.docs = []
+            mock_search_result.total = 0
+            mock_ft.return_value.search.return_value = mock_search_result
+
+            # Test that all query methods use escaped session ID
+            _ = history.messages
+            history.clear()
+            history.search_messages("test")
+            _ = len(history)
+
+            # Verify all queries use escaped session ID
+            assert mock_ft.return_value.search.call_count == 4
+
+            for call in mock_ft.return_value.search.call_args_list:
+                query_arg = call[0][0]
+                query_string = query_arg.query_string()
+
+                # Verify the query contains the escaped session ID, not the original
+                assert expected_escaped in query_string
+                assert uuid_session_id not in query_string
