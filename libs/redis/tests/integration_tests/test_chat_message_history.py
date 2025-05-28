@@ -24,7 +24,7 @@ def chat_history(redis_url: str) -> Generator[RedisChatMessageHistory, None, Non
     try:
         yield history
     finally:
-        history.clear()
+        history.delete()
 
 
 def test_add_and_retrieve_messages(chat_history: RedisChatMessageHistory) -> None:
@@ -270,3 +270,603 @@ def test_chat_history_with_preconfigured_client(redis_url: str) -> None:
     assert messages[1].content == "Hello, human!"
 
     history.clear()
+
+
+def test_session_id_with_special_characters(redis_url: str) -> None:
+    """Test that session IDs with special characters (like UUIDs with hyphens) work
+    correctly."""
+    # Use a UUID with hyphens - this would have caused syntax errors before the fix
+    uuid_session_id = "550e8400-e29b-41d4-a716-446655440000"
+
+    history = RedisChatMessageHistory(session_id=uuid_session_id, redis_url=redis_url)
+
+    try:
+        # Add messages - this should work without syntax errors
+        history.add_message(HumanMessage(content="Hello with UUID session!"))
+        history.add_message(AIMessage(content="Hello back!"))
+
+        # Retrieve messages - this should work without syntax errors
+        messages = history.messages
+        assert len(messages) == 2
+        assert messages[0].content == "Hello with UUID session!"
+        assert messages[1].content == "Hello back!"
+
+        # Test search functionality - this should work without syntax errors
+        search_results = history.search_messages("UUID")
+        assert len(search_results) == 1
+        assert "UUID" in search_results[0]["content"]
+
+        # Test length functionality - this should work without syntax errors
+        assert len(history) == 2
+
+        # Test clear functionality - this should work without syntax errors
+        history.clear()
+        assert len(history.messages) == 0
+
+    finally:
+        # Ensure cleanup even if test fails
+        history.clear()
+
+
+def test_timestamp_sorting(chat_history: RedisChatMessageHistory) -> None:
+    """Test that messages are returned in correct timestamp order."""
+    # Add messages with small delays to ensure different timestamps
+    chat_history.add_message(HumanMessage(content="First message"))
+    chat_history.add_message(AIMessage(content="Second message"))
+    chat_history.add_message(HumanMessage(content="Third message"))
+    chat_history.add_message(AIMessage(content="Fourth message"))
+
+    # Retrieve messages and verify they're in chronological order
+    messages = chat_history.messages
+    assert len(messages) == 4
+
+    # Check content order
+    assert messages[0].content == "First message"
+    assert messages[1].content == "Second message"
+    assert messages[2].content == "Third message"
+    assert messages[3].content == "Fourth message"
+
+    # Check message types
+    assert isinstance(messages[0], HumanMessage)
+    assert isinstance(messages[1], AIMessage)
+    assert isinstance(messages[2], HumanMessage)
+    assert isinstance(messages[3], AIMessage)
+
+
+def test_session_sensitive_clear(redis_url: str) -> None:
+    """Test that clear() only clears messages for the current session."""
+    session1_id = f"session1_{str(ULID())}"
+    session2_id = f"session2_{str(ULID())}"
+
+    history1 = RedisChatMessageHistory(session_id=session1_id, redis_url=redis_url)
+    history2 = RedisChatMessageHistory(session_id=session2_id, redis_url=redis_url)
+
+    try:
+        # Add messages to both sessions
+        history1.add_message(HumanMessage(content="Session 1 message 1"))
+        history1.add_message(AIMessage(content="Session 1 message 2"))
+
+        history2.add_message(HumanMessage(content="Session 2 message 1"))
+        history2.add_message(AIMessage(content="Session 2 message 2"))
+
+        # Verify both sessions have messages
+        assert len(history1.messages) == 2
+        assert len(history2.messages) == 2
+
+        # Clear only session 1
+        history1.clear()
+
+        # Verify session 1 is empty but session 2 still has messages
+        assert len(history1.messages) == 0
+        assert len(history2.messages) == 2
+
+        # Verify session 2 messages are intact
+        session2_messages = history2.messages
+        assert session2_messages[0].content == "Session 2 message 1"
+        assert session2_messages[1].content == "Session 2 message 2"
+
+    finally:
+        # Clean up both sessions
+        history1.clear()
+        history2.clear()
+
+
+def test_empty_session_id(redis_url: str) -> None:
+    """Test behavior with empty session ID."""
+    with pytest.raises(ValueError):
+        RedisChatMessageHistory(session_id="", redis_url=redis_url)
+
+
+def test_none_session_id(redis_url: str) -> None:
+    """Test behavior with None session ID."""
+    with pytest.raises(ValueError):
+        RedisChatMessageHistory(session_id=None, redis_url=redis_url)  # type: ignore
+
+
+def test_unicode_session_id(redis_url: str) -> None:
+    """Test behavior with Unicode characters in session ID."""
+    unicode_session_id = f"session_测试_🚀_{str(ULID())}"
+    history = RedisChatMessageHistory(
+        session_id=unicode_session_id, redis_url=redis_url
+    )
+
+    try:
+        history.add_message(HumanMessage(content="Unicode session test"))
+        messages = history.messages
+        assert len(messages) == 1
+        assert messages[0].content == "Unicode session test"
+    finally:
+        history.delete()
+
+
+def test_empty_message_content(chat_history: RedisChatMessageHistory) -> None:
+    """Test adding messages with empty content."""
+    history = chat_history
+
+    # Test empty string content
+    history.add_message(HumanMessage(content=""))
+    history.add_message(AIMessage(content=""))
+
+    messages = history.messages
+    assert len(messages) == 2
+    assert messages[0].content == ""
+    assert messages[1].content == ""
+
+
+def test_very_large_message_content(chat_history: RedisChatMessageHistory) -> None:
+    """Test adding messages with very large content."""
+    large_content = "x" * 100000  # 100KB message
+    chat_history.add_message(HumanMessage(content=large_content))
+
+    messages = chat_history.messages
+    assert len(messages) == 1
+    assert messages[0].content == large_content
+
+
+def test_unicode_message_content(chat_history: RedisChatMessageHistory) -> None:
+    """Test messages with Unicode content including emojis."""
+    unicode_content = "Hello 世界! 🌍🚀 Testing Unicode: αβγδε ñáéíóú"
+    chat_history.add_message(HumanMessage(content=unicode_content))
+
+    messages = chat_history.messages
+    assert len(messages) == 1
+    assert messages[0].content == unicode_content
+
+
+def test_special_characters_in_content(chat_history: RedisChatMessageHistory) -> None:
+    """Test messages with special characters that might break JSON or search."""
+    special_content = 'Test with "quotes", {brackets}, [arrays], and \\ backslashes'
+    chat_history.add_message(HumanMessage(content=special_content))
+    messages = chat_history.messages
+    assert len(messages) == 1
+    assert messages[0].content == special_content
+
+
+def test_message_with_additional_kwargs(chat_history: RedisChatMessageHistory) -> None:
+    """Test messages with additional_kwargs are preserved."""
+    message = HumanMessage(
+        content="Test message",
+        additional_kwargs={"custom_field": "custom_value", "number": 42},
+    )
+    chat_history.add_message(message)
+
+    messages = chat_history.messages
+    assert len(messages) == 1
+    assert messages[0].content == "Test message"
+    assert messages[0].additional_kwargs == {
+        "custom_field": "custom_value",
+        "number": 42,
+    }
+
+
+def test_search_case_insensitive(chat_history: RedisChatMessageHistory) -> None:
+    """Test that search is case insensitive."""
+    chat_history.add_message(HumanMessage(content="Hello World"))
+    chat_history.add_message(HumanMessage(content="GOODBYE WORLD"))
+
+    # Test different cases
+    results = chat_history.search_messages("hello")
+    assert len(results) == 1
+
+    results = chat_history.search_messages("HELLO")
+    assert len(results) == 1
+
+    results = chat_history.search_messages("world")
+    assert len(results) == 2
+
+    results = chat_history.search_messages("WORLD")
+    assert len(results) == 2
+
+
+def test_search_with_limit_zero(chat_history: RedisChatMessageHistory) -> None:
+    """Test search with limit=0."""
+    chat_history.add_message(HumanMessage(content="Test message"))
+
+    results = chat_history.search_messages("test", limit=0)
+    assert len(results) == 0
+
+
+def test_search_with_large_limit(chat_history: RedisChatMessageHistory) -> None:
+    """Test search with very large limit."""
+    for i in range(5):
+        chat_history.add_message(HumanMessage(content=f"Test message {i}"))
+
+    results = chat_history.search_messages("test", limit=1000)
+    assert len(results) == 5
+
+
+def test_invalid_redis_url() -> None:
+    """Test behavior with invalid Redis URL."""
+    with pytest.raises(Exception):  # Could be ConnectionError or similar
+        history = RedisChatMessageHistory(
+            session_id="test", redis_url="redis://invalid-host:6379"
+        )
+        # Try to use it to trigger connection
+        history.add_message(HumanMessage(content="Test"))
+
+
+def test_custom_key_prefix(redis_url: str) -> None:
+    """Test custom key prefix functionality."""
+    custom_prefix = "custom_chat:"
+    session_id = f"test_{str(ULID())}"
+
+    history = RedisChatMessageHistory(
+        session_id=session_id, redis_url=redis_url, key_prefix=custom_prefix
+    )
+
+    try:
+        history.add_message(HumanMessage(content="Test with custom prefix"))
+        messages = history.messages
+        assert len(messages) == 1
+        assert messages[0].content == "Test with custom prefix"
+    finally:
+        history.delete()
+
+
+def test_custom_index_name(redis_url: str) -> None:
+    """Test custom index name functionality."""
+    custom_index = "custom_chat_index"
+    session_id = f"test_{str(ULID())}"
+
+    history = RedisChatMessageHistory(
+        session_id=session_id, redis_url=redis_url, index_name=custom_index
+    )
+
+    try:
+        history.add_message(HumanMessage(content="Test with custom index"))
+        messages = history.messages
+        assert len(messages) == 1
+        assert messages[0].content == "Test with custom index"
+
+        # Verify the custom index was created
+        redis_client = Redis.from_url(redis_url)
+        index_info = redis_client.ft(custom_index).info()
+        assert index_info["index_name"] == custom_index
+    finally:
+        history.delete()
+
+
+def test_clear_empty_session(chat_history: RedisChatMessageHistory) -> None:
+    """Test clearing an empty session doesn't cause errors."""
+    # Should not raise any exceptions
+    chat_history.clear()
+    assert len(chat_history.messages) == 0
+
+
+def test_clear_large_session(redis_url: str) -> None:
+    """Test clearing a session with many messages."""
+    session_id = f"large_clear_test_{str(ULID())}"
+    history = RedisChatMessageHistory(session_id=session_id, redis_url=redis_url)
+
+    try:
+        # Add many messages
+        for i in range(100):
+            history.add_message(HumanMessage(content=f"Message {i}"))
+
+        assert len(history.messages) == 100
+
+        # Clear all messages
+        history.clear()
+        assert len(history.messages) == 0
+    finally:
+        history.delete()
+
+
+def test_message_ordering_with_rapid_additions(redis_url: str) -> None:
+    """Test message ordering when messages are added very rapidly."""
+    session_id = f"rapid_test_{str(ULID())}"
+    history = RedisChatMessageHistory(session_id=session_id, redis_url=redis_url)
+
+    try:
+        # Add messages very rapidly
+        for i in range(20):
+            history.add_message(HumanMessage(content=f"Rapid message {i}"))
+
+        messages = history.messages
+        assert len(messages) == 20
+
+        # Verify ordering (should be chronological)
+        for i, message in enumerate(messages):
+            assert message.content == f"Rapid message {i}"
+    finally:
+        history.delete()
+
+
+def test_ttl_edge_cases(redis_url: str) -> None:
+    """Test TTL edge cases."""
+    session_id = f"ttl_edge_test_{str(ULID())}"
+
+    # Test TTL = 0 (should expire immediately)
+    history_zero = RedisChatMessageHistory(
+        session_id=f"{session_id}_zero", redis_url=redis_url, ttl=0
+    )
+
+    try:
+        history_zero.add_message(HumanMessage(content="Should expire immediately"))
+        # Message might already be expired
+        time.sleep(0.1)
+        messages = history_zero.messages
+        # Could be 0 or 1 depending on timing
+        assert len(messages) <= 1
+    finally:
+        history_zero.clear()
+
+    # Test very large TTL
+    history_large = RedisChatMessageHistory(
+        session_id=f"{session_id}_large",
+        redis_url=redis_url,
+        ttl=2147483647,  # Max 32-bit int
+    )
+
+    try:
+        history_large.add_message(HumanMessage(content="Long TTL message"))
+        messages = history_large.messages
+        assert len(messages) == 1
+    finally:
+        history_large.clear()
+
+
+def test_id_property(chat_history: RedisChatMessageHistory) -> None:
+    """Test the id property returns session_id."""
+    assert chat_history.id == chat_history.session_id
+
+
+def test_messages_property_empty(chat_history: RedisChatMessageHistory) -> None:
+    """Test messages property when no messages exist."""
+    messages = chat_history.messages
+    assert isinstance(messages, list)
+    assert len(messages) == 0
+
+
+def test_len_with_cleared_session(chat_history: RedisChatMessageHistory) -> None:
+    """Test __len__ after clearing session."""
+    chat_history.add_message(HumanMessage(content="Test"))
+    assert len(chat_history) == 1
+
+    chat_history.clear()
+    assert len(chat_history) == 0
+
+
+def test_index_recreation_after_deletion(redis_url: str) -> None:
+    """Test that index can be recreated if manually deleted."""
+    session_id = f"index_recreation_test_{str(ULID())}"
+    history = RedisChatMessageHistory(session_id=session_id, redis_url=redis_url)
+
+    try:
+        # Add a message to ensure index is working
+        history.add_message(HumanMessage(content="Test message"))
+        assert len(history.messages) == 1
+
+        # Manually delete the index
+        redis_client = Redis.from_url(redis_url)
+        try:
+            redis_client.ft(history.index_name).dropindex()
+        except Exception:
+            pass  # Index might not exist
+
+        # Create new instance - should recreate index
+        history2 = RedisChatMessageHistory(session_id=session_id, redis_url=redis_url)
+
+        # Should be able to add messages again
+        history2.add_message(HumanMessage(content="After recreation"))
+        messages = history2.messages
+        # Note: Original message might be gone since index was dropped
+        assert len(messages) >= 1
+        assert any("After recreation" in msg.content for msg in messages)
+
+    finally:
+        try:
+            history.delete()
+            history2.delete()
+        except Exception:
+            pass
+
+
+def test_multiple_instances_same_session(redis_url: str) -> None:
+    """Test multiple instances accessing the same session."""
+    session_id = f"multi_instance_test_{str(ULID())}"
+
+    history1 = RedisChatMessageHistory(session_id=session_id, redis_url=redis_url)
+    history2 = RedisChatMessageHistory(session_id=session_id, redis_url=redis_url)
+
+    try:
+        # Add message with first instance
+        history1.add_message(HumanMessage(content="From instance 1"))
+
+        # Read with second instance
+        messages = history2.messages
+        assert len(messages) == 1
+        assert messages[0].content == "From instance 1"
+
+        # Add message with second instance
+        history2.add_message(AIMessage(content="From instance 2"))
+
+        # Read with first instance
+        messages = history1.messages
+        assert len(messages) == 2
+        assert messages[0].content == "From instance 1"
+        assert messages[1].content == "From instance 2"
+
+    finally:
+        history1.clear()
+
+
+def test_search_with_empty_query(chat_history: RedisChatMessageHistory) -> None:
+    """Test search with empty query string."""
+    chat_history.add_message(HumanMessage(content="Test message"))
+
+    # Empty query should return no results or all results depending on implementation
+    results = chat_history.search_messages("")
+    # This behavior might vary - just ensure it doesn't crash
+    assert isinstance(results, list)
+    assert results == []
+
+
+def test_message_with_none_content() -> None:
+    """Test that messages with None content are handled properly."""
+    # This should raise an error during message creation, not in our code
+    with pytest.raises((TypeError, ValueError)):
+        HumanMessage(content=None)  # type: ignore
+
+
+def test_redis_connection_recovery(redis_url: str) -> None:
+    """Test behavior when Redis connection is temporarily lost."""
+    session_id = f"connection_test_{str(ULID())}"
+    history = RedisChatMessageHistory(session_id=session_id, redis_url=redis_url)
+
+    try:
+        # Add a message normally
+        history.add_message(HumanMessage(content="Before connection issue"))
+        assert len(history.messages) == 1
+
+        # Simulate connection issue by closing the connection
+        # Note: This is a basic test - real connection recovery would be more complex
+        history.redis_client.connection_pool.disconnect()
+
+        # Try to add another message - should work due to connection pooling
+        history.add_message(HumanMessage(content="After connection issue"))
+        messages = history.messages
+        assert len(messages) == 2
+
+    finally:
+        history.delete()
+
+
+def test_very_long_key_prefix(redis_url: str) -> None:
+    """Test with very long key prefix."""
+    long_prefix = "very_long_prefix_" * 10 + ":"  # ~170 characters
+    session_id = f"test_{str(ULID())}"
+
+    history = RedisChatMessageHistory(
+        session_id=session_id, redis_url=redis_url, key_prefix=long_prefix
+    )
+
+    try:
+        history.add_message(HumanMessage(content="Test with long prefix"))
+        messages = history.messages
+        assert len(messages) == 1
+        assert messages[0].content == "Test with long prefix"
+    finally:
+        history.delete()
+
+
+def test_special_characters_in_key_prefix(redis_url: str) -> None:
+    """Test with special characters in key prefix."""
+    special_prefix = "test-prefix_with.special@chars:"
+    session_id = f"test_{str(ULID())}"
+
+    history = RedisChatMessageHistory(
+        session_id=session_id, redis_url=redis_url, key_prefix=special_prefix
+    )
+
+    try:
+        history.add_message(HumanMessage(content="Test with special prefix"))
+        messages = history.messages
+        assert len(messages) == 1
+        assert messages[0].content == "Test with special prefix"
+    finally:
+        history.delete()
+
+
+def test_negative_ttl(redis_url: str) -> None:
+    """Test behavior with negative TTL."""
+    session_id = f"negative_ttl_test_{str(ULID())}"
+
+    # Negative TTL should either be rejected or treated as no TTL
+    try:
+        history = RedisChatMessageHistory(
+            session_id=session_id, redis_url=redis_url, ttl=-1
+        )
+
+        history.add_message(HumanMessage(content="Negative TTL test"))
+        messages = history.messages
+        # Should either work (treating -1 as no TTL) or fail gracefully
+        assert isinstance(messages, list)
+
+    except (ValueError, TypeError):
+        # It's acceptable to reject negative TTL
+        pass
+    finally:
+        history.delete()
+
+
+def test_pagination_in_clear_method(redis_url: str) -> None:
+    """Test that the pagination in clear() method works correctly."""
+    session_id = f"pagination_clear_test_{str(ULID())}"
+    history = RedisChatMessageHistory(session_id=session_id, redis_url=redis_url)
+
+    try:
+        # Add more messages than the page size (50)
+        for i in range(75):
+            history.add_message(HumanMessage(content=f"Message {i}"))
+
+        assert len(history.messages) == 75
+
+        # Clear should handle pagination correctly
+        history.clear()
+        assert len(history.messages) == 0
+
+    finally:
+        history.delete()
+
+
+def test_json_serialization_edge_cases(chat_history: RedisChatMessageHistory) -> None:
+    """Test edge cases in JSON serialization."""
+    # Test with content that might cause JSON issues
+    problematic_content = """{"nested": "json", "array": [1, 2, 3], "null": null}"""
+
+    chat_history.add_message(HumanMessage(content=problematic_content))
+
+    messages = chat_history.messages
+    assert len(messages) == 1
+    assert messages[0].content == problematic_content
+
+
+def test_timestamp_precision(redis_url: str) -> None:
+    """Test timestamp precision and uniqueness."""
+    session_id = f"timestamp_test_{str(ULID())}"
+    history = RedisChatMessageHistory(session_id=session_id, redis_url=redis_url)
+
+    try:
+        # Add messages in very quick succession
+        import time
+
+        start_time = time.time()
+
+        for i in range(10):
+            history.add_message(HumanMessage(content=f"Timestamp test {i}"))
+
+        end_time = time.time()
+
+        messages = history.messages
+        assert len(messages) == 10
+
+        # Verify all messages are in order
+        for i, message in enumerate(messages):
+            assert message.content == f"Timestamp test {i}"
+
+        # Test took less than a second but all messages should be ordered
+        assert end_time - start_time < 1.0
+
+    finally:
+        history.delete()

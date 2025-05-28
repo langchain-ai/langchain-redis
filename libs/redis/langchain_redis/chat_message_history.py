@@ -1,4 +1,4 @@
-import json  # noqa: I001
+import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -6,10 +6,10 @@ from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.messages import BaseMessage, messages_from_dict
 from redis import Redis
 from redis.exceptions import ResponseError
-from redis.commands.json.path import Path
-from redis.commands.search.field import NumericField, TagField, TextField
-from redis.commands.search.indexDefinition import IndexDefinition, IndexType
-from redis.commands.search.query import Query
+from redisvl.index import SearchIndex  # type: ignore
+from redisvl.query import CountQuery, FilterQuery, TextQuery  # type: ignore
+from redisvl.query.filter import Tag  # type: ignore
+from ulid import ULID
 
 from langchain_redis.version import __full_lib_name__
 
@@ -37,11 +37,10 @@ def _noop_push_handler(response: Any) -> None:
 
 
 class RedisChatMessageHistory(BaseChatMessageHistory):
-    """Redis-based implementation of chat message history.
+    """Redis-based implementation of chat message history using RedisVL.
 
-    This class provides a way to store and retrieve chat message history using Redis.
-    It implements the BaseChatMessageHistory interface and uses Redis JSON capabilities
-    for efficient storage and retrieval of messages.
+    This class provides a way to store and retrieve chat message history using Redis
+    with RedisVL for efficient indexing, querying, and document management.
 
     Attributes:
         redis_client (Redis): The Redis client instance.
@@ -55,11 +54,11 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         redis_url (str, optional): URL of the Redis instance. Defaults to "redis://localhost:6379".
         key_prefix (str, optional): Prefix for Redis keys. Defaults to "chat:".
         ttl (Optional[int], optional): Time-to-live for entries in seconds.
-                                       Defaults to None (no expiration).
+            Defaults to None (no expiration).
         index_name (str, optional): Name of the Redis search index.
-                                    Defaults to "idx:chat_history".
-        redis (Optional[Redis], optional): Existing Redis client instance. If provided,
-                                           redis_url is ignored.
+            Defaults to "idx:chat_history".
+        redis_client (Optional[Redis], optional): Existing Redis client instance.
+            If provided, redis_url is ignored.
         **kwargs: Additional keyword arguments to pass to the Redis client.
 
     Example:
@@ -71,7 +70,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
             history = RedisChatMessageHistory(
                 session_id="user123",
                 redis_url="redis://localhost:6379",
-                ttl=3600  # Messages expire after 1 hour
+                ttl=3600  # Expire chat history after 1 hour
             )
 
             # Add messages to the history
@@ -85,18 +84,19 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
             for message in messages:
                 print(f"{message.type}: {message.content}")
 
-            # Clear the history
+            # Clear the history for the session
             history.clear()
 
     Note:
-        - This class uses Redis JSON for storing messages, allowing for efficient
-          querying and retrieval.
-        - A Redis search index is created to enable fast lookups and potential future
-          search needs over the chat history.
+        - This class uses RedisVL for managing Redis JSON storage and search indexes,
+          providing efficient querying and retrieval.
+        - A Redis search index is created to enable fast lookups and search
+          capabilities over the chat history.
         - If TTL is set, message entries will automatically expire after the
           specified duration.
         - The session_id is used to group messages belonging to the same conversation
           or user session.
+        - RedisVL automatically handles tokenization and escaping for search queries.
     """
 
     def __init__(
@@ -109,7 +109,6 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         redis_client: Optional[Redis] = None,
         **kwargs: Any,
     ):
-        # TODO -- switch over to use RedisVL for this all
         self.redis_client = redis_client or Redis.from_url(redis_url, **kwargs)
 
         # Configure Redis client to use a no-op push handler when PubSub is initialized
@@ -121,59 +120,71 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         except ResponseError:
             # Fall back to a simple log echo
             self.redis_client.echo(__full_lib_name__)
+
+        if session_id in ("", None):
+            raise ValueError("session_id must be a non-empty, valid string")
+
         self.session_id = session_id
         self.key_prefix = key_prefix
         self.ttl = ttl
         self.index_name = index_name
-        self._ensure_index()
+
+        # Create RedisVL SearchIndex
+        self._create_search_index()
+
+    def _create_search_index(self) -> None:
+        """Create and configure the RedisVL SearchIndex."""
+        schema = {
+            "index": {
+                "name": self.index_name,
+                "prefix": self.key_prefix,
+                "storage_type": "json",
+            },
+            "fields": [
+                {"name": "session_id", "type": "tag", "path": "$.session_id"},
+                {"name": "content", "type": "text", "path": "$.data.content"},
+                {"name": "type", "type": "tag", "path": "$.type"},
+                {"name": "timestamp", "type": "numeric", "path": "$.timestamp"},
+            ],
+        }
+
+        self.index = SearchIndex.from_dict(schema, redis_client=self.redis_client)
+        self.index.create(overwrite=False)
 
     @property
     def id(self) -> str:
         return self.session_id
 
-    def _ensure_index(self) -> None:
-        try:
-            self.redis_client.ft(self.index_name).info()
-        except ResponseError as e:
-            msg = str(e).lower()
-            if "unknown index name" in msg or "no such index" in msg:
-                schema = (
-                    TagField("$.session_id", as_name="session_id"),
-                    TextField("$.data.content", as_name="content"),
-                    TagField("$.type", as_name="type"),
-                    NumericField("$.timestamp", as_name="timestamp"),
-                )
-                definition = IndexDefinition(
-                    prefix=[self.key_prefix], index_type=IndexType.JSON
-                )
-                self.redis_client.ft(self.index_name).create_index(
-                    schema, definition=definition
-                )
-            else:
-                raise
-
     @property
     def messages(self) -> List[BaseMessage]:  # type: ignore
-        query = (
-            Query(f"@session_id:{{{self.session_id}}}")
-            .sort_by("timestamp", asc=True)
-            .paging(0, 10000)
-        )
-        results = self.redis_client.ft(self.index_name).search(query)
+        """Retrieve all messages for the current session, sorted by timestamp."""
+        messages_query = FilterQuery(
+            filter_expression=Tag("session_id") == self.session_id,
+            return_fields=["type", "$.data"],
+            num_results=10000,
+        ).sort_by("timestamp", asc=True)
+
+        messages = self.index.query(messages_query)
+
+        # Unpack message results and load from dict
         return messages_from_dict(
             [
-                {
-                    "type": json.loads(doc.json)["type"],
-                    "data": json.loads(doc.json)["data"],
-                }
-                for doc in results.docs
+                {"type": msg["type"], "data": json.loads(msg["$.data"])}
+                for msg in messages
             ]
         )
 
-    def add_message(self, message: BaseMessage) -> None:
-        """Add a message to the chat history.
+    def _message_key(self, message_id: Optional[str] = None) -> str:
+        """Construct message key based on key prefix, session, and unique message ID."""
+        if message_id is None:
+            message_id = str(ULID())
+        return f"{self.key_prefix}{self.session_id}:{message_id}"
 
-        This method adds a new message to the Redis store for the current session.
+    def add_message(self, message: BaseMessage) -> None:
+        """Add a message to the chat history using RedisVL.
+
+        This method adds a new message to the Redis store for the current session
+        using RedisVL's document loading capabilities.
 
         Args:
             message (BaseMessage): The message to add to the history. This should be an
@@ -209,8 +220,8 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         Note:
             - Each message is stored as a separate entry in Redis, associated
               with the current session_id.
-            - Messages are stored using Redis JSON capabilities for efficient storage
-              and retrieval.
+            - Messages are stored using RedisVL's JSON capabilities for efficient
+              storage and retrieval.
             - If a TTL (Time To Live) was specified when initializing the history,
               it will be applied to each message.
             - The message's content, type, and any additional data (like timestamp)
@@ -222,28 +233,30 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
               Consider implementing size limits if dealing with potentially
               large messages.
         """
-        data_to_store = {
+        timestamp = datetime.now().timestamp()
+        message_id = str(ULID())
+        redis_msg = {
             "type": message.type,
+            "message_id": message_id,
             "data": {
                 "content": message.content,
                 "additional_kwargs": message.additional_kwargs,
                 "type": message.type,
             },
             "session_id": self.session_id,
-            "timestamp": datetime.now().timestamp(),
+            "timestamp": timestamp,
         }
 
-        key = f"{self.key_prefix}{self.session_id}:{data_to_store['timestamp']}"
-        self.redis_client.json().set(key, Path.root_path(), data_to_store)
-
-        if self.ttl:
-            self.redis_client.expire(key, self.ttl)
+        # Use RedisVL to load the data
+        self.index.load(
+            data=[redis_msg], keys=[self._message_key(message_id)], ttl=self.ttl
+        )
 
     def clear(self) -> None:
         """Clear all messages from the chat history for the current session.
 
         This method removes all messages associated with the current session_id from
-        the Redis store.
+        the Redis store using RedisVL queries.
 
         Returns:
             None
@@ -268,24 +281,43 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
 
         Note:
             - This method only clears messages for the current session_id.
-            - It uses a Redis search query to find all relevant messages and then
-              deletes them.
-            - The operation is atomic - either all messages are deleted, or none are.
+            - It uses RedisVL's FilterQuery to find all relevant messages and then
+              deletes them individually using the Redis client.
+            - The operation removes all messages for the current session only.
             - After clearing, the Redis search index is still maintained, allowing
               for immediate use of the same session_id for new messages if needed.
             - This operation is irreversible. Make sure you want to remove all messages
               before calling this method.
         """
-        query = Query(f"@session_id:{{{self.session_id}}}").paging(0, 10000)
-        results = self.redis_client.ft(self.index_name).search(query)
-        for doc in results.docs:
-            self.redis_client.delete(doc.id)
+        # Get total count of records to delete
+        session_filter = Tag("session_id") == self.session_id
+        count_query = CountQuery(filter_expression=session_filter)
+        total_count = self.index.query(count_query)
+
+        if total_count > 0:
+            # Collect all keys first to avoid pagination issues during deletion
+            all_keys = []
+            filter_query = FilterQuery(
+                filter_expression=session_filter, num_results=total_count
+            )
+
+            # Use pagination to collect all keys without deleting during iteration
+            for results in self.index.paginate(filter_query, page_size=50):
+                all_keys.extend([res["id"] for res in results])
+
+            # Now delete all keys at once
+            if all_keys:
+                self.index.drop_keys(all_keys)
+
+    def delete(self) -> None:
+        """Delete all sessions and the chat history index from Redis."""
+        self.index.delete(drop=True)
 
     def search_messages(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Search for messages in the chat history that match the given query.
 
         This method performs a full-text search on the content of messages in the
-        current session.
+        current session using RedisVL's TextQuery capabilities.
 
         Args:
             query (str): The search query string to match against message content.
@@ -330,8 +362,8 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
                     print("---")
 
         Note:
-            - The search is performed using the Redis search capabilities, which allows
-              for efficient full-text search.
+            - The search is performed using RedisVL's TextQuery capabilities, which
+              allows for efficient full-text search.
             - The search is case-insensitive and uses Redis' default tokenization
               and stemming.
             - Only messages from the current session (as defined by session_id)
@@ -342,15 +374,28 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
             - This method is useful for quickly finding relevant parts of a
               conversation without having to iterate through all messages.
         """
-        search_query = (
-            Query(f"(@session_id:{{{self.session_id}}}) (@content:{query})")
-            .sort_by("timestamp", asc=True)
-            .paging(0, limit)
-        )
-        results = self.redis_client.ft(self.index_name).search(search_query)
+        if query in ("", None):
+            return []
 
-        return [json.loads(doc.json)["data"] for doc in results.docs]
+        text_query = TextQuery(
+            text=query,
+            text_field_name="content",
+            filter_expression=Tag("session_id") == self.session_id,
+            return_fields=["type", "$.data"],
+            num_results=limit,
+            stopwords=None,  # Disable stopwords to avoid NLTK dependency
+        )
+
+        messages = self.index.query(text_query)
+
+        search_data = []
+        for msg in messages:
+            search_data.append(json.loads(msg["$.data"]))
+
+        return search_data
 
     def __len__(self) -> int:
-        query = Query(f"@session_id:{{{self.session_id}}}").no_content()
-        return self.redis_client.ft(self.index_name).search(query).total
+        """Return the number of messages in the chat history for the current session."""
+        return self.index.query(
+            CountQuery(filter_expression=Tag("session_id") == self.session_id)
+        )
