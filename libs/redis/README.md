@@ -203,7 +203,7 @@ For more detailed examples and use cases, please refer to the `docs/` directory 
 
 ## Contributing / Development
 
-The libray is rooted at `libs/redis`, for all the commands below, CD to `libs/redis`:
+The library is rooted at `libs/redis`, for all the commands below, CD to `libs/redis`:
 
 ### Unit Tests
 
