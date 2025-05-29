@@ -367,7 +367,6 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
 
         Raises:
             ResponseError: If Redis connection fails or RedisVL operations fail.
-            ValueError: If query is empty or None.
 
         Example:
             .. code-block:: python
