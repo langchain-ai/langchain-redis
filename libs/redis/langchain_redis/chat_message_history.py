@@ -61,6 +61,10 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
             If provided, redis_url is ignored.
         **kwargs: Additional keyword arguments to pass to the Redis client.
 
+    Raises:
+        ValueError: If session_id is empty or None.
+        ResponseError: If Redis connection fails or RedisVL operations fail.
+
     Example:
         .. code-block:: python
 
@@ -108,7 +112,10 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         index_name: str = "idx:chat_history",
         redis_client: Optional[Redis] = None,
         **kwargs: Any,
-    ):
+    ) -> None:
+        if not session_id or not isinstance(session_id, str):
+            raise ValueError("session_id must be a non-empty, valid string")
+
         self.redis_client = redis_client or Redis.from_url(redis_url, **kwargs)
 
         # Configure Redis client to use a no-op push handler when PubSub is initialized
@@ -121,9 +128,6 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
             # Fall back to a simple log echo
             self.redis_client.echo(__full_lib_name__)
 
-        if session_id in ("", None):
-            raise ValueError("session_id must be a non-empty, valid string")
-
         self.session_id = session_id
         self.key_prefix = key_prefix
         self.ttl = ttl
@@ -133,7 +137,11 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         self._create_search_index()
 
     def _create_search_index(self) -> None:
-        """Create and configure the RedisVL SearchIndex."""
+        """Create and configure the RedisVL SearchIndex.
+
+        Raises:
+            ResponseError: If Redis connection fails or RedisVL operations fail.
+        """
         schema = {
             "index": {
                 "name": self.index_name,
@@ -153,11 +161,23 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
 
     @property
     def id(self) -> str:
+        """Return the session ID.
+
+        Returns:
+            str: The session ID.
+        """
         return self.session_id
 
     @property
     def messages(self) -> List[BaseMessage]:  # type: ignore
-        """Retrieve all messages for the current session, sorted by timestamp."""
+        """Retrieve all messages for the current session, sorted by timestamp.
+
+        Returns:
+            List[BaseMessage]: A list of messages in chronological order.
+
+        Raises:
+            ResponseError: If Redis connection fails or RedisVL operations fail.
+        """
         messages_query = FilterQuery(
             filter_expression=Tag("session_id") == self.session_id,
             return_fields=["type", "$.data"],
@@ -175,7 +195,15 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         )
 
     def _message_key(self, message_id: Optional[str] = None) -> str:
-        """Construct message key based on key prefix, session, and unique message ID."""
+        """Construct message key based on key prefix, session, and unique message ID.
+
+        Args:
+            message_id (Optional[str]): Optional message ID. If None, a new ULID is
+                generated.
+
+        Returns:
+            str: The constructed Redis key.
+        """
         if message_id is None:
             message_id = str(ULID())
         return f"{self.key_prefix}{self.session_id}:{message_id}"
@@ -191,8 +219,9 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
                                    instance of a class derived from BaseMessage, such as
                                    HumanMessage, AIMessage, or SystemMessage.
 
-        Returns:
-            None
+        Raises:
+            ResponseError: If Redis connection fails or RedisVL operations fail.
+            ValueError: If message is None or invalid.
 
         Example:
             .. code-block:: python
@@ -233,6 +262,9 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
               Consider implementing size limits if dealing with potentially
               large messages.
         """
+        if message is None:
+            raise ValueError("Message cannot be None")
+
         timestamp = datetime.now().timestamp()
         message_id = str(ULID())
         redis_msg = {
@@ -258,8 +290,8 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         This method removes all messages associated with the current session_id from
         the Redis store using RedisVL queries.
 
-        Returns:
-            None
+        Raises:
+            ResponseError: If Redis connection fails or RedisVL operations fail.
 
         Example:
             .. code-block:: python
@@ -310,7 +342,11 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
                 self.index.drop_keys(all_keys)
 
     def delete(self) -> None:
-        """Delete all sessions and the chat history index from Redis."""
+        """Delete all sessions and the chat history index from Redis.
+
+        Raises:
+            ResponseError: If Redis connection fails or RedisVL operations fail.
+        """
         self.index.delete(drop=True)
 
     def search_messages(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
@@ -322,12 +358,16 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         Args:
             query (str): The search query string to match against message content.
             limit (int, optional): The maximum number of results to return.
-            Defaults to 10.
+                Defaults to 10.
 
         Returns:
             List[Dict[str, Any]]: A list of dictionaries, each representing a
                                   matching message.
             Each dictionary contains the message content and metadata.
+
+        Raises:
+            ResponseError: If Redis connection fails or RedisVL operations fail.
+            ValueError: If query is empty or None.
 
         Example:
             .. code-block:: python
@@ -374,7 +414,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
             - This method is useful for quickly finding relevant parts of a
               conversation without having to iterate through all messages.
         """
-        if query in ("", None):
+        if not query or not isinstance(query, str):
             return []
 
         text_query = TextQuery(
@@ -395,7 +435,14 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         return search_data
 
     def __len__(self) -> int:
-        """Return the number of messages in the chat history for the current session."""
+        """Return the number of messages in the chat history for the current session.
+
+        Returns:
+            int: The number of messages in the current session.
+
+        Raises:
+            ResponseError: If Redis connection fails or RedisVL operations fail.
+        """
         return self.index.query(
             CountQuery(filter_expression=Tag("session_id") == self.session_id)
         )

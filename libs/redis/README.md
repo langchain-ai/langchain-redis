@@ -111,7 +111,7 @@ cached_result = await cache.alookup("prompt", "llm_string")
 
 ### 3. Chat History
 
-The `RedisChatMessageHistory` class provides a Redis-based storage for chat message history.
+The `RedisChatMessageHistory` class provides a Redis-based storage for chat message history with efficient search capabilities.
 
 #### Usage
 
@@ -119,36 +119,43 @@ The `RedisChatMessageHistory` class provides a Redis-based storage for chat mess
 from langchain_redis import RedisChatMessageHistory
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
+# Initialize with optional TTL (time-to-live) in seconds
 history = RedisChatMessageHistory(
     session_id="user_123",
     redis_url="redis://localhost:6379",
-    ttl=3600  # Optional: set TTL for message expiration
+    ttl=3600,  # Messages will expire after 1 hour
 )
 
 # Adding messages
-history.add_user_message("Hello, AI!")
-history.add_ai_message("Hello, human! How can I assist you today?")
+history.add_message(HumanMessage(content="Hello, AI!"))
+history.add_message(AIMessage(content="Hello, human! How can I assist you today?"))
 history.add_message(SystemMessage(content="This is a system message"))
 
-# Retrieving messages
+# Retrieving all messages in chronological order
 messages = history.messages
 
-# Searching messages
-results = history.search_messages("assist")
+# Searching messages with full-text search
+results = history.search_messages("assist", limit=5)  # Returns matching messages
 
-# Get the number of messages
+# Get message count
 message_count = len(history)
 
-# Clear history
+# Clear history for current session
 history.clear()
+
+# Delete all sessions and index (use with caution)
+history.delete()
 ```
 
 #### Features
-- Persistent storage of chat messages
+- Fast storage of chat messages with automatic expiration (TTL)
 - Support for different message types (Human, AI, System)
-- Message searching capabilities
-- Automatic expiration with TTL support
-- Message count functionality
+- Full-text search capabilities across message content
+- Chronological message retrieval
+- Session-based message organization
+- Customizable key prefixing
+- Thread-safe operations
+- Efficient RedisVL-based indexing and querying
 
 ## Advanced Configuration
 
@@ -196,7 +203,7 @@ For more detailed examples and use cases, please refer to the `docs/` directory 
 
 ## Contributing / Development
 
-The libray is rooted at `libs/redis`, for all the commands below, CD to `libs\redis`:
+The libray is rooted at `libs/redis`, for all the commands below, CD to `libs/redis`:
 
 ### Unit Tests
 
