@@ -284,7 +284,9 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
 
         # Use RedisVL to load the data
         self.index.load(
-            data=[common_data_to_store], keys=[self._message_key(message_id)], ttl=self.ttl
+            data=[common_data_to_store],
+            keys=[self._message_key(message_id)],
+            ttl=self.ttl,
         )
 
     def clear(self) -> None:
