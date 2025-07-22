@@ -870,3 +870,65 @@ def test_timestamp_precision(redis_url: str) -> None:
 
     finally:
         history.delete()
+
+
+def test_key_prefix_isolation(redis_url: str) -> None:
+    """Test that different key_prefix values create isolated chat histories.
+
+    This is a regression test for issue #74 where custom key_prefix parameters
+    would cause message retrieval conflicts due to shared search index names.
+    """
+    session_id = f"isolation_test_{str(ULID())}"
+
+    # Create multiple histories with different prefixes
+    history_app1 = RedisChatMessageHistory(
+        session_id=session_id, redis_url=redis_url, key_prefix="app1:"
+    )
+    history_app2 = RedisChatMessageHistory(
+        session_id=session_id, redis_url=redis_url, key_prefix="app2:"
+    )
+    history_default = RedisChatMessageHistory(
+        session_id=session_id,
+        redis_url=redis_url,  # Default "chat:" prefix
+    )
+
+    try:
+        # Verify they have unique index names
+        assert history_app1.index_name == "idx:chat_history_app1"
+        assert history_app2.index_name == "idx:chat_history_app2"
+        assert history_default.index_name == "idx:chat_history"
+
+        # Add different messages to each history
+        history_app1.add_message(HumanMessage(content="App1 message"))
+        history_app2.add_message(HumanMessage(content="App2 message 1"))
+        history_app2.add_message(AIMessage(content="App2 message 2"))
+        history_default.add_message(HumanMessage(content="Default message"))
+
+        # Verify isolation - each should only see its own messages
+        app1_messages = history_app1.messages
+        app2_messages = history_app2.messages
+        default_messages = history_default.messages
+
+        assert len(app1_messages) == 1
+        assert len(app2_messages) == 2
+        assert len(default_messages) == 1
+
+        assert app1_messages[0].content == "App1 message"
+        assert app2_messages[0].content == "App2 message 1"
+        assert app2_messages[1].content == "App2 message 2"
+        assert default_messages[0].content == "Default message"
+
+        # Test that clearing one doesn't affect others
+        history_app2.clear()
+
+        assert len(history_app1.messages) == 1  # Unchanged
+        assert len(history_app2.messages) == 0  # Cleared
+        assert len(history_default.messages) == 1  # Unchanged
+
+    finally:
+        # Clean up all histories
+        for history in [history_app1, history_app2, history_default]:
+            try:
+                history.delete()
+            except Exception:
+                pass  # Ignore cleanup errors
