@@ -131,7 +131,14 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         self.session_id = session_id
         self.key_prefix = key_prefix
         self.ttl = ttl
-        self.index_name = index_name
+        
+        # Make index name unique for different key prefixes to avoid conflicts
+        if key_prefix != "chat:" and index_name == "idx:chat_history":
+            # For non-default prefixes, create a unique index name
+            safe_prefix = key_prefix.rstrip(':').replace(':', '_').replace('-', '_').replace('.', '_').replace('@', '_')
+            self.index_name = f"idx:chat_history_{safe_prefix}"
+        else:
+            self.index_name = index_name
 
         # Create RedisVL SearchIndex
         self._create_search_index()
