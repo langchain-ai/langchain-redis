@@ -932,7 +932,9 @@ def test_key_prefix_isolation_with_overwrite(redis_url: str) -> None:
                 pass  # Ignore cleanup errors
 
 
-def test_key_prefix_conflict_warning(redis_url: str, caplog: pytest.LogCaptureFixture) -> None:
+def test_key_prefix_conflict_warning(
+    redis_url: str, caplog: pytest.LogCaptureFixture
+) -> None:
     """Test that prefix conflicts generate appropriate warnings.
 
     This test validates that when overwrite_index=False (default) and a prefix
