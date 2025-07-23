@@ -171,7 +171,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
             try:
                 existing_info = self.index.info()
                 index_definition = existing_info.get("index_definition", [])
-                
+
                 # Parse the index_definition list to find prefixes
                 existing_prefixes = []
                 try:
