@@ -169,22 +169,9 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         # Check if index already exists and detect prefix conflicts
         if not self.overwrite_index:
             try:
-                existing_info = self.redis_client.ft(self.index_name).info()
-                index_definition = existing_info.get("index_definition", [])
-
-                # Parse the index_definition list to find prefixes
-                existing_prefixes = []
-                try:
-                    prefixes_index = index_definition.index(b"prefixes") + 1
-                    prefixes_raw = index_definition[prefixes_index]
-                    if isinstance(prefixes_raw, list):
-                        existing_prefixes = [
-                            p.decode() if isinstance(p, bytes) else p
-                            for p in prefixes_raw
-                        ]
-                except (ValueError, IndexError):
-                    # Could not find prefixes in the definition
-                    pass
+                existing_info = self.index.info()
+                index_definition = existing_info.get("index_definition", {})
+                existing_prefixes = index_definition.get("prefixes", [])
 
                 if existing_prefixes and self.key_prefix not in existing_prefixes:
                     logger.warning(
@@ -194,7 +181,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
                         f"retrieval issues. Consider using overwrite_index=True or "
                         f"a different index_name to avoid conflicts."
                     )
-            except ResponseError:
+            except Exception:
                 # Index doesn't exist yet, which is fine
                 pass
 
