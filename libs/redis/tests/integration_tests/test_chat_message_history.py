@@ -932,7 +932,7 @@ def test_key_prefix_isolation_with_overwrite(redis_url: str) -> None:
                 pass  # Ignore cleanup errors
 
 
-def test_key_prefix_conflict_warning(redis_url: str, caplog) -> None:
+def test_key_prefix_conflict_warning(redis_url: str, caplog: pytest.LogCaptureFixture) -> None:
     """Test that prefix conflicts generate appropriate warnings.
 
     This test validates that when overwrite_index=False (default) and a prefix
@@ -980,7 +980,7 @@ def test_key_prefix_conflict_warning(redis_url: str, caplog) -> None:
         # Due to the prefix conflict, this might return 0 messages
         # The warning helps users understand why
         custom_messages = history_custom.messages
-        # Note: We expect 0 messages due to prefix conflict - this demonstrates  
+        # Note: We expect 0 messages due to prefix conflict - this demonstrates
         # the problem that the warning alerts users about
         assert len(custom_messages) == 0, "Expected prefix conflict to cause failure"
 
