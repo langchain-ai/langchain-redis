@@ -7,6 +7,7 @@ from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.messages import BaseMessage, messages_from_dict
 from redis import Redis
 from redis.exceptions import ConnectionError, ResponseError
+from redisvl.exceptions import RedisSearchError  # type: ignore
 from redisvl.index import SearchIndex  # type: ignore
 from redisvl.query import CountQuery, FilterQuery, TextQuery  # type: ignore
 from redisvl.query.filter import Tag  # type: ignore
@@ -189,7 +190,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
                         f"retrieval issues. Consider using overwrite_index=True or "
                         f"a different index_name to avoid conflicts."
                     )
-            except (ResponseError, ConnectionError):
+            except (ResponseError, ConnectionError, RedisSearchError):
                 # Index doesn't exist yet or connection issue, which is fine
                 pass
 
