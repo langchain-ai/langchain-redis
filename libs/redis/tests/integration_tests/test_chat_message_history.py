@@ -928,8 +928,9 @@ def test_key_prefix_isolation_with_overwrite(redis_url: str) -> None:
         for history in [history_default, history_custom]:
             try:
                 history.delete()
-            except Exception:
-                pass  # Ignore cleanup errors
+            except Exception as e:
+                import logging
+                logging.warning(f"Error during test cleanup: {e}")
 
 
 def test_key_prefix_conflict_warning(
@@ -997,5 +998,6 @@ def test_key_prefix_conflict_warning(
         for history in cleanup_histories:
             try:
                 history.delete()
-            except Exception:
-                pass  # Ignore cleanup errors
+            except Exception as e:
+                import logging
+                logging.warning(f"Error during test cleanup: {e}")
