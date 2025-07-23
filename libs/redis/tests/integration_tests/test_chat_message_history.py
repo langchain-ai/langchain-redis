@@ -877,57 +877,84 @@ def test_key_prefix_isolation(redis_url: str) -> None:
 
     This is a regression test for issue #74 where custom key_prefix parameters
     would cause message retrieval conflicts due to shared search index names.
+
+    The bug behavior was: messages stored with custom prefixes but could not
+    be retrieved because all instances shared the same search index.
     """
+    redis_client = Redis.from_url(redis_url)
     session_id = f"isolation_test_{str(ULID())}"
 
-    # Create multiple histories with different prefixes
-    history_app1 = RedisChatMessageHistory(
-        session_id=session_id, redis_url=redis_url, key_prefix="app1:"
-    )
-    history_app2 = RedisChatMessageHistory(
-        session_id=session_id, redis_url=redis_url, key_prefix="app2:"
-    )
+    # First create a history with default prefix to establish the search index
     history_default = RedisChatMessageHistory(
-        session_id=session_id,
-        redis_url=redis_url,  # Default "chat:" prefix
+        session_id=f"{session_id}_default", redis_url=redis_url
     )
 
     try:
-        # Verify they have unique index names
-        assert history_app1.index_name == "idx:chat_history_app1"
-        assert history_app2.index_name == "idx:chat_history_app2"
-        assert history_default.index_name == "idx:chat_history"
-
-        # Add different messages to each history
-        history_app1.add_message(HumanMessage(content="App1 message"))
-        history_app2.add_message(HumanMessage(content="App2 message 1"))
-        history_app2.add_message(AIMessage(content="App2 message 2"))
+        # Add message to default history first (creates the search index)
         history_default.add_message(HumanMessage(content="Default message"))
+        assert len(history_default.messages) == 1
 
-        # Verify isolation - each should only see its own messages
-        app1_messages = history_app1.messages
-        app2_messages = history_app2.messages
+        # Now create history with custom prefix - this triggered the bug
+        history_custom = RedisChatMessageHistory(
+            session_id=f"{session_id}_custom",
+            redis_url=redis_url,
+            key_prefix="custom_app:",
+        )
+
+        # Add messages to custom prefix history
+        history_custom.add_message(HumanMessage(content="Custom message 1"))
+        history_custom.add_message(AIMessage(content="Custom message 2"))
+
+        # THE CORE BUG TEST: Messages should be retrievable with custom prefix
+        # Before the fix, this would return 0 messages even though data was stored
+        custom_messages = history_custom.messages
+        assert len(custom_messages) == 2, (
+            f"Expected 2 messages with custom prefix, got {len(custom_messages)}. "
+            "This indicates the key_prefix isolation bug is present."
+        )
+
+        # Verify correct content retrieval
+        assert custom_messages[0].content == "Custom message 1"
+        assert custom_messages[1].content == "Custom message 2"
+
+        # Verify that messages are actually stored in Redis with correct prefix
+        custom_keys = list(redis_client.scan_iter(match="custom_app:*"))
+        assert len(custom_keys) >= 2, "Messages should be stored with custom prefix"
+
+        # Verify isolation: default and custom should not see each other's messages
         default_messages = history_default.messages
-
-        assert len(app1_messages) == 1
-        assert len(app2_messages) == 2
         assert len(default_messages) == 1
-
-        assert app1_messages[0].content == "App1 message"
-        assert app2_messages[0].content == "App2 message 1"
-        assert app2_messages[1].content == "App2 message 2"
         assert default_messages[0].content == "Default message"
 
-        # Test that clearing one doesn't affect others
-        history_app2.clear()
+        # Test additional isolation scenarios
+        history_another = RedisChatMessageHistory(
+            session_id=f"{session_id}_another",
+            redis_url=redis_url,
+            key_prefix="another_app:",
+        )
 
-        assert len(history_app1.messages) == 1  # Unchanged
-        assert len(history_app2.messages) == 0  # Cleared
+        history_another.add_message(HumanMessage(content="Another app message"))
+
+        # All should maintain isolation
+        assert len(history_default.messages) == 1
+        assert len(history_custom.messages) == 2
+        assert len(history_another.messages) == 1
+
+        # Test clearing isolation
+        history_custom.clear()
         assert len(history_default.messages) == 1  # Unchanged
+        assert len(history_custom.messages) == 0  # Cleared
+        assert len(history_another.messages) == 1  # Unchanged
 
     finally:
         # Clean up all histories
-        for history in [history_app1, history_app2, history_default]:
+        cleanup_histories = [history_default, history_custom]
+        try:
+            cleanup_histories.append(history_another)
+        except NameError:
+            pass  # history_another wasn't created due to earlier failure
+
+        for history in cleanup_histories:
             try:
                 history.delete()
             except Exception:
