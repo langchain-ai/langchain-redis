@@ -870,3 +870,136 @@ def test_timestamp_precision(redis_url: str) -> None:
 
     finally:
         history.delete()
+
+
+def test_key_prefix_isolation_with_overwrite(redis_url: str) -> None:
+    """Test that different key_prefix values work correctly with overwrite_index=True.
+
+    This is a regression test for issue #74 where custom key_prefix parameters
+    would cause message retrieval conflicts due to shared search index names.
+    """
+    redis_client = Redis.from_url(redis_url)
+    session_id = f"isolation_test_{str(ULID())}"
+
+    # First create a history with default prefix to establish the search index
+    history_default = RedisChatMessageHistory(
+        session_id=f"{session_id}_default", redis_url=redis_url
+    )
+
+    try:
+        # Add message to default history first (creates search index with prefix)
+        history_default.add_message(HumanMessage(content="Default message"))
+        assert len(history_default.messages) == 1
+
+        # Now create history with custom prefix using overwrite_index=True
+        # This should work because it overwrites the index with the new prefix
+        history_custom = RedisChatMessageHistory(
+            session_id=f"{session_id}_custom",
+            redis_url=redis_url,
+            key_prefix="custom_app:",
+            overwrite_index=True,
+        )
+
+        # Add messages to custom prefix history
+        history_custom.add_message(HumanMessage(content="Custom message 1"))
+        history_custom.add_message(AIMessage(content="Custom message 2"))
+
+        # THE CORE TEST: With overwrite_index=True, messages should be retrievable
+        custom_messages = history_custom.messages
+        assert len(custom_messages) == 2, (
+            f"Expected 2 messages with custom prefix and overwrite_index=True, "
+            f"got {len(custom_messages)}"
+        )
+
+        # Verify correct content retrieval
+        assert custom_messages[0].content == "Custom message 1"
+        assert custom_messages[1].content == "Custom message 2"
+
+        # Verify that messages are stored in Redis with correct prefix
+        custom_keys = list(redis_client.scan_iter(match="custom_app:*"))
+        assert len(custom_keys) >= 2, "Messages should be stored with custom prefix"
+
+        # Note: After overwriting the index, the default history won't work
+        # because the index now uses "custom_app:" prefix instead of "chat:"
+        # This is expected behavior with overwrite_index=True
+
+    finally:
+        # Clean up
+        for history in [history_default, history_custom]:
+            try:
+                history.delete()
+            except Exception as e:
+                import logging
+
+                logging.warning(f"Error during test cleanup: {e}")
+
+
+def test_key_prefix_conflict_warning(
+    redis_url: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test that prefix conflicts generate appropriate warnings.
+
+    This test validates that when overwrite_index=False (default) and a prefix
+    conflict occurs, a clear warning is logged to help users understand the issue.
+    """
+    import logging
+
+    session_id = f"warning_test_{str(ULID())}"
+
+    # First create a history with default prefix
+    history_default = RedisChatMessageHistory(
+        session_id=f"{session_id}_default", redis_url=redis_url
+    )
+
+    try:
+        history_default.add_message(HumanMessage(content="Default message"))
+
+        # Clear any existing log records
+        caplog.clear()
+
+        # Now create history with custom prefix - this should trigger a warning
+        with caplog.at_level(logging.WARNING):
+            history_custom = RedisChatMessageHistory(
+                session_id=f"{session_id}_custom",
+                redis_url=redis_url,
+                key_prefix="custom_app:",
+                overwrite_index=False,  # Explicit default
+            )
+
+        # Check that warning was logged
+        warning_logs = [
+            record for record in caplog.records if record.levelname == "WARNING"
+        ]
+        assert len(warning_logs) > 0, "Expected a warning about prefix conflict"
+
+        warning_message = warning_logs[0].message
+        assert "already exists with different key prefix" in warning_message
+        assert "custom_app:" in warning_message
+        assert "overwrite_index=True" in warning_message
+
+        # The custom prefix history should still be created but may not work correctly
+        # (this demonstrates the problematic behavior that the warning alerts about)
+        history_custom.add_message(HumanMessage(content="Custom message"))
+
+        # Due to the prefix conflict, this might return 0 messages
+        # The warning helps users understand why
+        custom_messages = history_custom.messages
+        # Note: We expect 0 messages due to prefix conflict - this demonstrates
+        # the problem that the warning alerts users about
+        assert len(custom_messages) == 0, "Expected prefix conflict to cause failure"
+
+    finally:
+        # Clean up
+        cleanup_histories = [history_default]
+        try:
+            cleanup_histories.append(history_custom)
+        except NameError:
+            pass  # history_custom wasn't created due to error
+
+        for history in cleanup_histories:
+            try:
+                history.delete()
+            except Exception as e:
+                import logging
+
+                logging.warning(f"Error during test cleanup: {e}")

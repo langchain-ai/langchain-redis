@@ -1,17 +1,21 @@
 import json
+import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.messages import BaseMessage, messages_from_dict
 from redis import Redis
-from redis.exceptions import ResponseError
+from redis.exceptions import ConnectionError, ResponseError
+from redisvl.exceptions import RedisSearchError  # type: ignore
 from redisvl.index import SearchIndex  # type: ignore
 from redisvl.query import CountQuery, FilterQuery, TextQuery  # type: ignore
 from redisvl.query.filter import Tag  # type: ignore
 from ulid import ULID
 
 from langchain_redis.version import __full_lib_name__
+
+logger = logging.getLogger(__name__)
 
 
 def _noop_push_handler(response: Any) -> None:
@@ -59,6 +63,9 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
             Defaults to "idx:chat_history".
         redis_client (Optional[Redis], optional): Existing Redis client instance.
             If provided, redis_url is ignored.
+        overwrite_index (bool, optional): Whether to overwrite an existing index
+            if it already exists. Defaults to False. If False and an index exists
+            with a different key_prefix, a warning will be logged.
         **kwargs: Additional keyword arguments to pass to the Redis client.
 
     Raises:
@@ -111,6 +118,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         ttl: Optional[int] = None,
         index_name: str = "idx:chat_history",
         redis_client: Optional[Redis] = None,
+        overwrite_index: bool = False,
         **kwargs: Any,
     ) -> None:
         if not session_id or not isinstance(session_id, str):
@@ -132,6 +140,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         self.key_prefix = key_prefix
         self.ttl = ttl
         self.index_name = index_name
+        self.overwrite_index = overwrite_index
 
         # Create RedisVL SearchIndex
         self._create_search_index()
@@ -157,7 +166,35 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         }
 
         self.index = SearchIndex.from_dict(schema, redis_client=self.redis_client)
-        self.index.create(overwrite=False)
+
+        # Check if index already exists and detect prefix conflicts
+        if not self.overwrite_index:
+            try:
+                existing_info = self.index.info()
+                index_definition = existing_info.get("index_definition", [])
+
+                # Parse the index_definition list to find prefixes
+                existing_prefixes = []
+                try:
+                    prefixes_index = index_definition.index("prefixes") + 1
+                    existing_prefixes = index_definition[prefixes_index]
+                except (ValueError, IndexError):
+                    # Could not find prefixes in the definition
+                    pass
+
+                if existing_prefixes and self.key_prefix not in existing_prefixes:
+                    logger.warning(
+                        f"Index '{self.index_name}' already exists with different key "
+                        f"prefix(es): {existing_prefixes}. Current instance uses "
+                        f"prefix '{self.key_prefix}'. This may cause message "
+                        f"retrieval issues. Consider using overwrite_index=True or "
+                        f"a different index_name to avoid conflicts."
+                    )
+            except (ResponseError, ConnectionError, RedisSearchError):
+                # Index doesn't exist yet or connection issue, which is fine
+                pass
+
+        self.index.create(overwrite=self.overwrite_index)
 
     @property
     def id(self) -> str:
