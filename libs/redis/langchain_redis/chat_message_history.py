@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from langchain_core.chat_history import BaseChatMessageHistory
-from langchain_core.messages import BaseMessage, messages_from_dict
+from langchain_core.messages import BaseMessage, ToolMessage, messages_from_dict
 from redis import Redis
 from redis.exceptions import ConnectionError, ResponseError
 from redisvl.exceptions import RedisSearchError  # type: ignore
@@ -304,7 +304,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
 
         timestamp = datetime.now().timestamp()
         message_id = str(ULID())
-        redis_msg = {
+        common_data_to_store: dict[str, Any] = {
             "type": message.type,
             "message_id": message_id,
             "data": {
@@ -315,10 +315,15 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
             "session_id": self.session_id,
             "timestamp": timestamp,
         }
+        if isinstance(message, ToolMessage):
+            common_data_to_store["data"]["tool_call_id"] = message.tool_call_id
+            common_data_to_store["data"]["status"] = message.status
 
         # Use RedisVL to load the data
         self.index.load(
-            data=[redis_msg], keys=[self._message_key(message_id)], ttl=self.ttl
+            data=[common_data_to_store],
+            keys=[self._message_key(message_id)],
+            ttl=self.ttl,
         )
 
     def clear(self) -> None:
