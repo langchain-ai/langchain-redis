@@ -356,7 +356,7 @@ class RedisSemanticCache(BaseCache):
         distance_threshold: float = 0.2,
         ttl: Optional[int] = None,
         name: Optional[str] = "llmcache",
-        prefix: Optional[str] = "llmcache",
+        prefix: Optional[str] = None,
         redis_client: Optional[Redis] = None,
     ):
         self.redis = redis_client or Redis.from_url(redis_url)
@@ -369,8 +369,7 @@ class RedisSemanticCache(BaseCache):
             redis_client=self.redis,
             distance_threshold=distance_threshold,
             ttl=ttl,
-            name=name,
-            prefix=prefix,
+            name=f"{name}:{prefix}" if prefix else name,
         )
 
     def lookup(self, prompt: str, llm_string: str) -> Optional[RETURN_VAL_TYPE]:
