@@ -364,13 +364,15 @@ class RedisSemanticCache(BaseCache):
         self.prefix = prefix
         vectorizer = EmbeddingsVectorizer(embeddings=self.embeddings)
 
+        # Incorporate prefix into the cache name for RedisVL to use proper key format
+        effective_name = f"{prefix}:{name}" if prefix != name else name
+        
         self.cache = RedisVLSemanticCache(
             vectorizer=vectorizer,
             redis_client=self.redis,
             distance_threshold=distance_threshold,
             ttl=ttl,
-            name=name,
-            prefix=prefix,
+            name=effective_name,
         )
 
     def lookup(self, prompt: str, llm_string: str) -> Optional[RETURN_VAL_TYPE]:

@@ -61,11 +61,11 @@ def _deserialize_generations(generations_str: str) -> Optional[List[Generation]]
 
 
 class MockRedisVLSemanticCache:
-    def __init__(self) -> None:
+    def __init__(self, name: str = "test_index", **kwargs) -> None:
         self.data: Dict[tuple, List[Dict[str, Any]]] = {}
         self.distance_threshold: float = 0.2  # Default value
         self.index = Mock()
-        self.index.name = "test_index"
+        self.index.name = name
 
     def check(self, vector: List[float]) -> List[Dict[str, Any]]:
         for stored_vector, stored_data in self.data.items():
@@ -230,7 +230,7 @@ class TestRedisSemanticCache:
     def redis_semantic_cache(self, mock_embeddings: Mock) -> RedisSemanticCache:
         with patch(
             "langchain_redis.cache.RedisVLSemanticCache",
-            return_value=MockRedisVLSemanticCache(),
+            MockRedisVLSemanticCache,
         ):
             cache = RedisSemanticCache(
                 embeddings=mock_embeddings, redis_url="redis://localhost:6379"
@@ -296,3 +296,34 @@ class TestRedisSemanticCache:
         assert result_high_threshold is not None
         assert len(result_high_threshold) == 1
         assert result_high_threshold[0].text == "test response"
+
+    def test_prefix_functionality(self, mock_embeddings: Mock) -> None:
+        """Test that prefix parameter correctly affects cache index name."""
+        with patch(
+            "langchain_redis.cache.RedisVLSemanticCache",
+            MockRedisVLSemanticCache,
+        ):
+            # Test with custom prefix different from name
+            custom_prefix = "user_1"
+            cache_name = "langgraph_agent"
+            cache = RedisSemanticCache(
+                embeddings=mock_embeddings,
+                redis_url="redis://localhost:6379",
+                name=cache_name,
+                prefix=custom_prefix,
+            )
+            
+            # The cache should use the combined prefix:name as the effective name
+            expected_effective_name = f"{custom_prefix}:{cache_name}"
+            assert cache.cache.index.name == expected_effective_name
+            
+            # Test with prefix same as name (should not duplicate)
+            cache_same_prefix = RedisSemanticCache(
+                embeddings=mock_embeddings,
+                redis_url="redis://localhost:6379",
+                name="test_cache",
+                prefix="test_cache",
+            )
+            
+            # When prefix equals name, should not duplicate
+            assert cache_same_prefix.cache.index.name == "test_cache"
