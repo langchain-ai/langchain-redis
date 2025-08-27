@@ -351,7 +351,7 @@ class RedisVectorStore(VectorStore):
                 {
                     "index": {
                         "name": self.config.index_name,
-                        "prefix": f"{self.config.key_prefix}:",
+                        "prefix": self.config.key_prefix,
                         "storage_type": self.config.storage_type,
                     },
                     "fields": [
