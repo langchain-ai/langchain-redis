@@ -1090,7 +1090,7 @@ class RedisVectorStore(VectorStore):
         if isinstance(vector, str):
             vector = ast.literal_eval(vector)  # type: ignore
 
-        return vector
+        return vector  # type: ignore[return-value]
 
     def _prepare_docs_full(
         self,
