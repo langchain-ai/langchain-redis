@@ -1,10 +1,13 @@
 import os
-import subprocess
+from typing import Generator
 
 import pytest
 
 try:
-    from testcontainers.compose import DockerCompose  # type: ignore[import]
+    from testcontainers.core.container import DockerContainer  # type: ignore[import]
+    from testcontainers.core.wait_strategies import (  # type: ignore[import]
+        LogMessageWaitStrategy,
+    )
 
     TESTCONTAINERS_AVAILABLE = True
 except ImportError:
@@ -13,25 +16,33 @@ except ImportError:
 if TESTCONTAINERS_AVAILABLE:
 
     @pytest.fixture(scope="session", autouse=True)
-    def redis_container() -> DockerCompose:
+    def redis_container() -> Generator[DockerContainer, None, None]:
         # Set the default Redis version if not already set
-        os.environ.setdefault("REDIS_VERSION", "edge")
+        redis_version = os.environ.get("REDIS_VERSION", "edge")
+        redis_image = f"redis/redis-stack:{redis_version}"
 
-        try:
-            compose = DockerCompose(
-                "tests", compose_file_name="docker-compose.yml", pull=True
+        # Use DockerContainer with explicit wait strategy instead of RedisContainer
+        # to avoid deprecated @wait_container_is_ready decorator
+        container = (
+            DockerContainer(redis_image)
+            .with_exposed_ports(6379)
+            .with_env("REDIS_ARGS", "--save '' --appendonly no")
+            .waiting_for(
+                LogMessageWaitStrategy(
+                    "Ready to accept connections"
+                ).with_startup_timeout(30)
             )
-            compose.start()
+        )
+        container.start()
 
-            redis_host, redis_port = compose.get_service_host_and_port("redis", 6379)
-            redis_url = f"redis://{redis_host}:{redis_port}"
-            os.environ["REDIS_URL"] = redis_url
+        redis_host = container.get_container_host_ip()
+        redis_port = container.get_exposed_port(6379)
+        redis_url = f"redis://{redis_host}:{redis_port}"
+        os.environ["REDIS_URL"] = redis_url
 
-            yield compose
+        yield container
 
-            compose.stop()
-        except subprocess.CalledProcessError:
-            yield None
+        container.stop()
 
 
 @pytest.fixture(scope="session")
