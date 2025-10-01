@@ -210,6 +210,9 @@ def test_json_structure(
     # Retrieve the JSON data for this key
     json_data = redis_client.json().get(message_key)
 
+    # Type assertion: we know this is a dict, not a list or None
+    assert isinstance(json_data, dict), "json_data should be a dictionary"
+
     # Assert the structure of the JSON data
     assert "session_id" in json_data, "session_id should be present in the JSON data"
     assert "type" in json_data, "type should be present in the JSON data"
