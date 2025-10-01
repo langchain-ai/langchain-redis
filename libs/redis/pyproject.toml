@@ -100,3 +100,9 @@ markers = [
   "compile: mark placeholder test used to compile integration tests without running them",
 ]
 asyncio_mode = "auto"
+# Filter out testcontainers internal deprecation warnings
+# These come from testcontainers library's own code, not our usage
+# We're already using the recommended LogMessageWaitStrategy
+filterwarnings = [
+  "ignore:The @wait_container_is_ready decorator is deprecated:DeprecationWarning:testcontainers",
+]
