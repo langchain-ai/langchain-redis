@@ -390,13 +390,27 @@ class RedisSemanticCache(BaseCache):
         self.prefix = prefix
         vectorizer = EmbeddingsVectorizer(embeddings=self.embeddings)
 
+        # RedisVL's SemanticCache uses 'name' as the prefix for keys.
+        # To support the 'prefix' parameter for multi-tenant isolation,
+        # we need to map it appropriately:
+        # - If both name and prefix are provided and different, combine them
+        # - If only prefix is provided (and differs from default), use it
+        # - Otherwise use name (maintains backward compatibility)
+        cache_name = name
+        if prefix and prefix != "llmcache":
+            if name and name != "llmcache" and name != prefix:
+                # Both are provided and different: combine them
+                cache_name = f"{name}:{prefix}"
+            else:
+                # Only prefix is meaningfully set: use it
+                cache_name = prefix
+
         self.cache = RedisVLSemanticCache(
             vectorizer=vectorizer,
             redis_client=self.redis,
             distance_threshold=distance_threshold,
             ttl=ttl,
-            name=name,
-            prefix=prefix,
+            name=cache_name,
         )
 
     def lookup(self, prompt: str, llm_string: str) -> Optional[RETURN_VAL_TYPE]:
