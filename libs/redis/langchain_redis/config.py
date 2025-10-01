@@ -86,6 +86,7 @@ class RedisConfig(BaseModel):
     return_keys: bool = False
     custom_keys: Optional[List[str]] = None
     embedding_dimensions: Optional[int] = None
+    legacy_key_format: bool = True  # For backward compatibility with issue #78
 
     model_config = ConfigDict(
         arbitrary_types_allowed=True,
