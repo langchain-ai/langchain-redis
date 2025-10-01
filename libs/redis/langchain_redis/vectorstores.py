@@ -347,11 +347,25 @@ class RedisVectorStore(VectorStore):
                     else:
                         modified_metadata_schema.append(field)
 
+            # Handle key prefix format
+            # Issue #78: The trailing ":" was added historically, creating double
+            # colons in keys (e.g., "prefix::doc_id"). For backward compatibility,
+            # this behavior is maintained by default via legacy_key_format flag.
+            # Set legacy_key_format=False for correct single-colon format.
+            # Note: key_prefix is always set by validator, so it's never None here
+            key_prefix = self.config.key_prefix or self.config.index_name
+            if self.config.legacy_key_format:
+                # Legacy format: adds trailing ":" (creates "prefix::doc_id")
+                prefix = f"{key_prefix}:"
+            else:
+                # Correct format: no trailing ":" (creates "prefix:doc_id")
+                prefix = key_prefix
+
             self._index = SearchIndex.from_dict(
                 {
                     "index": {
                         "name": self.config.index_name,
-                        "prefix": f"{self.config.key_prefix}:",
+                        "prefix": prefix,
                         "storage_type": self.config.storage_type,
                     },
                     "fields": [
