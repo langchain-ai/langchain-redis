@@ -124,7 +124,19 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         if not session_id or not isinstance(session_id, str):
             raise ValueError("session_id must be a non-empty, valid string")
 
-        self.redis_client = redis_client or Redis.from_url(redis_url, **kwargs)
+        if redis_client is not None:
+            self.redis_client = redis_client
+        elif redis_url.startswith("redis+sentinel://"):
+            # For Sentinel URLs, use RedisVL's connection factory
+            from redisvl.redis.connection import (  # type: ignore[import-untyped]
+                RedisConnectionFactory,
+            )
+
+            self.redis_client = RedisConnectionFactory.get_redis_connection(
+                redis_url=redis_url, **kwargs
+            )
+        else:
+            self.redis_client = Redis.from_url(redis_url, **kwargs)
 
         # Configure Redis client to use a no-op push handler when PubSub is initialized
         if hasattr(self.redis_client, "pubsub_configs"):
