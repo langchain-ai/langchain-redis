@@ -496,13 +496,35 @@ class RedisConfig(BaseModel):
 
             return IndexSchema.from_dict({"index": index_info, "fields": fields})
 
+    def is_sentinel_url(self) -> bool:
+        """Check if the redis_url is a Sentinel URL.
+
+        Returns:
+            bool: True if the URL uses the redis+sentinel:// scheme, False otherwise.
+        """
+        return self.redis_url is not None and self.redis_url.startswith(
+            "redis+sentinel://"
+        )
+
     def redis(self) -> Redis:
         if self.redis_client is not None:
             return self.redis_client
         elif self.redis_url is not None:
-            if self.connection_args is not None:
-                return Redis.from_url(self.redis_url, **self.connection_args)
+            if self.is_sentinel_url():
+                # For Sentinel URLs, use RedisVL's connection factory
+                # which properly handles Sentinel connections
+                from redisvl.redis.connection import (  # type: ignore[import-untyped]
+                    RedisConnectionFactory,
+                )
+
+                return RedisConnectionFactory.get_redis_connection(
+                    redis_url=self.redis_url, **(self.connection_args or {})
+                )
             else:
-                return Redis.from_url(self.redis_url)
+                # For standard URLs, use Redis.from_url
+                if self.connection_args is not None:
+                    return Redis.from_url(self.redis_url, **self.connection_args)
+                else:
+                    return Redis.from_url(self.redis_url)
         else:
             raise ValueError("Either redis_client or redis_url must be provided")

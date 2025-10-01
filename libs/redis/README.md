@@ -20,6 +20,79 @@ export REDIS_URL="redis://username:password@localhost:6379"
 
 Alternatively, you can pass the Redis URL directly when initializing the components or use the `RedisConfig` class for more detailed configuration.
 
+### Redis Connection Options
+
+This package supports various Redis deployment modes through different connection URL schemes:
+
+#### Standard Redis Connection
+```python
+# Standard Redis
+redis_url = "redis://localhost:6379"
+
+# Redis with authentication
+redis_url = "redis://username:password@localhost:6379"
+
+# Redis SSL/TLS
+redis_url = "rediss://localhost:6380"
+```
+
+#### Redis Sentinel Connection
+
+Redis Sentinel provides high availability for Redis. You can connect to a Sentinel-managed Redis deployment using the `redis+sentinel://` URL scheme:
+
+```python
+# Single Sentinel node
+redis_url = "redis+sentinel://sentinel-host:26379/mymaster"
+
+# Multiple Sentinel nodes (recommended for high availability)
+redis_url = "redis+sentinel://sentinel1:26379,sentinel2:26379,sentinel3:26379/mymaster"
+
+# Sentinel with authentication
+redis_url = "redis+sentinel://username:password@sentinel1:26379,sentinel2:26379/mymaster"
+```
+
+The Sentinel URL format is: `redis+sentinel://[username:password@]host1:port1[,host2:port2,...]/service_name`
+
+Where:
+- `host:port` - One or more Sentinel node addresses
+- `service_name` - The name of the Redis master service (e.g., "mymaster")
+
+**Example using Sentinel with RedisVectorStore:**
+```python
+from langchain_redis import RedisVectorStore, RedisConfig
+from langchain_openai import OpenAIEmbeddings
+
+config = RedisConfig(
+    redis_url="redis+sentinel://sentinel1:26379,sentinel2:26379/mymaster",
+    index_name="my_index"
+)
+
+vector_store = RedisVectorStore(
+    embeddings=OpenAIEmbeddings(),
+    config=config
+)
+```
+
+**Example using Sentinel with RedisCache:**
+```python
+from langchain_redis import RedisCache
+
+cache = RedisCache(
+    redis_url="redis+sentinel://sentinel1:26379,sentinel2:26379/mymaster",
+    ttl=3600
+)
+```
+
+**Example using Sentinel with RedisChatMessageHistory:**
+```python
+from langchain_redis import RedisChatMessageHistory
+
+history = RedisChatMessageHistory(
+    session_id="user_123",
+    redis_url="redis+sentinel://sentinel1:26379,sentinel2:26379/mymaster"
+)
+```
+
 ## Features
 
 ### 1. Vector Store

@@ -132,7 +132,20 @@ class RedisCache(BaseCache):
         prefix: Optional[str] = "redis",
         redis_client: Optional[Redis] = None,
     ):
-        self.redis = redis_client or Redis.from_url(redis_url)
+        if redis_client is not None:
+            self.redis = redis_client
+        elif redis_url.startswith("redis+sentinel://"):
+            # For Sentinel URLs, use RedisVL's connection factory
+            from redisvl.redis.connection import (  # type: ignore[import-untyped]
+                RedisConnectionFactory,
+            )
+
+            self.redis = RedisConnectionFactory.get_redis_connection(
+                redis_url=redis_url
+            )
+        else:
+            self.redis = Redis.from_url(redis_url)
+
         try:
             self.redis.client_setinfo("LIB-NAME", __full_lib_name__)  # type: ignore
         except ResponseError:
@@ -359,7 +372,20 @@ class RedisSemanticCache(BaseCache):
         prefix: Optional[str] = "llmcache",
         redis_client: Optional[Redis] = None,
     ):
-        self.redis = redis_client or Redis.from_url(redis_url)
+        if redis_client is not None:
+            self.redis = redis_client
+        elif redis_url.startswith("redis+sentinel://"):
+            # For Sentinel URLs, use RedisVL's connection factory
+            from redisvl.redis.connection import (  # type: ignore[import-untyped]
+                RedisConnectionFactory,
+            )
+
+            self.redis = RedisConnectionFactory.get_redis_connection(
+                redis_url=redis_url
+            )
+        else:
+            self.redis = Redis.from_url(redis_url)
+
         self.embeddings = embeddings
         self.prefix = prefix
         vectorizer = EmbeddingsVectorizer(embeddings=self.embeddings)
