@@ -22,7 +22,7 @@ class TestToolMessageIssue51:
     ) -> None:
         """Test that adding a ToolMessage stores tool_call_id.
 
-        This is the fix for issue #51 where ToolMessage.tool_call_id
+        This is the fix for issue #51 where `ToolMessage.tool_call_id`
         was not being stored, causing KeyError on deserialization.
         """
         mock_redis_client = MagicMock()
@@ -184,7 +184,7 @@ class TestToolMessageIssue51:
     def test_mixed_message_types_with_tool_message(
         self, mock_search_index: MagicMock
     ) -> None:
-        """Test conversation with mixed message types including ToolMessage."""
+        """Test conversation with mixed message types including `ToolMessage`."""
         mock_redis_client = MagicMock()
         mock_redis_client.client_setinfo = MagicMock()
         mock_redis_client.ft = MagicMock()
