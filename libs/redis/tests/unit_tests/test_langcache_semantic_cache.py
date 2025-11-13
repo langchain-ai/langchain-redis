@@ -1,7 +1,6 @@
 from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-from langchain_core.embeddings import Embeddings
 from langchain_core.outputs import Generation
 
 from langchain_redis import LangCacheSemanticCache
@@ -15,6 +14,9 @@ class DummyLangCacheSemanticCache:
         cache_id: str = "",
         api_key: str = "",
         ttl: Optional[int] = None,
+        use_exact_search: bool = True,
+        use_semantic_search: bool = True,
+        distance_scale: str = "normalized",
         **_: object,
     ) -> None:
         self.name = name
@@ -68,9 +70,7 @@ def test_langcache_semantic_cache_update_lookup_and_clear() -> None:
         "redisvl.extensions.cache.llm.LangCacheSemanticCache",
         DummyLangCacheSemanticCache,
     ):
-        embeddings = MagicMock(spec=Embeddings)
         cache = LangCacheSemanticCache(
-            embeddings=embeddings,
             cache_id="test-cache-id",
             api_key="test-api-key",
         )
@@ -90,41 +90,20 @@ def test_langcache_semantic_cache_update_lookup_and_clear() -> None:
         assert cache.lookup(prompt, llm_string) is None
 
 
-def test_langcache_semantic_cache_name_prefix_mapping() -> None:
+def test_langcache_semantic_cache_name_defaulting() -> None:
     with patch(
         "redisvl.extensions.cache.llm.LangCacheSemanticCache",
         DummyLangCacheSemanticCache,
     ):
-        embeddings = MagicMock(spec=Embeddings)
-
         c1 = LangCacheSemanticCache(
-            embeddings=embeddings,
             name="cache_name",
-            prefix="tenant1",
             cache_id="test-cache-id",
             api_key="test-api-key",
         )
-        assert c1.name() == "cache_name:tenant1"
+        assert c1.name() == "cache_name"
 
         c2 = LangCacheSemanticCache(
-            embeddings=embeddings,
-            prefix="tenant2",
             cache_id="test-cache-id",
             api_key="test-api-key",
         )
-        assert c2.name() == "tenant2"
-
-        c3 = LangCacheSemanticCache(
-            embeddings=embeddings,
-            name="my_custom",
-            cache_id="test-cache-id",
-            api_key="test-api-key",
-        )
-        assert c3.name() == "my_custom"
-
-        c4 = LangCacheSemanticCache(
-            embeddings=embeddings,
-            cache_id="test-cache-id",
-            api_key="test-api-key",
-        )
-        assert c4.name() == "llmcache"
+        assert c2.name() == "llmcache"

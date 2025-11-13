@@ -639,7 +639,7 @@ files = [
 name = "langcache"
 version = "0.11.1"
 description = "Python Client SDK for LangCache Redis Service"
-optional = true
+optional = false
 python-versions = ">=3.9.2"
 files = [
     {file = "langcache-0.11.1-py3-none-any.whl", hash = "sha256:27b7125196159d67cdad0103f2c5fe770807fb5514445924094b1a2f490dcc8a"},
@@ -3053,4 +3053,4 @@ langcache = ["langcache"]
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.10,<3.14"
-content-hash = "26975641f44a7acb011a029e7c78d9f09b6ecabc175224584ad44ea59a5592d7"
+content-hash = "46c2d83fa64047e19f6460feec6d4439e0e232862b355c30827347c8a62ae2cb"
