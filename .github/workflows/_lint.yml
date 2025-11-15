@@ -29,10 +29,16 @@ jobs:
         # Starting new jobs is also relatively slow,
         # so linting on fewer versions makes CI faster.
         python-version:
-          - "3.9"
-          - "3.12"
+          - "3.10"
+          - "3.13"
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-dev liblapack-dev gfortran
 
       - name: Set up Python ${{ matrix.python-version }} + Poetry ${{ env.POETRY_VERSION }}
         uses: "./.github/actions/poetry_setup"
