@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from typing import Any, List, Optional, Union
+from typing import Any, List, Literal, Optional, Union
 
 import numpy as np
 from langchain_core.caches import RETURN_VAL_TYPE, BaseCache
@@ -700,4 +700,169 @@ class RedisSemanticCache(BaseCache):
 
     async def aclear(self, **kwargs: Any) -> None:
         """Async clear cache that can take additional keyword arguments."""
+        await self.cache.aclear()
+
+
+class LangCacheSemanticCache(BaseCache):
+    """Semantic cache backed by RedisVL's LangCacheSemanticCache.
+
+    This uses redisvl.extensions.cache.llm.LangCacheSemanticCache (a wrapper over the
+    managed LangCache API). The optional dependency ``langcache`` must be installed
+    at runtime when this class is actually used.
+
+    Install with either ``pip install 'langchain-redis[langcache]'`` or
+    ``pip install 'langcache>=0.10.0'``.
+
+    Parameters mirror ``RedisSemanticCache`` where possible. ``name``/``prefix``
+    are combined to derive a human-friendly cache name. The LangCache
+    ``cache_id`` must be provided explicitly -- obtain it from the LangCache
+    service before instantiating this class.
+    """
+
+    def __init__(
+        self,
+        embeddings: Embeddings,
+        distance_threshold: float = 0.2,
+        ttl: Optional[int] = None,
+        name: Optional[str] = "llmcache",
+        prefix: Optional[str] = "llmcache",
+        *,
+        server_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        cache_id: Optional[str] = None,
+        use_exact_search: bool = True,
+        use_semantic_search: bool = True,
+        distance_scale: Literal["normalized", "redis"] = "normalized",
+        **kwargs: Any,
+    ):
+        if not cache_id:
+            raise ValueError("cache_id is required for LangCacheSemanticCache")
+        if not api_key:
+            raise ValueError("api_key is required for LangCacheSemanticCache")
+
+        # RedisVL's SemanticCache uses 'name' as the prefix for keys.
+        # To support the 'prefix' parameter for multi-tenant isolation,
+        # we need to map it appropriately:
+        # - If both name and prefix are provided and different, combine them
+        # - If only prefix is provided (and differs from default), use it
+        # - Otherwise use name (maintains backward compatibility)
+        cache_name = name
+        if prefix and prefix != "llmcache":
+            if name and name != "llmcache" and name != prefix:
+                cache_name = f"{name}:{prefix}"
+            else:
+                cache_name = prefix
+        self._cache_name = cache_name or "llmcache"
+
+        self.ttl = ttl
+        self._distance_threshold = distance_threshold
+        # Store embeddings for optional future vectorization; avoid constructing
+        # a BaseVectorizer eagerly (tests may pass MagicMocks without real dims)
+        self.embeddings = embeddings
+
+        try:
+            from redisvl.extensions.cache.llm import (
+                LangCacheSemanticCache as RVLLangCacheSemanticCache,
+            )
+        except ImportError as e:
+            # Check if this is a missing langcache dependency or outdated redisvl
+            error_msg = str(e).lower()
+            if "langcache" in error_msg:
+                raise ImportError(
+                    "LangCacheSemanticCache requires the langcache package. "
+                    "Install it with: pip install langcache "
+                    "or pip install 'redisvl[langcache]'"
+                ) from e
+            else:
+                raise ImportError(
+                    "LangCacheSemanticCache requires redisvl>=0.11.0. "
+                    "Update redisvl with: pip install --upgrade redisvl"
+                ) from e
+
+        # Instantiate the LangCache wrapper; it will validate cache_id/api_key
+        self.cache: Any = RVLLangCacheSemanticCache(
+            name=self._cache_name,
+            server_url=server_url or "https://aws-us-east-1.langcache.redis.io",
+            cache_id=cache_id or "",
+            api_key=api_key or "",
+            ttl=ttl,
+            use_exact_search=use_exact_search,
+            use_semantic_search=use_semantic_search,
+            distance_scale=distance_scale,
+            **kwargs,
+        )
+
+    def _vectorize(self, prompt: str) -> List[float]:
+        """Vectorize via embeddings directly. Kept for future use.
+        Note: We do not depend on BaseVectorizer here to keep initialization light.
+        """
+        # Embeddings.embed_query returns a list[float] in real usage; mocks are fine.
+        return self.embeddings.embed_query(prompt)  # type: ignore[no-any-return]
+
+    def lookup(self, prompt: str, llm_string: str) -> Optional[RETURN_VAL_TYPE]:
+        """Lookup using RedisVL's LangCacheSemanticCache check API."""
+        results = self.cache.check(
+            prompt=prompt,
+            num_results=1,
+            distance_threshold=self._distance_threshold,
+            attributes={"llm_string": llm_string},
+        )
+        for result in results:
+            metadata = result.get("metadata", {}) or {}
+            if metadata.get("llm_string") == llm_string:
+                try:
+                    return [loads(s) for s in json.loads(result.get("response", "[]"))]
+                except (json.JSONDecodeError, TypeError):
+                    return None
+        return None
+
+    def update(self, prompt: str, llm_string: str, return_val: RETURN_VAL_TYPE) -> None:
+        """Store using RedisVL's LangCacheSemanticCache store API."""
+        serialized_response = json.dumps([dumps(gen) for gen in return_val])
+        # LangCacheSemanticCache ignores per-entry TTL; it uses cache-level TTL if set
+        self.cache.store(
+            prompt=prompt,
+            response=serialized_response,
+            metadata={"llm_string": llm_string},
+            ttl=self.ttl,
+        )
+
+    def clear(self, **kwargs: Any) -> None:
+        """Clear all entries via the wrapper's clear API."""
+        self.cache.clear()
+
+    def name(self) -> str:
+        return self._cache_name
+
+    async def alookup(self, prompt: str, llm_string: str) -> Optional[RETURN_VAL_TYPE]:
+        """Async lookup through RedisVL's LangCacheSemanticCache."""
+        results = await self.cache.acheck(
+            prompt=prompt,
+            num_results=1,
+            distance_threshold=self._distance_threshold,
+            attributes={"llm_string": llm_string},
+        )
+        for result in results:
+            metadata = result.get("metadata", {}) or {}
+            if metadata.get("llm_string") == llm_string:
+                try:
+                    return [loads(s) for s in json.loads(result.get("response", "[]"))]
+                except (json.JSONDecodeError, TypeError):
+                    return None
+        return None
+
+    async def aupdate(
+        self, prompt: str, llm_string: str, return_val: RETURN_VAL_TYPE
+    ) -> None:
+        """Async store using RedisVL's LangCacheSemanticCache."""
+        serialized_response = json.dumps([dumps(gen) for gen in return_val])
+        await self.cache.astore(
+            prompt=prompt,
+            response=serialized_response,
+            metadata={"llm_string": llm_string},
+            ttl=self.ttl,
+        )
+
+    async def aclear(self, **kwargs: Any) -> None:
+        """Async clear via the wrapper's aclear API."""
         await self.cache.aclear()
