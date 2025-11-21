@@ -171,7 +171,6 @@ class TestLangCacheSemanticCacheIntegrationWithAttributes:
         langcache_with_attrs.clear()
         assert langcache_with_attrs.lookup(prompt, llm_string) is None
 
-    @pytest.mark.skip("Waiting on upstream RedisVL release to fix")
     @pytest.mark.asyncio
     async def test_aclear_removes_entries(
         self, langcache_with_attrs: LangCacheSemanticCache
@@ -187,7 +186,6 @@ class TestLangCacheSemanticCacheIntegrationWithAttributes:
 
         await langcache_with_attrs.aclear()
         assert await langcache_with_attrs.alookup(prompt, llm_string) is None
-
 
     @pytest.mark.requires_api_keys
     class TestLangCacheSemanticCacheIntegrationWithoutAttributes:
@@ -206,7 +204,9 @@ class TestLangCacheSemanticCacheIntegrationWithAttributes:
                     [Generation(text="This should not be stored.")],
                 )
 
-            assert "attributes are not configured for this cache" in str(exc.value).lower()
+            assert (
+                "attributes are not configured for this cache" in str(exc.value).lower()
+            )
 
     def test_lookup_errors_when_no_attributes_configured(
         self, langcache_no_attrs: LangCacheSemanticCache
