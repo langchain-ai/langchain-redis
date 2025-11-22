@@ -27,14 +27,6 @@ from langchain_core.outputs import Generation
 
 from langchain_redis import LangCacheSemanticCache
 
-try:  # Optional direct redisvl client for debugging comparisons
-    from redisvl.extensions.cache.llm import (  # type: ignore
-        LangCacheSemanticCache as RedisVLLangCacheSemanticCache,
-    )
-except Exception:  # pragma: no cover - optional dependency path
-    RedisVLLangCacheSemanticCache = None
-
-
 REQUIRED_WITH_ATTRS_VARS = (
     "LANGCACHE_WITH_ATTRIBUTES_API_KEY",
     "LANGCACHE_WITH_ATTRIBUTES_CACHE_ID",
@@ -93,31 +85,6 @@ def langcache_no_attrs() -> LangCacheSemanticCache:
         api_key=env["LANGCACHE_NO_ATTRIBUTES_API_KEY"],
         ttl=60,
         distance_threshold=0.2,
-    )
-
-
-@pytest.fixture
-def rv_langcache_with_attrs() -> "RedisVLLangCacheSemanticCache":
-    """Direct redisvl LangCacheSemanticCache bound to attrs-enabled cache.
-
-    This bypasses the langchain_redis adapter and talks to LangCache via the
-    redisvl integration directly, without using any llm_string attribute
-    filtering. These tests help isolate whether the underlying cache instance
-    can successfully store and retrieve entries when attributes are not used
-    as filters.
-    """
-
-    if RedisVLLangCacheSemanticCache is None:
-        pytest.skip("redisvl LangCacheSemanticCache is not available")
-
-    env = _require_env_vars(REQUIRED_WITH_ATTRS_VARS)
-
-    return RedisVLLangCacheSemanticCache(
-        name="redisvl_with_attributes_direct",
-        server_url=env["LANGCACHE_WITH_ATTRIBUTES_URL"],
-        cache_id=env["LANGCACHE_WITH_ATTRIBUTES_CACHE_ID"],
-        api_key=env["LANGCACHE_WITH_ATTRIBUTES_API_KEY"],
-        ttl=60,
     )
 
 

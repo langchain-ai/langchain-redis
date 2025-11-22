@@ -732,7 +732,7 @@ class LangCacheSemanticCache(BaseCache):
     over the managed LangCache API). The optional dependency ``langcache`` must
     be installed at runtime when this class is used. Install with either
     ``pip install 'langchain-redis[langcache]'`` or
-    ``pip install 'langcache>=0.10.0'``.
+    ``pip install langcache``.
 
     Args:
         distance_threshold (float): Maximum distance for semantic matches.
