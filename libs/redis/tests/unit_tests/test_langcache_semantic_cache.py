@@ -1,8 +1,10 @@
+import importlib
 from typing import Any, Dict, List, Optional
 from unittest.mock import patch
 
 from langchain_core.outputs import Generation
 
+import langchain_redis.cache as cache_module
 from langchain_redis import LangCacheSemanticCache
 
 
@@ -107,3 +109,45 @@ def test_langcache_semantic_cache_name_defaulting() -> None:
             api_key="test-api-key",
         )
         assert c2.name() == "llmcache"
+
+
+def test_langcache_semantic_cache_default_server_url(monkeypatch: Any) -> None:
+    """When LANGCACHE_SERVER_URL is not set, use the managed default endpoint."""
+
+    # Ensure the env var is not set before reloading the module
+    monkeypatch.delenv("LANGCACHE_SERVER_URL", raising=False)
+
+    # Reload to re-evaluate the module-level default that reads the environment
+    importlib.reload(cache_module)
+
+    with patch(
+        "redisvl.extensions.cache.llm.LangCacheSemanticCache",
+        DummyLangCacheSemanticCache,
+    ):
+        cache = cache_module.LangCacheSemanticCache(
+            cache_id="test-cache-id",
+            api_key="test-api-key",
+        )
+
+        assert cache.cache.server_url == "https://aws-us-east-1.langcache.redis.io"
+
+
+def test_langcache_semantic_cache_server_url_from_env(monkeypatch: Any) -> None:
+    """LANGCACHE_SERVER_URL environment variable should override the default."""
+
+    env_url = "https://example.langcache.internal"
+    monkeypatch.setenv("LANGCACHE_SERVER_URL", env_url)
+
+    # Reload to re-evaluate the module-level default that reads the environment
+    importlib.reload(cache_module)
+
+    with patch(
+        "redisvl.extensions.cache.llm.LangCacheSemanticCache",
+        DummyLangCacheSemanticCache,
+    ):
+        cache = cache_module.LangCacheSemanticCache(
+            cache_id="test-cache-id",
+            api_key="test-api-key",
+        )
+
+        assert cache.cache.server_url == env_url

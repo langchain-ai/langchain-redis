@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 import numpy as np
@@ -30,7 +31,10 @@ _DEFAULT_CACHE_NAME = "llmcache"
 # Default cache prefix used across semantic caches
 _DEFAULT_CACHE_PREFIX = "llmcache"
 # Default LangCache server URL; prefer the URL provided for your cache.
-_DEFAULT_LANGCACHE_SERVER_URL = "https://aws-us-east-1.langcache.redis.io"
+# Can be overridden via the LANGCACHE_SERVER_URL environment variable.
+_DEFAULT_LANGCACHE_SERVER_URL = os.environ.get(
+    "LANGCACHE_SERVER_URL", "https://aws-us-east-1.langcache.redis.io"
+)
 if TYPE_CHECKING:  # pragma: no cover
     from redisvl.extensions.cache.llm import (
         LangCacheSemanticCache as TC_LangCacheSemanticCache,
