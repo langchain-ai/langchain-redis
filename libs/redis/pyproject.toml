@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "langchain-redis"
-version = "0.2.4"
+version = "0.3.4"
 description = "An integration package connecting Redis and LangChain for AI working memory"
 authors = ["Brian Sam-Bodden <bsb@redis.com>"]
 readme = "README.md"

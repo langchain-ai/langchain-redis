@@ -238,13 +238,13 @@ websockets = ["websocket-client (>=1.3.0)"]
 
 [[package]]
 name = "exceptiongroup"
-version = "1.3.0"
+version = "1.3.1"
 description = "Backport of PEP 654 (exception groups)"
 optional = false
 python-versions = ">=3.7"
 files = [
-    {file = "exceptiongroup-1.3.0-py3-none-any.whl", hash = "sha256:4d111e6e0c13d0644cad6ddaa7ed0261a0b36971f6d23e7ec9b4b9097da78a10"},
-    {file = "exceptiongroup-1.3.0.tar.gz", hash = "sha256:b241f5885f560bc56a59ee63ca4c6a8bfa46ae4ad651af316d4e81817bb9fd88"},
+    {file = "exceptiongroup-1.3.1-py3-none-any.whl", hash = "sha256:a7a39a3bd276781e98394987d3a5701d0c4edffb633bb7a5144577f82c773598"},
+    {file = "exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219"},
 ]
 
 [package.dependencies]
@@ -316,33 +316,36 @@ files = [
 
 [[package]]
 name = "hf-xet"
-version = "1.2.0"
+version = "1.2.1"
 description = "Fast transfer of large files with the Hugging Face Hub."
 optional = false
 python-versions = ">=3.8"
 files = [
-    {file = "hf_xet-1.2.0-cp313-cp313t-macosx_10_12_x86_64.whl", hash = "sha256:ceeefcd1b7aed4956ae8499e2199607765fbd1c60510752003b6cc0b8413b649"},
-    {file = "hf_xet-1.2.0-cp313-cp313t-macosx_11_0_arm64.whl", hash = "sha256:b70218dd548e9840224df5638fdc94bd033552963cfa97f9170829381179c813"},
-    {file = "hf_xet-1.2.0-cp313-cp313t-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:7d40b18769bb9a8bc82a9ede575ce1a44c75eb80e7375a01d76259089529b5dc"},
-    {file = "hf_xet-1.2.0-cp313-cp313t-manylinux_2_28_aarch64.whl", hash = "sha256:cd3a6027d59cfb60177c12d6424e31f4b5ff13d8e3a1247b3a584bf8977e6df5"},
-    {file = "hf_xet-1.2.0-cp313-cp313t-musllinux_1_2_aarch64.whl", hash = "sha256:6de1fc44f58f6dd937956c8d304d8c2dea264c80680bcfa61ca4a15e7b76780f"},
-    {file = "hf_xet-1.2.0-cp313-cp313t-musllinux_1_2_x86_64.whl", hash = "sha256:f182f264ed2acd566c514e45da9f2119110e48a87a327ca271027904c70c5832"},
-    {file = "hf_xet-1.2.0-cp313-cp313t-win_amd64.whl", hash = "sha256:293a7a3787e5c95d7be1857358a9130694a9c6021de3f27fa233f37267174382"},
-    {file = "hf_xet-1.2.0-cp314-cp314t-macosx_10_12_x86_64.whl", hash = "sha256:10bfab528b968c70e062607f663e21e34e2bba349e8038db546646875495179e"},
-    {file = "hf_xet-1.2.0-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:2a212e842647b02eb6a911187dc878e79c4aa0aa397e88dd3b26761676e8c1f8"},
-    {file = "hf_xet-1.2.0-cp314-cp314t-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:30e06daccb3a7d4c065f34fc26c14c74f4653069bb2b194e7f18f17cbe9939c0"},
-    {file = "hf_xet-1.2.0-cp314-cp314t-manylinux_2_28_aarch64.whl", hash = "sha256:29c8fc913a529ec0a91867ce3d119ac1aac966e098cf49501800c870328cc090"},
-    {file = "hf_xet-1.2.0-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:66e159cbfcfbb29f920db2c09ed8b660eb894640d284f102ada929b6e3dc410a"},
-    {file = "hf_xet-1.2.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:9c91d5ae931510107f148874e9e2de8a16052b6f1b3ca3c1b12f15ccb491390f"},
-    {file = "hf_xet-1.2.0-cp314-cp314t-win_amd64.whl", hash = "sha256:210d577732b519ac6ede149d2f2f34049d44e8622bf14eb3d63bbcd2d4b332dc"},
-    {file = "hf_xet-1.2.0-cp37-abi3-macosx_10_12_x86_64.whl", hash = "sha256:46740d4ac024a7ca9b22bebf77460ff43332868b661186a8e46c227fdae01848"},
-    {file = "hf_xet-1.2.0-cp37-abi3-macosx_11_0_arm64.whl", hash = "sha256:27df617a076420d8845bea087f59303da8be17ed7ec0cd7ee3b9b9f579dff0e4"},
-    {file = "hf_xet-1.2.0-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:3651fd5bfe0281951b988c0facbe726aa5e347b103a675f49a3fa8144c7968fd"},
-    {file = "hf_xet-1.2.0-cp37-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:d06fa97c8562fb3ee7a378dd9b51e343bc5bc8190254202c9771029152f5e08c"},
-    {file = "hf_xet-1.2.0-cp37-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:4c1428c9ae73ec0939410ec73023c4f842927f39db09b063b9482dac5a3bb737"},
-    {file = "hf_xet-1.2.0-cp37-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:a55558084c16b09b5ed32ab9ed38421e2d87cf3f1f89815764d1177081b99865"},
-    {file = "hf_xet-1.2.0-cp37-abi3-win_amd64.whl", hash = "sha256:e6584a52253f72c9f52f9e549d5895ca7a471608495c4ecaa6cc73dba2b24d69"},
-    {file = "hf_xet-1.2.0.tar.gz", hash = "sha256:a8c27070ca547293b6890c4bf389f713f80e8c478631432962bb7f4bc0bd7d7f"},
+    {file = "hf_xet-1.2.1-cp313-cp313t-macosx_10_12_x86_64.whl", hash = "sha256:d9b8118b8b171f0482a61d40a473335857d2b85fcceca499fe16db887e5bf0fb"},
+    {file = "hf_xet-1.2.1-cp313-cp313t-macosx_11_0_arm64.whl", hash = "sha256:29c0603f7b27d58dc35b4f859cf62a8d905782db4e3cd0253cb45b3225e6c6f1"},
+    {file = "hf_xet-1.2.1-cp313-cp313t-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:ad56e0f6cfcdde30c436aee3a2adfd66d7432b0e1598353321c644576b97623a"},
+    {file = "hf_xet-1.2.1-cp313-cp313t-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:29cc367533e338f2a0c65d186882c05e6e6841f5c591562c629de652d5ec219e"},
+    {file = "hf_xet-1.2.1-cp313-cp313t-manylinux_2_28_aarch64.whl", hash = "sha256:6df5382f854cedd0cf78bffb2d93ffeb877717fe4ab0871735dbeb77a02c3c3c"},
+    {file = "hf_xet-1.2.1-cp313-cp313t-musllinux_1_2_aarch64.whl", hash = "sha256:efd65ead9913c199031250d154c242a6ce3876e2ac725155bb66483b610e799e"},
+    {file = "hf_xet-1.2.1-cp313-cp313t-musllinux_1_2_x86_64.whl", hash = "sha256:72fc277b3655861121dbbdd3ac0315263fe5de63f6a844dd395245dcb66928e6"},
+    {file = "hf_xet-1.2.1-cp313-cp313t-win_amd64.whl", hash = "sha256:cc3902fa877c15f36ee149897f54cd97340aed602e4544bc1e80151b47635edc"},
+    {file = "hf_xet-1.2.1-cp314-cp314t-macosx_10_12_x86_64.whl", hash = "sha256:5d66cf732d3d46f3b12f1d14d6f5c639433dd332af8e851d148a80bcfcb56f25"},
+    {file = "hf_xet-1.2.1-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:0429f6de40d2d6d4e04f412e3f9074fd5a208f9145b5247a2ea66c689b1a5768"},
+    {file = "hf_xet-1.2.1-cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:2b898f9d106f0ef83bd2f73e973e3e702d1368a0404315fc8ad64156434a443b"},
+    {file = "hf_xet-1.2.1-cp314-cp314t-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:b45cfc180275f69ecc570ef98946752fbd9424ddc9bca895942fef3f0b85f3a3"},
+    {file = "hf_xet-1.2.1-cp314-cp314t-manylinux_2_28_aarch64.whl", hash = "sha256:bf957da3fe3571e2f161b98193065baa54c9eb8670b914daccb60aa1c9ee94a4"},
+    {file = "hf_xet-1.2.1-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:cc0fde31706c0626beb5430665512e53da23004c6c020c80256be057b6248255"},
+    {file = "hf_xet-1.2.1-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:7ea0eb9dab2276fc2e502dc8c095c0c2b00cf89ae3d7899b6878dfa5ea1c1464"},
+    {file = "hf_xet-1.2.1-cp314-cp314t-win_amd64.whl", hash = "sha256:ac0b51005cf12e7f88654d4e127f1b8d2378a2db575782fc3ea25d4c0e7e5c49"},
+    {file = "hf_xet-1.2.1-cp37-abi3-macosx_10_12_x86_64.whl", hash = "sha256:0b0742e1258335686c82cbda57d6587081c25f9e004b135de485b76166c3f172"},
+    {file = "hf_xet-1.2.1-cp37-abi3-macosx_11_0_arm64.whl", hash = "sha256:1cae780544f0d8849174e82047bd7a8c1d9e14b7c13dce99b1462574bedf3358"},
+    {file = "hf_xet-1.2.1-cp37-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:ce3a09c77f1ba29fedb2b1f397948d8a237a8062afa946821811b39abb9903b4"},
+    {file = "hf_xet-1.2.1-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e722352e5e9414030b44eacce598f840aab8b5d5ea36ea66a6c9121e52a9455b"},
+    {file = "hf_xet-1.2.1-cp37-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:3214bae661c600232ce71bff88d22b6cb81f669be4e98ce4b57114c135fd208d"},
+    {file = "hf_xet-1.2.1-cp37-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:397c6dadecf1303d084b675efa4afd920229ccc13b84bfc095f48dfd508f464e"},
+    {file = "hf_xet-1.2.1-cp37-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:885ac1975b064cf3919650f5e5efdddf72a4ebe3e1f6fe027a4a9a319e43a17b"},
+    {file = "hf_xet-1.2.1-cp37-abi3-win_amd64.whl", hash = "sha256:c76704cdda11cac957519dc8cb868eb103e561e9bfea284c8678e7d975bb4369"},
+    {file = "hf_xet-1.2.1.tar.gz", hash = "sha256:6c7a48d40b25f06f7f1b0fdd96c6f9d222dd4d0c833990684723eb77163b7372"},
 ]
 
 [package.extras]
@@ -653,13 +656,13 @@ pydantic = ">=2.11.2"
 
 [[package]]
 name = "langchain-core"
-version = "1.0.7"
+version = "1.1.0"
 description = "Building applications with LLMs through composability"
 optional = false
 python-versions = "<4.0.0,>=3.10.0"
 files = [
-    {file = "langchain_core-1.0.7-py3-none-any.whl", hash = "sha256:76af258b0e95a7915b8e301706a45ded50c75b80ff35329394d4df964416e32a"},
-    {file = "langchain_core-1.0.7.tar.gz", hash = "sha256:6c64399cb0f163a7e45a764cce75d80fd08b82f4e0274ca892cfbcaa2f29200b"},
+    {file = "langchain_core-1.1.0-py3-none-any.whl", hash = "sha256:2c9f27dadc6d21ed4aa46506a37a56e6a7e2d2f9141922dc5c251ba921822ee6"},
+    {file = "langchain_core-1.1.0.tar.gz", hash = "sha256:2b76a82d427922c8bc51c08404af4fc2a29e9f161dfe2297cb05091e810201e7"},
 ]
 
 [package.dependencies]
@@ -689,13 +692,13 @@ tiktoken = ">=0.7.0,<1.0.0"
 
 [[package]]
 name = "langsmith"
-version = "0.4.45"
+version = "0.4.46"
 description = "Client library to connect to the LangSmith Observability and Evaluation Platform."
 optional = false
 python-versions = ">=3.10"
 files = [
-    {file = "langsmith-0.4.45-py3-none-any.whl", hash = "sha256:6326ad2e66c24d47361b4338fbc23e7fee8da624b289921a9c164e15217ed8e2"},
-    {file = "langsmith-0.4.45.tar.gz", hash = "sha256:f73f86353e31e8f89da2da2b1ebf9f695227f394d22df3ef5d7618e59738bd71"},
+    {file = "langsmith-0.4.46-py3-none-any.whl", hash = "sha256:783c16ef108c42a16ec2d8bc68067b969f3652e2fe82ca1289007baf947e4500"},
+    {file = "langsmith-0.4.46.tar.gz", hash = "sha256:0b73d47ebd0a27ea10edec1717f36f6a865cb9ffc7f4e6a419e2cea1ab3c5b1e"},
 ]
 
 [package.dependencies]
@@ -1881,13 +1884,13 @@ ocsp = ["cryptography (>=36.0.1)", "pyopenssl (>=20.0.1)", "requests (>=2.31.0)"
 
 [[package]]
 name = "redisvl"
-version = "0.11.1"
+version = "0.12.0"
 description = "Python client library and CLI for using Redis as a vector database"
 optional = false
 python-versions = "<3.14,>=3.9.2"
 files = [
-    {file = "redisvl-0.11.1-py3-none-any.whl", hash = "sha256:6983cca14438f92f193d56744bfd0f659024daee72e0a089e674f9dc2dd4adcf"},
-    {file = "redisvl-0.11.1.tar.gz", hash = "sha256:71d1a0f6a9aed151bf82842d4946cbbe09dc4e4bde837ccc8a73056b0237b298"},
+    {file = "redisvl-0.12.0-py3-none-any.whl", hash = "sha256:406695793681c1f46f61b6a1141a6b6f86261bf690caf0de00595c511700012d"},
+    {file = "redisvl-0.12.0.tar.gz", hash = "sha256:205db9eb9639b78a9e479b012f6db64a12aa47129fdfaf3ad59623b5736e00d2"},
 ]
 
 [package.dependencies]
