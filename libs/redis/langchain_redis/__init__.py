@@ -1,4 +1,4 @@
-from langchain_redis.cache import RedisCache, RedisSemanticCache
+from langchain_redis.cache import LangCacheSemanticCache, RedisCache, RedisSemanticCache
 from langchain_redis.chat_message_history import (
     RedisChatMessageHistory,
     _noop_push_handler,
@@ -14,6 +14,7 @@ __all__ = [
     "RedisConfig",
     "RedisCache",
     "RedisSemanticCache",
+    "LangCacheSemanticCache",
     "RedisChatMessageHistory",
     "_noop_push_handler",
 ]

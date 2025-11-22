@@ -10,6 +10,48 @@ The project is structured as a monorepo with the main library at `libs/redis/`. 
 cd libs/redis
 ```
 
+## Virtual Environments
+
+Poetry manages dependencies; some users also use it to automatically manage Python virtual environments.
+
+In this repository you may encounter a project virtual environment already created locally. Common locations:
+- The repository root
+- `libs/redis/env/`
+
+Common directory names:
+- `.venv`
+- `env`
+- `venv`
+
+Recommended workflow:
+1) If a virtual environment exists in the repo, activate it first, then run Python or `make` commands:
+```bash
+source .venv/bin/activate  # or: source libs/redis/env/bin/activate
+make test                  # or any other Make target
+```
+
+2) If `poetry` is available on your PATH without activating a venv, you can try to use it directly:
+```bash
+# From libs/redis/
+make test
+# or explicitly
+poetry run pytest tests/unit_tests/test_specific.py
+```
+
+3) If you run `poetry` or `make` and see `poetry: command not found`, Poetry is
+not on your PATH. Try to activate the project's virtual environment to see if it
+already contains Poetry (e.g., `source libs/redis/env/bin/activate`). If it
+doesn't, ask the user if you should install it.
+
+Notes:
+- Makefile targets call `poetry run ...`. When a venv is activated and contains
+  Poetry, `make` will use that Poetry and run inside that venv. When Poetry is
+  on PATH globally, it will use its managed venv and you do not need to activate
+  one manually.
+- Quick checks:
+  - `which poetry`
+  - `TEST_FILE=tests/unit_tests/test_specific.py make test`
+
 ### Testing
 - `make test` - Run unit tests
 - `make integration_tests` - Run integration tests (requires OPENAI_API_KEY)

@@ -148,12 +148,12 @@ docs = vector_store.max_marginal_relevance_search(query, k=2, fetch_k=10)
 
 ### 2. Cache
 
-The `RedisCache` and `RedisSemanticCache` classes provide caching mechanisms for LLM calls.
+The `RedisCache`, `RedisSemanticCache`, and `LangCacheSemanticCache` classes provide caching mechanisms for LLM calls.
 
 #### Usage
 
 ```python
-from langchain_redis import RedisCache, RedisSemanticCache
+from langchain_redis import RedisCache, RedisSemanticCache, LangCacheSemanticCache
 from langchain_core.language_models import LLM
 from langchain_core.embeddings import Embeddings
 
@@ -168,8 +168,15 @@ semantic_cache = RedisSemanticCache(
     distance_threshold=0.1
 )
 
+# LangChain cache - manages embeddings for you
+langchain_cache = LangCacheSemanticCache(
+    cache_id="your-cache-id",
+    api_key="your-api-key",
+    distance_threshold=0.1
+)
+
 # Using cache with an LLM
-llm = LLM(cache=cache)  # or LLM(cache=semantic_cache)
+llm = LLM(cache=cache)  # or LLM(cache=semantic_cache) or LLM(cache=langchain_cache)
 
 # Async cache operations
 await cache.aupdate("prompt", "llm_string", [Generation(text="cached_response")])
@@ -181,6 +188,11 @@ cached_result = await cache.alookup("prompt", "llm_string")
 - TTL support for automatic cache expiration
 - Semantic caching for similarity-based retrieval
 - Asynchronous cache operations
+
+#### What is Redis LangCache?
+- LangCache is a fully managed, cloud-based service that provides a semantic cache for LLM applications.
+- It manages embeddings and vector search for you, allowing you to focus on your application logic.
+- See [our docs](https://redis.io/docs/latest/develop/ai/langcache/) to learn more, or [try LangCache on Redis Cloud today](https://redis.io/docs/latest/operate/rc/langcache/#get-started-with-langcache-on-redis-cloud).
 
 ### 3. Chat History
 

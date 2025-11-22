@@ -32,6 +32,7 @@ lint lint_diff lint_package lint_tests:
 	poetry run ruff format $(PYTHON_FILES) --diff
 	poetry run ruff check $(PYTHON_FILES) --select I $(PYTHON_FILES)
 	mkdir -p $(MYPY_CACHE); poetry run mypy $(PYTHON_FILES) --cache-dir $(MYPY_CACHE)
+	poetry check
 
 format format_diff:
 	poetry run ruff format $(PYTHON_FILES)
