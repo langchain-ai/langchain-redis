@@ -13,7 +13,7 @@ license = "MIT"
 [tool.poetry.dependencies]
 python = ">=3.10,<3.14"
 langchain-core = ">=1.0.7"
-redisvl = ">=0.11.1,<1.0.0"
+redisvl = ">=0.12.0,<1.0.0"
 jinja2 = "^3.1.6"
 typing-extensions = "^4.13.2"
 anyio = "^4.9.0"

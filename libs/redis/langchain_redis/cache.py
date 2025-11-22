@@ -8,6 +8,7 @@ import json
 import logging
 import os
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
+from urllib.parse import quote
 
 import numpy as np
 from langchain_core.caches import RETURN_VAL_TYPE, BaseCache
@@ -828,12 +829,12 @@ class LangCacheSemanticCache(BaseCache):
             prompt=prompt,
             num_results=1,
             distance_threshold=self._distance_threshold,
-            attributes={"llm_string": llm_string},
+            attributes={"llm_string": quote(llm_string)},
         )
-        return self._process_lookup_results(results, llm_string)
+        return self._process_lookup_results(results)
 
     def _process_lookup_results(
-        self, results: List[Dict[str, Any]], llm_string: str
+        self, results: List[Dict[str, Any]]
     ) -> Optional[RETURN_VAL_TYPE]:
         # The underlying LangCache service already filters by the (encoded)
         # llm_string attribute, and we always request at most one result.
@@ -855,7 +856,7 @@ class LangCacheSemanticCache(BaseCache):
         self.cache.store(
             prompt=prompt,
             response=serialized_response,
-            metadata={"llm_string": llm_string},
+            metadata={"llm_string": quote(llm_string)},
             ttl=self.ttl,
         )
 
@@ -872,9 +873,9 @@ class LangCacheSemanticCache(BaseCache):
             prompt=prompt,
             num_results=1,
             distance_threshold=self._distance_threshold,
-            attributes={"llm_string": llm_string},
+            attributes={"llm_string": quote(llm_string)},
         )
-        return self._process_lookup_results(results, llm_string)
+        return self._process_lookup_results(results)
 
     async def aupdate(
         self, prompt: str, llm_string: str, return_val: RETURN_VAL_TYPE
@@ -884,7 +885,7 @@ class LangCacheSemanticCache(BaseCache):
         await self.cache.astore(
             prompt=prompt,
             response=serialized_response,
-            metadata={"llm_string": llm_string},
+            metadata={"llm_string": quote(llm_string)},
             ttl=self.ttl,
         )
 
