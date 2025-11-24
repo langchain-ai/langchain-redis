@@ -196,8 +196,7 @@ class RedisCache(BaseCache):
                 its parameters.
 
         Returns:
-            Optional[RETURN_VAL_TYPE]: The cached result if found, or `None` if not
-                present in the cache.
+            The cached result if found, or `None` if not present in the cache.
 
                 The result is typically a list containing a single `Generation` object.
 
@@ -447,10 +446,10 @@ class RedisSemanticCache(BaseCache):
                 and its parameters.
 
         Returns:
-            Optional[RETURN_VAL_TYPE]: The cached result if a semantically similar
-                prompt is found, or `None` if no suitable match is present in the cache.
+            The cached result if a semantically similar prompt is found, or `None` if no
+                suitable match is present in the cache.
 
-                The result is typically a list containing a single Generation object.
+                The result is typically a list containing a single `Generation` object.
 
         Example:
             ```python
@@ -671,7 +670,6 @@ class RedisSemanticCache(BaseCache):
 
         Returns:
             On a cache miss, return `None`. On a cache hit, return the cached value.
-
                 The cached value is a list of `Generation` objects (or subclasses).
         """
         vector = await self.cache._avectorize_prompt(prompt)
@@ -698,11 +696,11 @@ class RedisSemanticCache(BaseCache):
         The key should match that of the look up method.
 
         Args:
-            prompt: a string representation of the prompt.
+            prompt: String representation of the prompt.
 
                 In the case of a Chat model, the prompt is a non-trivial
                 serialization of the prompt into the language model.
-            llm_string: A string representation of the LLM configuration.
+            llm_string: String representation of the LLM configuration.
 
                 This is used to capture the invocation parameters of the LLM
                 (e.g., model name, temperature, stop tokens, max tokens, etc.).

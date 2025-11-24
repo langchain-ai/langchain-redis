@@ -421,7 +421,10 @@ class RedisVectorStore(VectorStore):
             texts: Iterable of strings to add to the vector store.
             metadatas: Optional list of metadata dicts associated with the texts.
             keys: Optional list of keys to associate with the documents.
-            **kwargs: Additional keyword arguments:
+            **kwargs: Additional keyword arguments.
+
+                Common kwargs include:
+
                 - ids: Optional list of ids to associate with the documents.
                 - refresh_indices: Whether to refresh the Redis indices
                 after adding the texts. Defaults to `True`.
@@ -569,10 +572,12 @@ class RedisVectorStore(VectorStore):
             **kwargs: Additional keyword arguments to pass to `RedisConfig` if config is
                 not provided.
 
-                Commonly used kwargs include:
+                Common kwargs include:
+
                 - `index_name`: Name of the Redis index to create.
                 - `redis_url`: URL of the Redis instance to connect to.
                 - `distance_metric`: Distance metric to use for similarity search.
+
                     Default is `'COSINE'`.
                 - `indexing_algorithm`: Indexing algorithm to use. Default is `'FLAT'`.
 
@@ -656,6 +661,7 @@ class RedisVectorStore(VectorStore):
                 is not provided.
 
                 Common kwargs include:
+
                 - `index_name`: Name of the Redis index to create.
                 - `redis_url`: URL of the Redis instance to connect to.
                 - `distance_metric`: Distance metric to use for similarity search.
@@ -743,6 +749,7 @@ class RedisVectorStore(VectorStore):
             **kwargs: Additional keyword arguments to pass to `RedisConfig`.
 
                 Common kwargs include:
+
                 - `redis_url`: URL of the Redis instance to connect to.
                 - `redis_client`: Pre-existing Redis client to use.
                 - `vector_query_field`: Name of the field containing the vector
@@ -920,6 +927,7 @@ class RedisVectorStore(VectorStore):
             **kwargs: Other keyword arguments.
 
                 Common kwargs include:
+
                 - `return_metadata`: Whether to return metadata. Defaults to `True`.
                 - `distance_threshold`: Optional distance threshold for filtering
                     results.
@@ -1188,6 +1196,7 @@ class RedisVectorStore(VectorStore):
             **kwargs: Other keyword arguments.
 
                 Common kwargs include:
+
                 - `with_vectors`: Whether to return document vectors.
 
                     Defaults to `False`.
@@ -1297,6 +1306,7 @@ class RedisVectorStore(VectorStore):
             **kwargs: Other keyword arguments to pass to the search function:
 
                 Common kwargs include:
+
                 - `custom_query`: Optional callable that can be used
                     to customize the query.
                 - `doc_builder`: Optional callable to customize `Document` creation.
@@ -1330,7 +1340,7 @@ class RedisVectorStore(VectorStore):
                 print(f"Score: {score}")
                 print(f"Content: {doc.page_content}")
                 print(f"Metadata: {doc.metadata}\n")
-                ```
+            ```
 
         Note:
             - The method returns scores along with documents. Lower scores indicate
@@ -1458,7 +1468,7 @@ class RedisVectorStore(VectorStore):
             ids: List of ids to retrieve.
 
         Returns:
-            List of Documents.
+            List of `Document` objects.
 
         !!! version-added "Added in `langchain-redis` 0.1.2"
         """

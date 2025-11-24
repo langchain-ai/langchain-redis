@@ -145,7 +145,7 @@ class RedisConfig(BaseModel):
 
     @classmethod
     def from_kwargs(cls: Type["RedisConfig"], **kwargs: Any) -> "RedisConfig":
-        """Create a RedisConfig object with default values, overwritten by provided
+        """Create a `RedisConfig` object with default values, overwritten by provided
         kwargs.
 
         This class method allows for flexible creation of a `RedisConfig` object,
@@ -158,6 +158,7 @@ class RedisConfig(BaseModel):
                 override default values.
 
                 Common kwargs include:
+
                 - `index_name` (str): Name of the index in Redis.
                 - `redis_url` (str): URL of the Redis instance.
                 - `distance_metric` (str): Distance metric for vector similarity.
@@ -192,9 +193,9 @@ class RedisConfig(BaseModel):
 
     @classmethod
     def from_schema(cls, schema: IndexSchema, **kwargs: Any) -> "RedisConfig":
-        """Create a RedisConfig object from an `IndexSchema`.
+        """Create a `RedisConfig` object from an `IndexSchema`.
 
-        This class method creates a RedisConfig instance using the provided
+        This class method creates a `RedisConfig` instance using the provided
         `IndexSchema`, which defines the structure of the Redis index.
 
         Args:
@@ -204,6 +205,7 @@ class RedisConfig(BaseModel):
                 schema-derived settings.
 
                 Common kwargs include:
+
                 - `redis_url` (str): URL of the Redis instance.
                 - `distance_metric` (str): Distance metric for vector similarity.
                 - `embedding_dimensions` (int): Dimensionality of embedding vectors.
@@ -275,6 +277,7 @@ class RedisConfig(BaseModel):
                 schema-derived settings.
 
                 Common kwargs include:
+
                 - `redis_url` (str): URL of the Redis instance.
                 - `distance_metric` (str): Distance metric for vector similarity.
                 - `embedding_dimensions` (int): Dimensionality of embedding vectors.
@@ -336,6 +339,7 @@ class RedisConfig(BaseModel):
                 instance.
 
                 Common kwargs include:
+
                 - `index_name` (str): Name of the index in Redis.
                 - `redis_url` (str): URL of the Redis instance.
                 - `distance_metric` (str): Distance metric for vector similarity.
@@ -444,7 +448,7 @@ class RedisConfig(BaseModel):
         return cls(index_name=index_name)
 
     def to_index_schema(self) -> IndexSchema:
-        """Convert the RedisConfig to an `IndexSchema`.
+        """Convert the `RedisConfig` to an `IndexSchema`.
 
         This method creates an `IndexSchema` object based on the current configuration.
         It's useful for generating a schema that can be used to create or update

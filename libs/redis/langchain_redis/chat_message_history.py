@@ -56,10 +56,13 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         ttl (Optional[int], optional): Time-to-live for entries in seconds.
         index_name (str, optional): Name of the Redis search index.
         redis_client (Optional[Redis], optional): Existing Redis client instance.
+
             If provided, `redis_url` is ignored.
         overwrite_index (bool, optional): Whether to overwrite an existing index
-            if it already exists. If `False` and an index exists with a different
-            `key_prefix`, a warning will be logged.
+            if it already exists.
+
+            If `False` and an index exists with a different `key_prefix`, a warning will
+            be logged.
         **kwargs: Additional keyword arguments to pass to the Redis client.
 
     Raises:
@@ -216,7 +219,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         """Retrieve all messages for the current session, sorted by timestamp.
 
         Returns:
-            List[BaseMessage]: A list of messages in chronological order.
+            A list of messages in chronological order.
 
         Raises:
             ResponseError: If Redis connection fails or RedisVL operations fail.
@@ -258,9 +261,10 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         using RedisVL's document loading capabilities.
 
         Args:
-            message (BaseMessage): The message to add to the history. This should be an
-                instance of a class derived from `BaseMessage`, such as `HumanMessage`,
-                `AIMessage`, or `SystemMessage`.
+            message (BaseMessage): The message to add to the history.
+
+                This should be an instance of a class derived from `BaseMessage`, such
+                as `HumanMessage`, `AIMessage`, or `SystemMessage`.
 
         Raises:
             ResponseError: If Redis connection fails or RedisVL operations fail.
@@ -408,8 +412,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
             limit (int, optional): The maximum number of results to return.
 
         Returns:
-            List[Dict[str, Any]]: A list of dictionaries, each representing a
-                matching message.
+            A list of dictionaries, each representing a matching message.
 
                 Each dictionary contains the message content and metadata.
 
