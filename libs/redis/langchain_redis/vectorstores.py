@@ -427,11 +427,14 @@ class RedisVectorStore(VectorStore):
 
                 - ids: Optional list of ids to associate with the documents.
                 - refresh_indices: Whether to refresh the Redis indices
-                after adding the texts. Defaults to `True`.
+                    after adding the texts.
+                    - Defaults to `True`.
                 - create_index_if_not_exists: Whether to create the Redis
-                index if it doesn't already exist. Defaults to `True`.
+                index if it doesn't already exist.
+                    - Defaults to `True`.
                 - batch_size: Optional. Number of texts to add to the
-                index at a time. Defaults to `1000`.
+                index at a time.
+                    - Defaults to `1000`.
 
         Returns:
             List of ids from adding the texts into the vector store.
@@ -577,9 +580,9 @@ class RedisVectorStore(VectorStore):
                 - `index_name`: Name of the Redis index to create.
                 - `redis_url`: URL of the Redis instance to connect to.
                 - `distance_metric`: Distance metric to use for similarity search.
-
-                    Default is `'COSINE'`.
-                - `indexing_algorithm`: Indexing algorithm to use. Default is `'FLAT'`.
+                    - Default is `'COSINE'`.
+                - `indexing_algorithm`: Indexing algorithm to use.
+                    - Default is `'FLAT'`.
 
         Returns:
             RedisVectorStore: A new `RedisVectorStore` instance with the texts added.
@@ -665,11 +668,9 @@ class RedisVectorStore(VectorStore):
                 - `index_name`: Name of the Redis index to create.
                 - `redis_url`: URL of the Redis instance to connect to.
                 - `distance_metric`: Distance metric to use for similarity search.
-
-                    Default is `'COSINE'`.
+                    - Default is `'COSINE'`.
                 - indexing_algorithm: Indexing algorithm to use.
-
-                    Default is `'FLAT'`.
+                    - Default is `'FLAT'`.
 
         Returns:
             RedisVectorStore: A new `RedisVectorStore` instance with the documents
@@ -928,7 +929,8 @@ class RedisVectorStore(VectorStore):
 
                 Common kwargs include:
 
-                - `return_metadata`: Whether to return metadata. Defaults to `True`.
+                - `return_metadata`: Whether to return metadata.
+                    - Defaults to `True`.
                 - `distance_threshold`: Optional distance threshold for filtering
                     results.
                 - `return_all`: Whether to return all data in the Hash/JSON including
@@ -1198,12 +1200,11 @@ class RedisVectorStore(VectorStore):
                 Common kwargs include:
 
                 - `with_vectors`: Whether to return document vectors.
-
-                    Defaults to `False`.
+                    - Defaults to `False`.
                 - `return_metadata`: Whether to return metadata.
-
-                    Defaults to `True`.
-                - distance_threshold: Optional distance threshold for filtering results.
+                    - Defaults to `True`.
+                - `distance_threshold`: Optional distance threshold for filtering
+                    results.
 
         Returns:
             List of tuples of `Document` objects most similar to the query vector,
@@ -1303,7 +1304,7 @@ class RedisVectorStore(VectorStore):
             k: Number of `Document` objects to return.
             filter: Optional `filter` expression to apply to the query.
             sort_by: Optional `sort_by` expression to apply to the query.
-            **kwargs: Other keyword arguments to pass to the search function:
+            **kwargs: Other keyword arguments to pass to the search function.
 
                 Common kwargs include:
 
@@ -1314,7 +1315,8 @@ class RedisVectorStore(VectorStore):
                 - `distance_threshold`: Optional distance threshold for filtering
                     results.
                 - `return_all`: Whether to return all data in the Hash/JSON including
-                    non-indexed fields. Defaults to `False`.
+                    non-indexed fields.
+                    - Defaults to `False`.
 
         Returns:
             List of tuples of `(Document, score)` most similar to the query.
