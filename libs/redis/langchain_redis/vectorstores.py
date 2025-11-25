@@ -425,14 +425,14 @@ class RedisVectorStore(VectorStore):
 
                 Common kwargs include:
 
-                - ids: Optional list of ids to associate with the documents.
-                - refresh_indices: Whether to refresh the Redis indices
+                - `ids`: Optional list of ids to associate with the documents.
+                - `refresh_indices`: Whether to refresh the Redis indices
                     after adding the texts.
                     - Defaults to `True`.
-                - create_index_if_not_exists: Whether to create the Redis
+                - `create_index_if_not_exists`: Whether to create the Redis
                 index if it doesn't already exist.
                     - Defaults to `True`.
-                - batch_size: Optional. Number of texts to add to the
+                - `batch_size`: Optional. Number of texts to add to the
                 index at a time.
                     - Defaults to `1000`.
 
@@ -1297,7 +1297,7 @@ class RedisVectorStore(VectorStore):
         sort_by: Optional[str] = None,
         **kwargs: Any,
     ) -> Sequence[Any]:
-        """Return documents most similar to query string, along with scores.
+        r"""Return documents most similar to query string, along with scores.
 
         Args:
             query: Text to look up documents similar to.
@@ -1311,7 +1311,8 @@ class RedisVectorStore(VectorStore):
                 - `custom_query`: Optional callable that can be used
                     to customize the query.
                 - `doc_builder`: Optional callable to customize `Document` creation.
-                - `return_metadata`: Whether to return metadata. Defaults to `True`.
+                - `return_metadata`: Whether to return metadata.
+                    - Defaults to `True`.
                 - `distance_threshold`: Optional distance threshold for filtering
                     results.
                 - `return_all`: Whether to return all data in the Hash/JSON including

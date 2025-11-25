@@ -374,7 +374,7 @@ class RedisConfig(BaseModel):
             - The metadata_schema defines additional fields beyond the default content
                 and embedding fields.
             - Common metadata field types include `'text'`, `'numeric'`, and `'tag'`.
-            - For 'tag' fields, you can specify a custom separator using the
+            - For `'tag'` fields, you can specify a custom separator using the
                 `'separator'` key.
             - This method is useful when you need to index and search on specific
                 metadata attributes.
