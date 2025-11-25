@@ -21,6 +21,11 @@ def get_min_version(version: str) -> str:
         assert parse_version(_min) < parse_version(_max)
         return _min
 
+    # case >=x.x.x (without upper bound)
+    _match = re.match(r"^>=(\d+(?:\.\d+){0,2})$", version)
+    if _match:
+        return _match.group(1)
+
     # case x.x.x
     _match = re.match(r"^(\d+(?:\.\d+){0,2})$", version)
     if _match:
