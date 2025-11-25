@@ -122,7 +122,7 @@ class RedisCache(BaseCache):
         redis_url (str): The URL of the Redis instance to connect to.
         ttl (Optional[int]): Time-to-live for cache entries in seconds.
         prefix (Optional[str]): Prefix for all keys stored in Redis.
-        redis (Optional[Redis]): An existing Redis client instance.
+        redis_client (Optional[Redis]): An existing Redis client instance.
 
             If provided, `redis_url` is ignored.
 
@@ -350,7 +350,7 @@ class RedisSemanticCache(BaseCache):
         prefix (Optional[str]): Prefix for all keys stored in Redis.
 
             Defaults to `'llmcache'`.
-        redis (Optional[Redis]): An existing Redis client instance.
+        redis_client (Optional[Redis]): An existing Redis client instance.
 
             If provided, `redis_url` is ignored.
 
