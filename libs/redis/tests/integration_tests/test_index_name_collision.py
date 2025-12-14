@@ -1,9 +1,13 @@
-"""Test for Issue #31: Search results from different indexes if names are similar."""
+"""Test for Issue #31: Search results from different indexes if names are similar.
+
+Also includes tests for Issue #88: _index_name field handling with custom schemas.
+"""
 
 import os
 
 import pytest
 from langchain_core.documents import Document
+from redisvl.schema import IndexSchema  # type: ignore
 
 from langchain_redis import RedisVectorStore
 from tests.integration_tests.embed_patch import get_embeddings_for_tests
@@ -165,3 +169,127 @@ def test_index_namespace_isolation(redis_url: str) -> None:
     # Clean up
     vector_store1.index.delete(drop=True)
     vector_store2.index.delete(drop=True)
+
+
+def test_custom_schema_without_index_name_field(redis_url: str) -> None:
+    """Test that custom schema without _index_name field still works correctly.
+
+    This reproduces issue #88 where documents added with a custom schema
+    that doesn't include the _index_name field fail to be retrieved because
+    the code tried to populate and filter by _index_name even when it wasn't
+    in the schema.
+    """
+    # Create a custom schema without _index_name field
+    suffix = os.urandom(4).hex()
+    index_name = f"test_custom_schema_{suffix}"
+
+    schema = IndexSchema.from_dict(
+        {
+            "index": {
+                "name": index_name,
+                "prefix": index_name,
+                "storage_type": "hash",
+            },
+            "fields": [
+                {"name": "text", "type": "text"},
+                {
+                    "name": "embedding",
+                    "type": "vector",
+                    "attrs": {
+                        "dims": 1536,
+                        "distance_metric": "COSINE",
+                        "algorithm": "FLAT",
+                        "datatype": "FLOAT32",
+                    },
+                },
+            ],
+        }
+    )
+
+    embeddings = get_embeddings_for_tests()
+
+    # Create vector store with custom schema
+    vector_store = RedisVectorStore(
+        embeddings=embeddings,
+        index_schema=schema,
+        redis_url=redis_url,
+    )
+
+    # Add documents
+    docs = [
+        Document(page_content="Test document 1", metadata={"category": "test"}),
+        Document(page_content="Test document 2", metadata={"category": "test"}),
+    ]
+    vector_store.add_documents(docs)
+
+    # Try to search - this should work even without _index_name field
+    results = vector_store.similarity_search("Test", k=2)
+
+    # Should find both documents
+    assert len(results) == 2
+    assert all("Test document" in doc.page_content for doc in results)
+
+    # Clean up
+    vector_store.index.delete(drop=True)
+
+
+def test_custom_schema_with_index_name_field(redis_url: str) -> None:
+    """Test that custom schema WITH _index_name field works correctly.
+
+    This verifies that when users explicitly include _index_name in their
+    custom schema, it gets populated and used for filtering as expected.
+    """
+    # Create a custom schema WITH _index_name field
+    suffix = os.urandom(4).hex()
+    index_name = f"test_custom_schema_with_field_{suffix}"
+
+    schema = IndexSchema.from_dict(
+        {
+            "index": {
+                "name": index_name,
+                "prefix": index_name,
+                "storage_type": "hash",
+            },
+            "fields": [
+                {"name": "text", "type": "text"},
+                {
+                    "name": "embedding",
+                    "type": "vector",
+                    "attrs": {
+                        "dims": 1536,
+                        "distance_metric": "COSINE",
+                        "algorithm": "FLAT",
+                        "datatype": "FLOAT32",
+                    },
+                },
+                {"name": "_index_name", "type": "text"},
+                {"name": "_metadata_json", "type": "text"},
+            ],
+        }
+    )
+
+    embeddings = get_embeddings_for_tests()
+
+    # Create vector store with custom schema
+    vector_store = RedisVectorStore(
+        embeddings=embeddings,
+        index_schema=schema,
+        redis_url=redis_url,
+    )
+
+    # Add documents
+    docs = [
+        Document(page_content="Test document A", metadata={"category": "test"}),
+        Document(page_content="Test document B", metadata={"category": "test"}),
+    ]
+    vector_store.add_documents(docs)
+
+    # Search should work
+    results = vector_store.similarity_search("Test", k=2)
+
+    # Should find both documents
+    assert len(results) == 2
+    assert all("Test document" in doc.page_content for doc in results)
+
+    # Clean up
+    vector_store.index.delete(drop=True)
