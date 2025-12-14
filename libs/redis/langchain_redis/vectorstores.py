@@ -505,6 +505,15 @@ class RedisVectorStore(VectorStore):
         # Generate embeddings for all texts
         document_embeddings = self._embeddings.embed_documents(texts_list)
 
+        # Check if schema has _index_name and _metadata_json fields
+        has_index_name_field = any(
+            field.name == "_index_name" for field in self._index.schema.fields.values()
+        )
+        has_metadata_json_field = any(
+            field.name == "_metadata_json"
+            for field in self._index.schema.fields.values()
+        )
+
         # Build records to load to SearchIndex
         records = []
         for text, embedding, metadata in zip(
@@ -512,9 +521,6 @@ class RedisVectorStore(VectorStore):
             document_embeddings,
             metadatas or [{}] * len(texts_list),
         ):
-            # Store complete metadata as JSON for exact retrieval later
-            metadata_json = json.dumps(metadata)
-
             record = {
                 self.config.content_field: text,
                 self.config.embedding_field: (
@@ -522,11 +528,16 @@ class RedisVectorStore(VectorStore):
                     if self.config.storage_type == StorageType.JSON.value
                     else array_to_buffer(embedding, dtype=self.config.vector_datatype)
                 ),
-                # Add index name as internal metadata to enable filtering
-                "_index_name": self.config.index_name,
-                # Store metadata as JSON to ensure exact retrieval
-                "_metadata_json": metadata_json,
             }
+
+            # Only add _index_name if the field exists in the schema
+            if has_index_name_field:
+                record["_index_name"] = self.config.index_name
+
+            # Only add _metadata_json if the field exists in the schema
+            if has_metadata_json_field:
+                metadata_json = json.dumps(metadata)
+                record["_metadata_json"] = metadata_json
             for field_name, field_value in metadata.items():
                 # Skip empty values
                 if field_value is None:
