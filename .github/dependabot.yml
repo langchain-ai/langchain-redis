@@ -1,0 +1,58 @@
+version: 2
+updates:
+  # Python dependencies in /libs/redis (Poetry)
+  - package-ecosystem: "pip"
+    directory: "/libs/redis"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+
+  # Docker base images
+  - package-ecosystem: "docker"
+    directory: "/libs/redis/docs"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
