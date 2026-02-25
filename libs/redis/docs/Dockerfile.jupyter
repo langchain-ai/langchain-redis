@@ -1,4 +1,4 @@
-FROM python:3.11
+FROM python:3.14
 
 # Set up a non-root user
 RUN useradd -m jupyter
