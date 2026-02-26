@@ -721,23 +721,24 @@ tiktoken = ">=0.7.0,<1.0.0"
 
 [[package]]
 name = "langsmith"
-version = "0.4.46"
+version = "0.6.3"
 description = "Client library to connect to the LangSmith Observability and Evaluation Platform."
 optional = false
 python-versions = ">=3.10"
 groups = ["main", "dev", "test", "test-integration", "typing"]
 files = [
-    {file = "langsmith-0.4.46-py3-none-any.whl", hash = "sha256:783c16ef108c42a16ec2d8bc68067b969f3652e2fe82ca1289007baf947e4500"},
-    {file = "langsmith-0.4.46.tar.gz", hash = "sha256:0b73d47ebd0a27ea10edec1717f36f6a865cb9ffc7f4e6a419e2cea1ab3c5b1e"},
+    {file = "langsmith-0.6.3-py3-none-any.whl", hash = "sha256:44fdf8084165513e6bede9dda715e7b460b1b3f57ac69f2ca3f03afa911233ec"},
+    {file = "langsmith-0.6.3.tar.gz", hash = "sha256:33246769c0bb24e2c17e0c34bb21931084437613cd37faf83bd0978a297b826f"},
 ]
 
 [package.dependencies]
 httpx = ">=0.23.0,<1"
 orjson = {version = ">=3.9.14", markers = "platform_python_implementation != \"PyPy\""}
 packaging = ">=23.2"
-pydantic = ">=1,<3"
+pydantic = ">=2,<3"
 requests = ">=2.0.0"
 requests-toolbelt = ">=1.0.0"
+uuid-utils = ">=0.12.0,<1.0"
 zstandard = ">=0.23.0"
 
 [package.extras]
