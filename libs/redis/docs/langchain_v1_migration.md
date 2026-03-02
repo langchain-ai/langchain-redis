@@ -92,7 +92,7 @@ langchain-redis>=0.3.0
 langchain-core>=1.0
 ```
 
-### Step 4: Test Your Application
+### Step 3: Test Your Application
 
 ```bash
 # Run your test suite
