@@ -179,15 +179,15 @@ def test_large_number_of_messages(chat_history: RedisChatMessageHistory) -> None
     for i, message in enumerate(retrieved_messages):
         message_content = message.content
         expected_content = f"Message {i}"
-        assert (
-            message_content == expected_content
-        ), f"Message at index {i} has content '{message_content}', \
+        assert message_content == expected_content, (
+            f"Message at index {i} has content '{message_content}', \
             expected '{expected_content}'"
+        )
 
-    assert (
-        retrieved_messages[-1].content == f"Message {large_number - 1}"
-    ), f"Last message content is '{retrieved_messages[-1].content}', \
+    assert retrieved_messages[-1].content == f"Message {large_number - 1}", (
+        f"Last message content is '{retrieved_messages[-1].content}', \
         expected 'Message {large_number - 1}'"
+    )
 
 
 def test_empty_messages(chat_history: RedisChatMessageHistory) -> None:
@@ -221,22 +221,22 @@ def test_json_structure(
 
     # Check the content of the data field
     assert "content" in json_data["data"], "content should be present in the data field"
-    assert (
-        json_data["data"]["content"] == "Test message"
-    ), "Content should match the added message"
-    assert (
-        json_data["data"]["type"] == "human"
-    ), "Type should be 'human' for a HumanMessage"
+    assert json_data["data"]["content"] == "Test message", (
+        "Content should match the added message"
+    )
+    assert json_data["data"]["type"] == "human", (
+        "Type should be 'human' for a HumanMessage"
+    )
 
     # Check the type at the root level
-    assert (
-        json_data["type"] == "human"
-    ), "Type at root level should be 'human' for a HumanMessage"
+    assert json_data["type"] == "human", (
+        "Type at root level should be 'human' for a HumanMessage"
+    )
 
     # Check the session_id
-    assert (
-        json_data["session_id"] == chat_history.session_id
-    ), "session_id should match the chat history session_id"
+    assert json_data["session_id"] == chat_history.session_id, (
+        "session_id should match the chat history session_id"
+    )
 
 
 def test_search_non_existent_message(chat_history: RedisChatMessageHistory) -> None:

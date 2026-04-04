@@ -192,9 +192,9 @@ class TestRedisCache:
 
         assert result is not None, "Lookup result should not be None"
         assert len(result) == 1, f"Expected 1 result, got {len(result)}"
-        assert (
-            result[0].text == "test response"
-        ), f"Expected 'test response', got '{result[0].text}'"
+        assert result[0].text == "test response", (
+            f"Expected 'test response', got '{result[0].text}'"
+        )
 
     def test_clear(self, redis_cache: RedisCache) -> None:
         prompt1, prompt2 = "test prompt 1", "test prompt 2"
