@@ -31,7 +31,7 @@ langcache = ["langcache"]
 optional = true
 
 [tool.poetry.group.test.dependencies]
-pytest = "^7.4.3"
+pytest = ">=7.4.3,<9.0.0"
 pytest-asyncio = "^0.23.2"
 pytest-socket = "^0.7.0"
 syrupy = "^4.6.1"
