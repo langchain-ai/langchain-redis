@@ -8,9 +8,10 @@ from langchain_redis import RedisVectorStore
 def test_add_texts_with_ids_in_kwargs() -> None:
     """Test that ids parameter in kwargs is used when keys is None."""
     # Create the complete patch setup
-    with patch("langchain_redis.vectorstores.RedisConfig") as mock_config, patch(
-        "langchain_redis.vectorstores.SearchIndex"
-    ) as mock_search_index_class:
+    with (
+        patch("langchain_redis.vectorstores.RedisConfig") as mock_config,
+        patch("langchain_redis.vectorstores.SearchIndex") as mock_search_index_class,
+    ):
         # Setup mock embeddings
         mock_embeddings = MagicMock()
         mock_embeddings.embed_query.return_value = [0.1, 0.2, 0.3]
@@ -64,9 +65,10 @@ def test_add_texts_with_ids_in_kwargs() -> None:
 def test_add_texts_with_both_keys_and_ids() -> None:
     """Test that keys parameter takes precedence over ids in kwargs."""
     # Create the complete patch setup
-    with patch("langchain_redis.vectorstores.RedisConfig") as mock_config, patch(
-        "langchain_redis.vectorstores.SearchIndex"
-    ) as mock_search_index_class:
+    with (
+        patch("langchain_redis.vectorstores.RedisConfig") as mock_config,
+        patch("langchain_redis.vectorstores.SearchIndex") as mock_search_index_class,
+    ):
         # Setup mock embeddings
         mock_embeddings = MagicMock()
         mock_embeddings.embed_query.return_value = [0.1, 0.2, 0.3]

@@ -47,9 +47,9 @@ def test_add_texts_with_ids_in_kwargs(redis_url: str) -> None:
 
     for id_val in ids:
         expected_key = f"{key_prefix}:{id_val}"
-        assert redis_client.exists(
-            expected_key
-        ), f"Key {expected_key} not found in Redis"
+        assert redis_client.exists(expected_key), (
+            f"Key {expected_key} not found in Redis"
+        )
 
     # Clean up after test
     vector_store.index.delete(drop=True)
@@ -93,17 +93,17 @@ def test_add_texts_with_both_keys_and_ids(redis_url: str) -> None:
 
     for key in explicit_keys:
         expected_key = f"{key_prefix}:{key}"
-        assert redis_client.exists(
-            expected_key
-        ), f"Key {expected_key} not found in Redis"
+        assert redis_client.exists(expected_key), (
+            f"Key {expected_key} not found in Redis"
+        )
 
     # Verify ids from kwargs were NOT used (keys takes precedence)
     for id_val in ids_in_kwargs:
         unexpected_key = f"{key_prefix}:{id_val}"
         if unexpected_key not in [f"{key_prefix}:{key}" for key in explicit_keys]:
-            assert not redis_client.exists(
-                unexpected_key
-            ), f"Key {unexpected_key} found in Redis but should not be present"
+            assert not redis_client.exists(unexpected_key), (
+                f"Key {unexpected_key} found in Redis but should not be present"
+            )
 
     # Clean up after test
     vector_store.index.delete(drop=True)

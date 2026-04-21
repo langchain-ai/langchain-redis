@@ -10,8 +10,9 @@ class TestRedisChatMessageHistoryMinimal:
 
     def test_session_id_validation_empty_string(self) -> None:
         """Test that empty session_id raises ValueError."""
-        with patch("langchain_redis.chat_message_history.SearchIndex"), patch(
-            "redis.Redis.from_url"
+        with (
+            patch("langchain_redis.chat_message_history.SearchIndex"),
+            patch("redis.Redis.from_url"),
         ):
             with pytest.raises(
                 ValueError, match="session_id must be a non-empty, valid string"
@@ -20,8 +21,9 @@ class TestRedisChatMessageHistoryMinimal:
 
     def test_session_id_validation_none(self) -> None:
         """Test that None session_id raises ValueError."""
-        with patch("langchain_redis.chat_message_history.SearchIndex"), patch(
-            "redis.Redis.from_url"
+        with (
+            patch("langchain_redis.chat_message_history.SearchIndex"),
+            patch("redis.Redis.from_url"),
         ):
             with pytest.raises(
                 ValueError, match="session_id must be a non-empty, valid string"
@@ -30,16 +32,18 @@ class TestRedisChatMessageHistoryMinimal:
 
     def test_id_property_returns_session_id(self) -> None:
         """Test that id property returns session_id."""
-        with patch("langchain_redis.chat_message_history.SearchIndex"), patch(
-            "redis.Redis.from_url"
+        with (
+            patch("langchain_redis.chat_message_history.SearchIndex"),
+            patch("redis.Redis.from_url"),
         ):
             history = RedisChatMessageHistory(session_id="test_session")
             assert history.id == "test_session"
 
     def test_message_key_generation_with_provided_id(self) -> None:
         """Test message key generation with provided message_id."""
-        with patch("langchain_redis.chat_message_history.SearchIndex"), patch(
-            "redis.Redis.from_url"
+        with (
+            patch("langchain_redis.chat_message_history.SearchIndex"),
+            patch("redis.Redis.from_url"),
         ):
             history = RedisChatMessageHistory(session_id="test_session")
             key = history._message_key("msg123")
@@ -47,8 +51,9 @@ class TestRedisChatMessageHistoryMinimal:
 
     def test_message_key_generation_with_custom_prefix(self) -> None:
         """Test message key generation with custom key_prefix."""
-        with patch("langchain_redis.chat_message_history.SearchIndex"), patch(
-            "redis.Redis.from_url"
+        with (
+            patch("langchain_redis.chat_message_history.SearchIndex"),
+            patch("redis.Redis.from_url"),
         ):
             history = RedisChatMessageHistory(
                 session_id="test_session", key_prefix="custom:"
@@ -58,8 +63,9 @@ class TestRedisChatMessageHistoryMinimal:
 
     def test_message_key_generation_auto_id(self) -> None:
         """Test message key generation with auto-generated message_id."""
-        with patch("langchain_redis.chat_message_history.SearchIndex"), patch(
-            "redis.Redis.from_url"
+        with (
+            patch("langchain_redis.chat_message_history.SearchIndex"),
+            patch("redis.Redis.from_url"),
         ):
             history = RedisChatMessageHistory(session_id="test_session")
             key = history._message_key()
@@ -73,8 +79,9 @@ class TestRedisChatMessageHistoryMinimal:
 
     def test_search_messages_empty_query_returns_empty_list(self) -> None:
         """Test that empty search query returns empty list without Redis calls."""
-        with patch("langchain_redis.chat_message_history.SearchIndex"), patch(
-            "redis.Redis.from_url"
+        with (
+            patch("langchain_redis.chat_message_history.SearchIndex"),
+            patch("redis.Redis.from_url"),
         ):
             history = RedisChatMessageHistory(session_id="test_session")
 
@@ -84,8 +91,9 @@ class TestRedisChatMessageHistoryMinimal:
 
     def test_default_parameters(self) -> None:
         """Test that default parameters are set correctly."""
-        with patch("langchain_redis.chat_message_history.SearchIndex"), patch(
-            "redis.Redis.from_url"
+        with (
+            patch("langchain_redis.chat_message_history.SearchIndex"),
+            patch("redis.Redis.from_url"),
         ):
             history = RedisChatMessageHistory(session_id="test_session")
 
@@ -96,8 +104,9 @@ class TestRedisChatMessageHistoryMinimal:
 
     def test_custom_parameters(self) -> None:
         """Test initialization with custom parameters."""
-        with patch("langchain_redis.chat_message_history.SearchIndex"), patch(
-            "redis.Redis.from_url"
+        with (
+            patch("langchain_redis.chat_message_history.SearchIndex"),
+            patch("redis.Redis.from_url"),
         ):
             history = RedisChatMessageHistory(
                 session_id="custom_session",

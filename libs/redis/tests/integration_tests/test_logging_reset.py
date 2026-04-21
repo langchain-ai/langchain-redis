@@ -107,12 +107,12 @@ def test_logging_reset() -> None:
     output = console_output.getvalue()
 
     # The actual test - verify that debug messages are still working
-    assert (
-        "DEBUG:test_app_logger:Debug message before import" in output
-    ), "First debug message not logged"
-    assert (
-        "DEBUG:test_app_logger:Debug message after import" in output
-    ), "Second debug message not logged"
+    assert "DEBUG:test_app_logger:Debug message before import" in output, (
+        "First debug message not logged"
+    )
+    assert "DEBUG:test_app_logger:Debug message after import" in output, (
+        "Second debug message not logged"
+    )
 
     # Directly call the function that creates the push_response logger
     from redis.utils import _set_info_logger
@@ -121,23 +121,23 @@ def test_logging_reset() -> None:
 
     # Check if push_response logger was created after direct call
     has_push_response_after_direct = "push_response" in logging.root.manager.loggerDict
-    assert (
-        has_push_response_after_direct
-    ), "The push_response logger was not created even after direct call"
+    assert has_push_response_after_direct, (
+        "The push_response logger was not created even after direct call"
+    )
 
     # Get the push_response logger and check its level
     push_response_logger = logging.getLogger("push_response")
     push_response_level = push_response_logger.level
 
     # If it was created, check that it's at INFO level
-    assert (
-        push_response_level == logging.INFO
-    ), f"Push response logger level is {push_response_level}, expected {logging.INFO}"
+    assert push_response_level == logging.INFO, (
+        f"Push response logger level is {push_response_level}, expected {logging.INFO}"
+    )
 
     # Make sure the root logger wasn't changed
-    assert (
-        before_level == after_level
-    ), f"Root logger level changed from {before_level} to {after_level}"
+    assert before_level == after_level, (
+        f"Root logger level changed from {before_level} to {after_level}"
+    )
 
     # Make sure our test logger wasn't changed
     assert test_logger_before_level == test_logger_after_level, (
@@ -148,6 +148,6 @@ def test_logging_reset() -> None:
     # The crucial part - check for debug log after setting push_response logger to INFO
     test_logger.debug("Debug message after push_response created")
     output_after = console_output.getvalue()
-    assert (
-        "Debug message after push_response created" in output_after
-    ), "Debug messages stopped working after push_response logger created"
+    assert "Debug message after push_response created" in output_after, (
+        "Debug messages stopped working after push_response logger created"
+    )
