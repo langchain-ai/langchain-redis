@@ -83,18 +83,18 @@ def test_fixed_logging_reset() -> None:
     assert "Debug message after using RedisChatMessageHistory" in output
 
     # The core test - verify that the push_response logger was not created
-    assert (
-        not has_push_response_after_import
-    ), "push_response logger was created during import"
-    assert (
-        not has_push_response_after
-    ), "push_response logger was created when using RedisChatMessageHistory"
+    assert not has_push_response_after_import, (
+        "push_response logger was created during import"
+    )
+    assert not has_push_response_after, (
+        "push_response logger was created when using RedisChatMessageHistory"
+    )
 
     # Verify that our root and test loggers' levels were not changed
     assert before_level == after_import_level, "Root logger level changed after import"
-    assert (
-        test_logger_before_level == test_logger_after_import_level
-    ), "Test logger level changed after import"
+    assert test_logger_before_level == test_logger_after_import_level, (
+        "Test logger level changed after import"
+    )
 
     # Now verify what happens if we try using Redis PubSub with our fix
     import redis
@@ -106,9 +106,9 @@ def test_fixed_logging_reset() -> None:
 
     # Check if push_response logger exists after PubSub
     has_push_response_after_pubsub = "push_response" in logging.root.manager.loggerDict
-    assert (
-        not has_push_response_after_pubsub
-    ), "push_response logger was created by PubSub"
+    assert not has_push_response_after_pubsub, (
+        "push_response logger was created by PubSub"
+    )
 
     # Directly create a PubSub without our fix
     redis.Redis.from_url(redis_url).pubsub(push_handler_func=None)
@@ -117,9 +117,9 @@ def test_fixed_logging_reset() -> None:
     has_push_response_after_pubsub_no_handler = (
         "push_response" in logging.root.manager.loggerDict
     )
-    assert (
-        has_push_response_after_pubsub_no_handler
-    ), "push_response logger was not created by PubSub with no handler"
+    assert has_push_response_after_pubsub_no_handler, (
+        "push_response logger was not created by PubSub with no handler"
+    )
 
     # Verify that debug messages still work after push_response logger was created
     test_logger.debug("Debug message after push_response logger created")
