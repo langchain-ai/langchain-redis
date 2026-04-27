@@ -32,7 +32,7 @@ optional = true
 
 [tool.poetry.group.test.dependencies]
 pytest = ">=7.4.3,<9.0.0"
-pytest-asyncio = "^0.23.2"
+pytest-asyncio = ">=0.23.2,<1.4.0"
 pytest-socket = "^0.7.0"
 syrupy = "^4.6.1"
 sentence-transformers = ">=3.0.1,<6.0.0"
