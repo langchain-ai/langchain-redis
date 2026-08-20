@@ -2200,34 +2200,37 @@ files = [
 
 [[package]]
 name = "redis"
-version = "6.4.0"
+version = "7.4.1"
 description = "Python client for Redis database and key-value store"
 optional = false
-python-versions = ">=3.9"
+python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "redis-6.4.0-py3-none-any.whl", hash = "sha256:f0544fa9604264e9464cdf4814e7d4830f74b165d52f2a330a760a88dd248b7f"},
-    {file = "redis-6.4.0.tar.gz", hash = "sha256:b01bc7282b8444e28ec36b261df5375183bb47a07eb9c603f284e89cbc5ef010"},
+    {file = "redis-7.4.1-py3-none-any.whl", hash = "sha256:1fa4647af1c5e93a2c685aa248ee44cce092691146d41390518dabe9a99839b0"},
+    {file = "redis-7.4.1.tar.gz", hash = "sha256:1a1df5067062cf7cbe677994e391f8ee0840f499d370f1a71266e0dd3aa9308e"},
 ]
 
 [package.dependencies]
 async-timeout = {version = ">=4.0.3", markers = "python_full_version < \"3.11.3\""}
 
 [package.extras]
+circuit-breaker = ["pybreaker (>=1.4.0)"]
 hiredis = ["hiredis (>=3.2.0)"]
-jwt = ["pyjwt (>=2.9.0)"]
+jwt = ["pyjwt (>=2.13.0)"]
 ocsp = ["cryptography (>=36.0.1)", "pyopenssl (>=20.0.1)", "requests (>=2.31.0)"]
+otel = ["opentelemetry-api (>=1.39.1)", "opentelemetry-exporter-otlp-proto-http (>=1.39.1)", "opentelemetry-sdk (>=1.39.1)"]
+xxhash = ["xxhash (>=3.6.0,<3.7.0)"]
 
 [[package]]
 name = "redisvl"
-version = "0.23.0"
+version = "0.26.0"
 description = "Python client library and CLI for using Redis as a vector database"
 optional = false
 python-versions = "<3.15,>=3.10"
 groups = ["main"]
 files = [
-    {file = "redisvl-0.23.0-py3-none-any.whl", hash = "sha256:7f5ddce5f0e59f67a25ba6dd3522c7bf570458eaa01f3da1df1e35cf4c3c5a51"},
-    {file = "redisvl-0.23.0.tar.gz", hash = "sha256:ba55049845321e9ac7dbf348c10ad967fc8849f4ec2a73f327419a4983d97a2c"},
+    {file = "redisvl-0.26.0-py3-none-any.whl", hash = "sha256:c3738695c4af0c46ff1ae96503f490c4e921936cbe66c5bbd61b689011a4332b"},
+    {file = "redisvl-0.26.0.tar.gz", hash = "sha256:db87fba908f33ab43b6d0dae5c9b3df59eb6b65166ee9e69b646a355a7bd86ed"},
 ]
 
 [package.dependencies]
@@ -2241,16 +2244,17 @@ redis = ">=5.0,<8.0"
 tenacity = ">=8.2.2"
 
 [package.extras]
-all = ["boto3 (>=1.36.0,<2)", "cohere (>=4.44)", "google-cloud-aiplatform (>=1.26,<2.0.0)", "langcache (>=0.11.0)", "mistralai (>=1.0.0,<2)", "ollama (>=0.5.4)", "openai (>=1.1.0)", "pillow (>=11.3.0)", "protobuf (>=5.28.0,<6.0.0)", "sentence-transformers (>=3.4.0,<4)", "sql-redis (>=0.7.1)", "urllib3 (<2.2.0)", "voyageai (>=0.2.2)"]
-bedrock = ["boto3 (>=1.36.0,<2)", "urllib3 (<2.2.0)"]
+all = ["boto3 (>=1.36.0,<2)", "cohere (>=4.44)", "google-cloud-aiplatform (>=1.26,<2.0.0)", "google-genai (>=1.0.0)", "langcache (>=0.11.0)", "mistralai (>=1.0.0,<2)", "ollama (>=0.5.4)", "openai (>=1.1.0)", "pillow (>=11.3.0)", "protobuf (>=5.28.0,<6.0.0)", "sentence-transformers (>=5.2.0,<6)", "sql-redis (>=0.7.1)", "urllib3 (<2.8.0)", "voyageai (>=0.2.2)"]
+bedrock = ["boto3 (>=1.36.0,<2)", "urllib3 (<2.8.0)"]
 cohere = ["cohere (>=4.44)"]
+google-genai = ["google-genai (>=1.0.0)"]
 langcache = ["langcache (>=0.11.0)"]
-mcp = ["fastmcp (>=2.0.0)", "pydantic-settings (>=2.0)"]
+mcp = ["fastmcp (>=2.0.0,<4)", "pydantic-settings (>=2.0,<3)"]
 mistralai = ["mistralai (>=1.0.0,<2)"]
 ollama = ["ollama (>=0.5.4)"]
 openai = ["openai (>=1.1.0)"]
 pillow = ["pillow (>=11.3.0)"]
-sentence-transformers = ["sentence-transformers (>=3.4.0,<4)"]
+sentence-transformers = ["sentence-transformers (>=5.2.0,<6)"]
 sql-redis = ["sql-redis (>=0.7.1)"]
 vertexai = ["google-cloud-aiplatform (>=1.26,<2.0.0)", "protobuf (>=5.28.0,<6.0.0)"]
 voyageai = ["voyageai (>=0.2.2)"]
@@ -2661,7 +2665,7 @@ video = ["transformers[video]"]
 [[package]]
 name = "setuptools"
 version = "83.0.0"
-description = "Easily download, build, install, upgrade, and uninstall Python packages"
+description = "Most extensible Python build backend with support for C/C++ extension modules"
 optional = false
 python-versions = ">=3.10"
 groups = ["test"]
@@ -2671,13 +2675,13 @@ files = [
 ]
 
 [package.extras]
-check = ["pytest-checkdocs (>=2.4)", "pytest-ruff (>=0.2.1) ; sys_platform != \"cygwin\"", "ruff (>=0.8.0) ; sys_platform != \"cygwin\""]
-core = ["importlib_metadata (>=6) ; python_version < \"3.10\"", "jaraco.functools (>=4)", "jaraco.text (>=3.7)", "more_itertools", "more_itertools (>=8.8)", "packaging (>=24.2)", "platformdirs (>=4.2.2)", "tomli (>=2.0.1) ; python_version < \"3.11\"", "wheel (>=0.43.0)"]
+check = ["pytest-checkdocs (>=2.14)", "pytest-ruff (>=0.2.1) ; sys_platform != \"cygwin\"", "ruff (>=0.13.0) ; sys_platform != \"cygwin\""]
+core = ["importlib_metadata (>=6) ; python_version < \"3.10\"", "jaraco.functools (>=4)", "jaraco.text (>=3.7)", "more_itertools", "more_itertools (>=8.8)", "packaging (>=24.2)", "tomli (>=2.0.1) ; python_version < \"3.11\"", "wheel (>=0.43.0)"]
 cover = ["pytest-cov"]
 doc = ["furo", "jaraco.packaging (>=9.3)", "jaraco.tidelift (>=1.4)", "pygments-github-lexers (==0.0.5)", "pyproject-hooks (!=1.1)", "rst.linker (>=1.9)", "sphinx (>=3.5)", "sphinx-favicon", "sphinx-inline-tabs", "sphinx-lint", "sphinx-notfound-page (>=1,<2)", "sphinx-reredirects", "sphinxcontrib-towncrier", "towncrier (<24.7)"]
-enabler = ["pytest-enabler (>=2.2)"]
+enabler = ["pytest-enabler (>=3.4)"]
 test = ["build[virtualenv] (>=1.0.3)", "filelock (>=3.4.0)", "ini2toml[lite] (>=0.14)", "jaraco.develop (>=7.21) ; python_version >= \"3.9\" and sys_platform != \"cygwin\"", "jaraco.envs (>=2.2)", "jaraco.path (>=3.7.2)", "jaraco.test (>=5.5)", "packaging (>=24.2)", "pip (>=19.1)", "pyproject-hooks (!=1.1)", "pytest (>=6,!=8.1.*)", "pytest-home (>=0.5)", "pytest-perf ; sys_platform != \"cygwin\"", "pytest-subprocess", "pytest-timeout", "pytest-xdist (>=3)", "tomli-w (>=1.0.0)", "virtualenv (>=13.0.0)", "wheel (>=0.44.0)"]
-type = ["importlib_metadata (>=7.0.2) ; python_version < \"3.10\"", "jaraco.develop (>=7.21) ; sys_platform != \"cygwin\"", "mypy (==1.14.*)", "pytest-mypy"]
+type = ["importlib_metadata (>=7.0.2) ; python_version < \"3.10\"", "jaraco.develop (>=7.21) ; sys_platform != \"cygwin\"", "mypy (==1.18.*)", "pytest-mypy (>=1.0.1) ; platform_python_implementation != \"PyPy\""]
 
 [[package]]
 name = "shellingham"
@@ -3693,4 +3697,4 @@ langcache = ["langcache"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "36d0505271ade91a3912c515a228d0ddbaa42c0e4f1b5bc30039ba1f57cec926"
+content-hash = "6f10ee6dc743892cec75c2759f7e36df7e6ae3cd6f277ec7db88ef8dffa718a9"

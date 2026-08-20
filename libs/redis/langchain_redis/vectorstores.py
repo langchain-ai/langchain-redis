@@ -144,7 +144,7 @@ class RedisVectorStore(VectorStore):
 
         ```bash
         pip install -qU langchain-redis
-        docker run -p 6379:6379 redis/redis-stack-server:latest
+        docker run -d --name redis -p 6379:6379 redis
         ```
 
     Key init args — indexing params:
