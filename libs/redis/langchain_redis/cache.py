@@ -226,7 +226,11 @@ class RedisCache(BaseCache):
         key = self._key(prompt, llm_string)
         result = self.redis.json().get(key)
         if result:
-            return [loads(json.dumps(result))]
+            # `allowed_objects="core"` matches the current default explicitly, so
+            # this keeps existing behavior stable when langchain-core changes its
+            # default (see LangChainPendingDeprecationWarning) instead of silently
+            # picking up a narrower allowlist on a future langchain-core upgrade.
+            return [loads(json.dumps(result), allowed_objects="core")]
         return None
 
     def update(self, prompt: str, llm_string: str, return_val: RETURN_VAL_TYPE) -> None:
@@ -491,7 +495,7 @@ class RedisSemanticCache(BaseCache):
                 if result.get("metadata", {}).get("llm_string") == llm_string:
                     try:
                         return [
-                            loads(gen_str)
+                            loads(gen_str, allowed_objects="core")
                             for gen_str in json.loads(result.get("response"))
                         ]
                     except (json.JSONDecodeError, TypeError):
@@ -680,7 +684,7 @@ class RedisSemanticCache(BaseCache):
                 if result.get("metadata", {}).get("llm_string") == llm_string:
                     try:
                         return [
-                            loads(gen_str)
+                            loads(gen_str, allowed_objects="core")
                             for gen_str in json.loads(result.get("response"))
                         ]
                     except (json.JSONDecodeError, TypeError):
@@ -852,7 +856,10 @@ class LangCacheSemanticCache(BaseCache):
 
         first = results[0]
         try:
-            return [loads(s) for s in json.loads(first.get("response", "[]"))]
+            return [
+                loads(s, allowed_objects="core")
+                for s in json.loads(first.get("response", "[]"))
+            ]
         except (json.JSONDecodeError, TypeError):
             return None
 
