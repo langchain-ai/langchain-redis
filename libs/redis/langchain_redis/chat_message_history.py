@@ -1,7 +1,7 @@
 import json
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.messages import BaseMessage, ToolMessage, messages_from_dict
@@ -308,10 +308,32 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
             - Large message contents may impact performance and storage usage.
                 Consider implementing size limits if dealing with potentially
                 large messages.
+            - When adding several messages at once (e.g. a human/AI turn pair),
+                prefer `add_messages` which writes them in a single Redis
+                round-trip instead of calling this method in a loop.
         """
         if message is None:
             raise ValueError("Message cannot be None")
 
+        data, key = self._build_message_entry(message)
+
+        # Use RedisVL to load the data
+        self.index.load(
+            data=[data],
+            keys=[key],
+            ttl=self.ttl,
+        )
+
+    def _build_message_entry(self, message: BaseMessage) -> Tuple[Dict[str, Any], str]:
+        """Build the RedisVL document and key for a single message.
+
+        Args:
+            message (BaseMessage): The message to convert.
+
+        Returns:
+            A tuple of `(data, key)` suitable for passing to
+            `self.index.load(data=[...], keys=[...])`.
+        """
         timestamp = datetime.now().timestamp()
         message_id = str(ULID())
         common_data_to_store: Dict[str, Any] = {
@@ -329,10 +351,55 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
             common_data_to_store["data"]["tool_call_id"] = message.tool_call_id
             common_data_to_store["data"]["status"] = message.status
 
-        # Use RedisVL to load the data
+        return common_data_to_store, self._message_key(message_id)
+
+    def add_messages(self, messages: Sequence[BaseMessage]) -> None:
+        """Add multiple messages to the chat history in a single Redis round-trip.
+
+        This overrides the default `BaseChatMessageHistory.add_messages`, which
+        would otherwise call `add_message` once per message (one Redis
+        round-trip per message). Here, all messages are built up-front and
+        loaded into Redis with a single `RedisVL` call.
+
+        Args:
+            messages (Sequence[BaseMessage]): The messages to add to the
+                history, in order.
+
+        Raises:
+            ResponseError: If Redis connection fails or RedisVL operations fail.
+            ValueError: If `messages` contains a `None` entry.
+
+        Example:
+            ```python
+            from langchain_redis import RedisChatMessageHistory
+            from langchain_core.messages import HumanMessage, AIMessage
+
+            history = RedisChatMessageHistory(
+                session_id="user123",
+                redis_url="redis://localhost:6379",
+            )
+
+            history.add_messages(
+                [
+                    HumanMessage(content="Hello, AI!"),
+                    AIMessage(content="Hello! How can I assist you today?"),
+                ]
+            )
+            ```
+        """
+        if not messages:
+            return
+
+        if any(message is None for message in messages):
+            raise ValueError("Message cannot be None")
+
+        entries = [self._build_message_entry(message) for message in messages]
+        data = [entry[0] for entry in entries]
+        keys = [entry[1] for entry in entries]
+
         self.index.load(
-            data=[common_data_to_store],
-            keys=[self._message_key(message_id)],
+            data=data,
+            keys=keys,
             ttl=self.ttl,
         )
 

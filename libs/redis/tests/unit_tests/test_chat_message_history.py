@@ -119,3 +119,52 @@ class TestRedisChatMessageHistoryMinimal:
             assert history.key_prefix == "custom:"
             assert history.ttl == 7200
             assert history.index_name == "custom_index"
+
+    def test_add_messages_uses_single_index_load_call(self) -> None:
+        """add_messages should batch all messages into one index.load() call."""
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        with (
+            patch("langchain_redis.chat_message_history.SearchIndex"),
+            patch("redis.Redis.from_url"),
+        ):
+            history = RedisChatMessageHistory(session_id="test_session")
+
+            messages = [
+                HumanMessage(content="Hello, AI!"),
+                AIMessage(content="Hello! How can I assist you today?"),
+            ]
+            history.add_messages(messages)
+
+            history.index.load.assert_called_once()
+            _, kwargs = history.index.load.call_args
+            assert len(kwargs["data"]) == 2
+            assert len(kwargs["keys"]) == 2
+            assert kwargs["data"][0]["data"]["content"] == "Hello, AI!"
+            assert (
+                kwargs["data"][1]["data"]["content"]
+                == "Hello! How can I assist you today?"
+            )
+            assert kwargs["ttl"] == history.ttl
+
+    def test_add_messages_empty_list_does_not_call_index(self) -> None:
+        """add_messages with an empty sequence should be a no-op."""
+        with (
+            patch("langchain_redis.chat_message_history.SearchIndex"),
+            patch("redis.Redis.from_url"),
+        ):
+            history = RedisChatMessageHistory(session_id="test_session")
+            history.add_messages([])
+            history.index.load.assert_not_called()
+
+    def test_add_messages_none_entry_raises(self) -> None:
+        """add_messages should reject a None entry instead of silently failing."""
+        from langchain_core.messages import HumanMessage
+
+        with (
+            patch("langchain_redis.chat_message_history.SearchIndex"),
+            patch("redis.Redis.from_url"),
+        ):
+            history = RedisChatMessageHistory(session_id="test_session")
+            with pytest.raises(ValueError, match="Message cannot be None"):
+                history.add_messages([HumanMessage(content="hi"), None])  # type: ignore
