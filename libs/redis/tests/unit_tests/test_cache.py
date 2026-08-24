@@ -6,7 +6,8 @@ import numpy as np
 import pytest
 from langchain_core.embeddings import Embeddings
 from langchain_core.load.dump import dumps
-from langchain_core.outputs import Generation
+from langchain_core.messages import AIMessage, ChatMessage
+from langchain_core.outputs import ChatGeneration, Generation
 from langchain_redis import RedisCache, RedisSemanticCache
 from langchain_redis.version import __full_lib_name__
 from redis.exceptions import ResponseError
@@ -204,7 +205,7 @@ class TestRedisCache:
         llm_string = "test_llm"
         return_val = [Generation(text="first"), Generation(text="second")]
 
-        stored_data = {}
+        stored_data: Dict[str, Any] = {}
         redis_cache.redis.json().set.side_effect = (  # type: ignore
             lambda key, path, value: stored_data.__setitem__(key, value)
         )
@@ -230,6 +231,36 @@ class TestRedisCache:
         assert result is not None
         assert len(result) == 1
         assert result[0].text == "legacy response"
+
+    def test_update_and_lookup_chat_generation(self, redis_cache: RedisCache) -> None:
+        prompt = "test prompt"
+        llm_string = "test_llm"
+        return_val = [ChatGeneration(message=AIMessage(content="hi"))]
+
+        stored_data: Dict[str, Any] = {}
+        redis_cache.redis.json().set.side_effect = (  # type: ignore
+            lambda key, path, value: stored_data.__setitem__(key, value)
+        )
+        redis_cache.redis.json().get.side_effect = stored_data.get  # type: ignore
+
+        redis_cache.update(prompt, llm_string, return_val)
+        result = redis_cache.lookup(prompt, llm_string)
+
+        assert result is not None
+        assert isinstance(result[0], ChatGeneration)
+        assert result[0].message.content == "hi"
+
+    def test_lookup_rejects_disallowed_class(self, redis_cache: RedisCache) -> None:
+        # A cache entry that doesn't deserialize to an allowed Generation/message
+        # type (e.g. tampered with, or written by an untrusted party with access
+        # to Redis) must be treated as a miss rather than instantiating the class.
+        prompt, llm_string = "test prompt", "test_llm"
+        malicious_entry = json.loads(dumps(ChatMessage(content="x", role="user")))
+        redis_cache.redis.json().get.return_value = malicious_entry  # type: ignore
+
+        result = redis_cache.lookup(prompt, llm_string)
+
+        assert result is None
 
     def test_clear(self, redis_cache: RedisCache) -> None:
         prompt1, prompt2 = "test prompt 1", "test prompt 2"

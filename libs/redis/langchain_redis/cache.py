@@ -15,6 +15,19 @@ from langchain_core.caches import RETURN_VAL_TYPE, BaseCache
 from langchain_core.embeddings import Embeddings
 from langchain_core.load.dump import dumps
 from langchain_core.load.load import loads
+from langchain_core.load.serializable import Serializable
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    HumanMessage,
+    HumanMessageChunk,
+    RemoveMessage,
+    SystemMessage,
+    SystemMessageChunk,
+    ToolMessage,
+    ToolMessageChunk,
+)
+from langchain_core.outputs import ChatGeneration, Generation
 from pydantic import ConfigDict, Field
 from redis import Redis
 from redis.commands.json.path import Path
@@ -48,6 +61,26 @@ else:
 
 
 logger = logging.getLogger(__name__)
+
+# Cache entries come back from Redis (or the LangCache service) as untrusted
+# input, so `loads()` must only be allowed to instantiate the concrete types
+# this module ever stores: LLM/chat generations and the message types that
+# can appear inside a ChatGeneration. This blocks a crafted payload from
+# reviving an arbitrary langchain_core-mapped class (e.g. a chat model with
+# attacker-controlled `base_url`/headers kwargs).
+_ALLOWED_CACHE_OBJECTS: List[type[Serializable]] = [
+    Generation,
+    ChatGeneration,
+    AIMessage,
+    AIMessageChunk,
+    HumanMessage,
+    HumanMessageChunk,
+    SystemMessage,
+    SystemMessageChunk,
+    ToolMessage,
+    ToolMessageChunk,
+    RemoveMessage,
+]
 
 
 class EmbeddingsVectorizer(BaseVectorizer):
@@ -227,11 +260,19 @@ class RedisCache(BaseCache):
         result = self.redis.json().get(key)
         if not result:
             return None
-        if isinstance(result, list):
-            return [loads(json.dumps(gen)) for gen in result]
-        # Entries written before multi-generation support stored a single
-        # Generation as the JSON root instead of a list.
-        return [loads(json.dumps(result))]
+        try:
+            if isinstance(result, list):
+                return [
+                    loads(json.dumps(gen), allowed_objects=_ALLOWED_CACHE_OBJECTS)
+                    for gen in result
+                ]
+            # Entries written before multi-generation support stored a single
+            # Generation as the JSON root instead of a list.
+            return [loads(json.dumps(result), allowed_objects=_ALLOWED_CACHE_OBJECTS)]
+        except (ValueError, NotImplementedError):
+            # Entry doesn't deserialize to an allowed type; treat as a miss
+            # rather than raising into the caller.
+            return None
 
     def update(self, prompt: str, llm_string: str, return_val: RETURN_VAL_TYPE) -> None:
         """Update the cache with a new result for a given prompt and language model.
@@ -495,10 +536,15 @@ class RedisSemanticCache(BaseCache):
                 if result.get("metadata", {}).get("llm_string") == llm_string:
                     try:
                         return [
-                            loads(gen_str)
+                            loads(gen_str, allowed_objects=_ALLOWED_CACHE_OBJECTS)
                             for gen_str in json.loads(result.get("response"))
                         ]
-                    except (json.JSONDecodeError, TypeError):
+                    except (
+                        json.JSONDecodeError,
+                        TypeError,
+                        ValueError,
+                        NotImplementedError,
+                    ):
                         return None
         return None
 
@@ -684,10 +730,15 @@ class RedisSemanticCache(BaseCache):
                 if result.get("metadata", {}).get("llm_string") == llm_string:
                     try:
                         return [
-                            loads(gen_str)
+                            loads(gen_str, allowed_objects=_ALLOWED_CACHE_OBJECTS)
                             for gen_str in json.loads(result.get("response"))
                         ]
-                    except (json.JSONDecodeError, TypeError):
+                    except (
+                        json.JSONDecodeError,
+                        TypeError,
+                        ValueError,
+                        NotImplementedError,
+                    ):
                         return None
         return None
 
@@ -856,8 +907,11 @@ class LangCacheSemanticCache(BaseCache):
 
         first = results[0]
         try:
-            return [loads(s) for s in json.loads(first.get("response", "[]"))]
-        except (json.JSONDecodeError, TypeError):
+            return [
+                loads(s, allowed_objects=_ALLOWED_CACHE_OBJECTS)
+                for s in json.loads(first.get("response", "[]"))
+            ]
+        except (json.JSONDecodeError, TypeError, ValueError, NotImplementedError):
             return None
 
     def update(self, prompt: str, llm_string: str, return_val: RETURN_VAL_TYPE) -> None:
