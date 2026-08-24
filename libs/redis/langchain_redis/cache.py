@@ -216,8 +216,8 @@ class RedisCache(BaseCache):
         Note:
             - The method uses an MD5 hash of the `prompt` and `llm_string` to create
                 the cache key.
-            - The cached value is stored as JSON and parsed back into a
-                `Generation` object.
+            - The cached value is stored as JSON and parsed back into a list of
+                `Generation` objects.
             - If the key exists but the value is `None` or cannot be parsed,
                 `None` is returned.
             - This method is typically called internally by LangChain, but can be used
@@ -225,9 +225,13 @@ class RedisCache(BaseCache):
         """
         key = self._key(prompt, llm_string)
         result = self.redis.json().get(key)
-        if result:
-            return [loads(json.dumps(result))]
-        return None
+        if not result:
+            return None
+        if isinstance(result, list):
+            return [loads(json.dumps(gen)) for gen in result]
+        # Entries written before multi-generation support stored a single
+        # Generation as the JSON root instead of a list.
+        return [loads(json.dumps(result))]
 
     def update(self, prompt: str, llm_string: str, return_val: RETURN_VAL_TYPE) -> None:
         """Update the cache with a new result for a given prompt and language model.
@@ -267,7 +271,7 @@ class RedisCache(BaseCache):
                 it will be overwritten.
         """
         key = self._key(prompt, llm_string)
-        json_value = json.loads(dumps(return_val[0]))
+        json_value = [json.loads(dumps(gen)) for gen in return_val]
         self.redis.json().set(key, Path.root_path(), json_value)
         if self.ttl is not None:
             self.redis.expire(key, self.ttl)

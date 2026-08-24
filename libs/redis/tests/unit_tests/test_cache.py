@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, Mock, patch
 import numpy as np
 import pytest
 from langchain_core.embeddings import Embeddings
+from langchain_core.load.dump import dumps
 from langchain_core.outputs import Generation
 from langchain_redis import RedisCache, RedisSemanticCache
 from langchain_redis.version import __full_lib_name__
@@ -195,6 +196,40 @@ class TestRedisCache:
         assert result[0].text == "test response", (
             f"Expected 'test response', got '{result[0].text}'"
         )
+
+    def test_update_and_lookup_multiple_generations(
+        self, redis_cache: RedisCache
+    ) -> None:
+        prompt = "test prompt"
+        llm_string = "test_llm"
+        return_val = [Generation(text="first"), Generation(text="second")]
+
+        stored_data = {}
+        redis_cache.redis.json().set.side_effect = (  # type: ignore
+            lambda key, path, value: stored_data.__setitem__(key, value)
+        )
+        redis_cache.redis.json().get.side_effect = stored_data.get  # type: ignore
+
+        redis_cache.update(prompt, llm_string, return_val)
+        result = redis_cache.lookup(prompt, llm_string)
+
+        assert result is not None
+        assert [gen.text for gen in result] == ["first", "second"]
+
+    def test_lookup_legacy_single_generation_entry(
+        self, redis_cache: RedisCache
+    ) -> None:
+        # Entries written before multi-generation support stored a single
+        # Generation dict as the JSON root instead of a list.
+        prompt, llm_string = "test prompt", "test_llm"
+        legacy_value = json.loads(dumps(Generation(text="legacy response")))
+        redis_cache.redis.json().get.return_value = legacy_value  # type: ignore
+
+        result = redis_cache.lookup(prompt, llm_string)
+
+        assert result is not None
+        assert len(result) == 1
+        assert result[0].text == "legacy response"
 
     def test_clear(self, redis_cache: RedisCache) -> None:
         prompt1, prompt2 = "test prompt 1", "test prompt 2"
