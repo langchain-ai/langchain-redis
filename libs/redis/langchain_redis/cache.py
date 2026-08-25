@@ -236,8 +236,7 @@ class RedisCache(BaseCache):
         # Entries written before multi-generation support stored a single
         # Generation as the JSON root instead of a list.
         return [loads(json.dumps(result), allowed_objects="core")]
-
-t
+        
 
     def clear(self, **kwargs: Any) -> None:
         """Clear all entries in the Redis cache that match the cache prefix.
