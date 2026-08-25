@@ -239,47 +239,47 @@ class RedisCache(BaseCache):
 
 
     def update(self, prompt: str, llm_string: str, return_val: RETURN_VAL_TYPE) -> None:
-    """Update the cache with a new result for a given prompt and language model.
-
-    This method stores a new result in the Redis cache for the specified prompt and
-    language model combination.
-
-    Args:
-        prompt (str): The input prompt associated with the result.
-        llm_string (str): A string representation of the language model
-            and its parameters.
-        return_val (RETURN_VAL_TYPE): The result to be cached, typically a list
-            of `Generation` objects.
-
-    Example:
-        ```python
-        from langchain_core.outputs import Generation
-
-        cache = RedisCache(redis_url="redis://localhost:6379", ttl=3600)
-        prompt = "What is the capital of France?"
-        llm_string = "openai/gpt-3.5-turbo"
-        result = [Generation(text="The capital of France is Paris.")]
-
-        cache.update(prompt, llm_string, result)
-        ```
-
-    Note:
-        - The method uses an MD5 hash of the `prompt` and `llm_string` to create the
-            cache key.
-        - The result is stored as JSON in Redis.
-        - If a TTL (Time To Live) was specified when initializing the cache,
-            it will be applied to this entry.
-        - This method is typically called internally by LangChain after a language
-            model generates a response, but it can be used directly
-            for manual cache updates.
-        - If the cache already contains an entry for this `prompt` and `llm_string`,
-            it will be overwritten.
-    """
-    key = self._key(prompt, llm_string)
-    json_value = [json.loads(dumps(gen)) for gen in return_val]
-    self.redis.json().set(key, Path.root_path(), json_value)
-    if self.ttl is not None:
-        self.redis.expire(key, self.ttl)
+        """Update the cache with a new result for a given prompt and language model.
+    
+        This method stores a new result in the Redis cache for the specified prompt and
+        language model combination.
+    
+        Args:
+            prompt (str): The input prompt associated with the result.
+            llm_string (str): A string representation of the language model
+                and its parameters.
+            return_val (RETURN_VAL_TYPE): The result to be cached, typically a list
+                of `Generation` objects.
+    
+        Example:
+            ```python
+            from langchain_core.outputs import Generation
+    
+            cache = RedisCache(redis_url="redis://localhost:6379", ttl=3600)
+            prompt = "What is the capital of France?"
+            llm_string = "openai/gpt-3.5-turbo"
+            result = [Generation(text="The capital of France is Paris.")]
+    
+            cache.update(prompt, llm_string, result)
+            ```
+    
+        Note:
+            - The method uses an MD5 hash of the `prompt` and `llm_string` to create the
+                cache key.
+            - The result is stored as JSON in Redis.
+            - If a TTL (Time To Live) was specified when initializing the cache,
+                it will be applied to this entry.
+            - This method is typically called internally by LangChain after a language
+                model generates a response, but it can be used directly
+                for manual cache updates.
+            - If the cache already contains an entry for this `prompt` and `llm_string`,
+                it will be overwritten.
+        """
+        key = self._key(prompt, llm_string)
+        json_value = [json.loads(dumps(gen)) for gen in return_val]
+        self.redis.json().set(key, Path.root_path(), json_value)
+        if self.ttl is not None:
+            self.redis.expire(key, self.ttl)
         
 
     def clear(self, **kwargs: Any) -> None:
