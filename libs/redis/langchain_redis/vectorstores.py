@@ -4,14 +4,31 @@ from __future__ import annotations
 
 import ast
 import json
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Union, cast
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    Union,
+    cast,
+)
 
 import numpy as np
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
 from redisvl.index import SearchIndex  # type: ignore[import]
-from redisvl.query import RangeQuery, VectorQuery  # type: ignore[import]
+from redisvl.query import (  # type: ignore[import]
+    AggregateHybridQuery,
+    HybridQuery,
+    RangeQuery,
+    TextQuery,
+    VectorQuery,
+)
 from redisvl.query.filter import FilterExpression  # type: ignore[import]
 from redisvl.redis.utils import (  # type: ignore[import]
     array_to_buffer,
@@ -299,6 +316,9 @@ class RedisVectorStore(VectorStore):
         # 2. Store embeddings and TTL
         self._embeddings = embeddings
         self.ttl = ttl
+
+        # Lazily-probed FT.HYBRID support (None until first hybrid search)
+        self._ft_hybrid_support: Optional[bool] = None
 
         # 3. Determine embedding dimensions if not explicitly set
         if self.config.embedding_dimensions is None:
@@ -885,19 +905,15 @@ class RedisVectorStore(VectorStore):
         else:
             return False
 
-    def _query_builder(
-        self,
-        embedding: Union[List[float], bytes],
-        k: int = 10,
-        distance_threshold: Any = None,
-        sort_by: Optional[str] = None,
-        filter: Optional[Union[str, FilterExpression]] = None,
-        return_fields: Optional[List[str]] = None,
-    ) -> Union[VectorQuery, RangeQuery]:
-        # Add a filter to restrict search to the current index
-        # This is needed to ensure we only get results from the current index
-        # when multiple indexes share the same key_prefix
-        # Only apply the _index_name filter if we have the field in the schema
+    def _with_index_name_filter(
+        self, filter: Optional[Union[str, FilterExpression]]
+    ) -> Optional[Union[str, FilterExpression]]:
+        """Restrict a filter to documents belonging to the current index.
+
+        This is needed to ensure we only operate on results from the current
+        index when multiple indexes share the same key_prefix. The
+        `_index_name` filter is only applied if the field is in the schema.
+        """
         try:
             # Check if we have an _index_name field in the schema
             has_index_name_field = False
@@ -922,6 +938,18 @@ class RedisVectorStore(VectorStore):
         except Exception:
             # If any issues occur, just use the original filter
             pass
+        return filter
+
+    def _query_builder(
+        self,
+        embedding: Union[List[float], bytes],
+        k: int = 10,
+        distance_threshold: Any = None,
+        sort_by: Optional[str] = None,
+        filter: Optional[Union[str, FilterExpression]] = None,
+        return_fields: Optional[List[str]] = None,
+    ) -> Union[VectorQuery, RangeQuery]:
+        filter = self._with_index_name_filter(filter)
         if distance_threshold is None:
             return VectorQuery(
                 vector=embedding,
@@ -1058,6 +1086,237 @@ class RedisVectorStore(VectorStore):
         """
         embedding = self._embeddings.embed_query(query)
         return self.similarity_search_by_vector(embedding, k, filter, sort_by, **kwargs)
+
+    def _default_return_fields(self, return_metadata: bool) -> List[str]:
+        """Return fields for search queries: content plus indexed metadata."""
+        return_fields = [self.config.content_field]
+        if return_metadata:
+            return_fields += [
+                field.name
+                for field in self._index.schema.fields.values()
+                if field.name
+                not in [self.config.embedding_field, self.config.content_field]
+            ]
+        return return_fields
+
+    def _supports_ft_hybrid(self) -> Optional[bool]:
+        """Whether the server supports `FT.HYBRID` (Redis >= 8.4.0).
+
+        Returns `None` when the server version cannot be determined. The
+        result is cached on the instance after the first successful probe.
+        """
+        if self._ft_hybrid_support is None:
+            try:
+                info = self._index.client.info("server")
+                version = str(info.get("redis_version", ""))
+                major, minor = (int(part) for part in version.split(".")[:2])
+                self._ft_hybrid_support = (major, minor) >= (8, 4)
+            except Exception:
+                return None
+        return self._ft_hybrid_support
+
+    def hybrid_search_with_score(
+        self,
+        query: str,
+        k: int = 4,
+        filter: Optional[FilterExpression] = None,
+        *,
+        text_field: Optional[str] = None,
+        method: str = "auto",
+        combination_method: str = "RRF",
+        alpha: float = 0.7,
+        text_scorer: str = "BM25STD",
+        text_weights: Optional[Dict[str, float]] = None,
+        stopwords: Optional[Union[str, Set[str]]] = "english",
+        return_metadata: bool = True,
+    ) -> List[Tuple[Document, float]]:
+        """Return docs scored by combined full-text and vector similarity.
+
+        Args:
+            query: Query text. It is used both for full-text scoring and,
+                embedded, for vector similarity.
+            k: Number of `Document` objects to return.
+            filter: Optional `FilterExpression` to apply.
+            text_field: Text field to search in. Defaults to the configured
+                `content_field`.
+            method: `'ft_hybrid'` uses the `FT.HYBRID` command (Redis 8.4+),
+                `'aggregate'` uses an `FT.AGGREGATE`-based combination that
+                works on any Redis with the Query Engine. `'auto'` (default)
+                probes the server version and picks accordingly.
+            combination_method: `'RRF'` (reciprocal rank fusion) or
+                `'LINEAR'`. Only used by `'ft_hybrid'`; the `'aggregate'`
+                method always combines linearly using `alpha`.
+            alpha: Weight of the vector similarity in linear combination:
+                `score = alpha * vector_score + (1 - alpha) * text_score`.
+                For `'ft_hybrid'` with `'LINEAR'`, use values strictly
+                between 0 and 1.
+            text_scorer: Full-text scoring algorithm (default `'BM25STD'`).
+            text_weights: Optional per-word importance weights for the
+                full-text part of the query.
+            stopwords: Stopwords to strip from the query text client-side.
+                Language string, set of words, or `None` to disable.
+            return_metadata: Whether to return metadata with the documents.
+
+        Returns:
+            List of `(Document, score)` tuples, best first. Higher scores
+            are better. Scores are combined hybrid scores — rank-based for
+            `'RRF'`, weighted sums for linear combination — and are not
+            comparable with the cosine distances returned by
+            `similarity_search_with_score`.
+
+        Example:
+            ```python
+            from redisvl.query.filter import Tag
+
+            results = vector_store.hybrid_search_with_score(
+                "durable message queue",
+                k=5,
+                filter=Tag("category") == "infra",
+                alpha=0.5,
+            )
+            for doc, score in results:
+                print(score, doc.page_content)
+            ```
+        """
+        if method not in ("auto", "ft_hybrid", "aggregate"):
+            raise ValueError(
+                f"Unknown hybrid search method: {method!r}. "
+                "Expected 'auto', 'ft_hybrid' or 'aggregate'."
+            )
+
+        resolved = method
+        if method == "auto":
+            resolved = "ft_hybrid" if self._supports_ft_hybrid() else "aggregate"
+        elif method == "ft_hybrid" and self._supports_ft_hybrid() is False:
+            raise ValueError(
+                "method='ft_hybrid' requires Redis >= 8.4.0 (the FT.HYBRID "
+                "command). Use method='aggregate' on older servers."
+            )
+
+        embedding = self._embeddings.embed_query(query)
+        filter = self._with_index_name_filter(filter)
+        return_fields = self._default_return_fields(return_metadata)
+        dtype = self.config.vector_datatype.lower()
+        text_field = text_field or self.config.content_field
+
+        hybrid_query: Union[HybridQuery, AggregateHybridQuery]
+        if resolved == "ft_hybrid":
+            hybrid_query = HybridQuery(
+                text=query,
+                text_field_name=text_field,
+                vector=embedding,
+                vector_field_name=self.config.embedding_field,
+                text_scorer=text_scorer,
+                filter_expression=filter,
+                combination_method=combination_method,
+                # Our alpha weights the vector score; FT.HYBRID's linear_alpha
+                # weights the text score.
+                linear_alpha=1 - alpha,
+                yield_combined_score_as="hybrid_score",
+                dtype=dtype,
+                num_results=k,
+                return_fields=return_fields,
+                stopwords=stopwords,
+                text_weights=text_weights,
+            )
+        else:
+            hybrid_query = AggregateHybridQuery(
+                text=query,
+                text_field_name=text_field,
+                vector=embedding,
+                vector_field_name=self.config.embedding_field,
+                text_scorer=text_scorer,
+                filter_expression=filter,
+                alpha=alpha,
+                dtype=dtype,
+                num_results=k,
+                return_fields=return_fields,
+                stopwords=stopwords,
+                text_weights=text_weights,
+            )
+
+        results = self._index.query(hybrid_query)
+
+        docs_with_scores = []
+        for res in results:
+            score = float(res.get("hybrid_score", 0.0))
+            doc_fields = {
+                key: value
+                for key, value in res.items()
+                if key not in ("hybrid_score", "text_score", "vector_similarity")
+            }
+            doc = self._build_document_from_result(doc_fields)
+            if not return_metadata:
+                doc.metadata = {}
+            docs_with_scores.append((doc, score))
+        return docs_with_scores
+
+    def hybrid_search(
+        self,
+        query: str,
+        k: int = 4,
+        filter: Optional[FilterExpression] = None,
+        **kwargs: Any,
+    ) -> List[Document]:
+        """Return docs ranked by combined full-text and vector similarity.
+
+        Args:
+            query: Query text, used for both full-text and vector scoring.
+            k: Number of `Document` objects to return.
+            filter: Optional `FilterExpression` to apply.
+            **kwargs: See `hybrid_search_with_score` for the remaining
+                keyword arguments (`method`, `combination_method`, `alpha`,
+                `text_field`, `text_scorer`, `text_weights`, `stopwords`,
+                `return_metadata`).
+
+        Returns:
+            List of `Document` objects, best first.
+        """
+        return [
+            doc for doc, _ in self.hybrid_search_with_score(query, k, filter, **kwargs)
+        ]
+
+    def full_text_search(
+        self,
+        query: str,
+        k: int = 4,
+        filter: Optional[FilterExpression] = None,
+        *,
+        text_fields: Optional[Union[str, Dict[str, float]]] = None,
+        text_scorer: str = "BM25STD",
+        stopwords: Optional[Union[str, Set[str]]] = "english",
+        return_metadata: bool = True,
+    ) -> List[Document]:
+        """Return docs matching the query by full-text relevance only.
+
+        Args:
+            query: Full-text query string.
+            k: Number of `Document` objects to return.
+            filter: Optional `FilterExpression` to apply.
+            text_fields: Text field to search in, or a mapping of field
+                names to weights (e.g. `{"title": 5.0, "text": 1.0}`).
+                Defaults to the configured `content_field`.
+            text_scorer: Full-text scoring algorithm (default `'BM25STD'`).
+            stopwords: Stopwords to strip from the query text client-side.
+                Language string, set of words, or `None` to disable.
+            return_metadata: Whether to return metadata with the documents.
+
+        Returns:
+            List of `Document` objects, best first.
+        """
+        text_query = TextQuery(
+            text=query,
+            text_field_name=text_fields or self.config.content_field,
+            text_scorer=text_scorer,
+            filter_expression=self._with_index_name_filter(filter),
+            return_fields=self._default_return_fields(return_metadata),
+            num_results=k,
+            return_score=False,
+            stopwords=stopwords,
+        )
+
+        results = self._index.query(text_query)
+        return cast(List[Document], self._prepare_docs(False, results, return_metadata))
 
     def _build_document_from_result(self, res: Dict[str, Any]) -> Document:
         """Build a `Document` object from a Redis search result."""

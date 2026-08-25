@@ -50,6 +50,21 @@ def redis_url() -> str:
     return os.getenv("REDIS_URL", "redis://localhost:6379")
 
 
+@pytest.fixture(scope="session")
+def redis_server_version(redis_url: str) -> tuple:
+    """(major, minor) version of the Redis server under test."""
+    import redis
+
+    client = redis.Redis.from_url(redis_url)
+    try:
+        info: dict = client.info("server")  # type: ignore[assignment]
+        version = str(info.get("redis_version", "0.0"))
+    finally:
+        client.close()
+    parts = version.split(".")
+    return (int(parts[0]), int(parts[1]))
+
+
 @pytest.fixture(scope="session", autouse=True)
 def setup_openai_api_key() -> None:
     """Set up the OpenAI API key for tests if not already set."""
