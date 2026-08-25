@@ -237,32 +237,31 @@ class RedisCache(BaseCache):
         # Generation as the JSON root instead of a list.
         return [loads(json.dumps(result), allowed_objects="core")]
 
-
     def update(self, prompt: str, llm_string: str, return_val: RETURN_VAL_TYPE) -> None:
         """Update the cache with a new result for a given prompt and language model.
-    
+
         This method stores a new result in the Redis cache for the specified prompt and
         language model combination.
-    
+
         Args:
             prompt (str): The input prompt associated with the result.
             llm_string (str): A string representation of the language model
                 and its parameters.
             return_val (RETURN_VAL_TYPE): The result to be cached, typically a list
                 of `Generation` objects.
-    
+
         Example:
             ```python
             from langchain_core.outputs import Generation
-    
+
             cache = RedisCache(redis_url="redis://localhost:6379", ttl=3600)
             prompt = "What is the capital of France?"
             llm_string = "openai/gpt-3.5-turbo"
             result = [Generation(text="The capital of France is Paris.")]
-    
+
             cache.update(prompt, llm_string, result)
             ```
-    
+
         Note:
             - The method uses an MD5 hash of the `prompt` and `llm_string` to create the
                 cache key.
@@ -280,7 +279,6 @@ class RedisCache(BaseCache):
         self.redis.json().set(key, Path.root_path(), json_value)
         if self.ttl is not None:
             self.redis.expire(key, self.ttl)
-        
 
     def clear(self, **kwargs: Any) -> None:
         """Clear all entries in the Redis cache that match the cache prefix.
