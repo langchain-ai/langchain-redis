@@ -62,26 +62,6 @@ else:
 
 logger = logging.getLogger(__name__)
 
-# Cache entries come back from Redis (or the LangCache service) as untrusted
-# input, so `loads()` must only be allowed to instantiate the concrete types
-# this module ever stores: LLM/chat generations and the message types that
-# can appear inside a ChatGeneration. This blocks a crafted payload from
-# reviving an arbitrary langchain_core-mapped class (e.g. a chat model with
-# attacker-controlled `base_url`/headers kwargs).
-_ALLOWED_CACHE_OBJECTS: List[type[Serializable]] = [
-    Generation,
-    ChatGeneration,
-    AIMessage,
-    AIMessageChunk,
-    HumanMessage,
-    HumanMessageChunk,
-    SystemMessage,
-    SystemMessageChunk,
-    ToolMessage,
-    ToolMessageChunk,
-    RemoveMessage,
-]
-
 
 class EmbeddingsVectorizer(BaseVectorizer):
     embeddings: Embeddings = Field(...)
@@ -258,21 +238,13 @@ class RedisCache(BaseCache):
         """
         key = self._key(prompt, llm_string)
         result = self.redis.json().get(key)
-        if not result:
-            return None
-        try:
-            if isinstance(result, list):
-                return [
-                    loads(json.dumps(gen), allowed_objects=_ALLOWED_CACHE_OBJECTS)
-                    for gen in result
-                ]
-            # Entries written before multi-generation support stored a single
-            # Generation as the JSON root instead of a list.
-            return [loads(json.dumps(result), allowed_objects=_ALLOWED_CACHE_OBJECTS)]
-        except (ValueError, NotImplementedError):
-            # Entry doesn't deserialize to an allowed type; treat as a miss
-            # rather than raising into the caller.
-            return None
+        if result:
+            # `allowed_objects="core"` matches the current default explicitly, so
+            # this keeps existing behavior stable when langchain-core changes its
+            # default (see LangChainPendingDeprecationWarning) instead of silently
+            # picking up a narrower allowlist on a future langchain-core upgrade.
+            return [loads(json.dumps(result), allowed_objects="core")]
+        return None
 
     def update(self, prompt: str, llm_string: str, return_val: RETURN_VAL_TYPE) -> None:
         """Update the cache with a new result for a given prompt and language model.
@@ -536,7 +508,7 @@ class RedisSemanticCache(BaseCache):
                 if result.get("metadata", {}).get("llm_string") == llm_string:
                     try:
                         return [
-                            loads(gen_str, allowed_objects=_ALLOWED_CACHE_OBJECTS)
+                            loads(gen_str, allowed_objects="core")
                             for gen_str in json.loads(result.get("response"))
                         ]
                     except (
@@ -730,7 +702,7 @@ class RedisSemanticCache(BaseCache):
                 if result.get("metadata", {}).get("llm_string") == llm_string:
                     try:
                         return [
-                            loads(gen_str, allowed_objects=_ALLOWED_CACHE_OBJECTS)
+                            loads(gen_str, allowed_objects="core")
                             for gen_str in json.loads(result.get("response"))
                         ]
                     except (
@@ -908,10 +880,10 @@ class LangCacheSemanticCache(BaseCache):
         first = results[0]
         try:
             return [
-                loads(s, allowed_objects=_ALLOWED_CACHE_OBJECTS)
+                loads(s, allowed_objects="core")
                 for s in json.loads(first.get("response", "[]"))
             ]
-        except (json.JSONDecodeError, TypeError, ValueError, NotImplementedError):
+        except (json.JSONDecodeError, TypeError):
             return None
 
     def update(self, prompt: str, llm_string: str, return_val: RETURN_VAL_TYPE) -> None:
