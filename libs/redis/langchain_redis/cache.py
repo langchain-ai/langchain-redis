@@ -15,19 +15,6 @@ from langchain_core.caches import RETURN_VAL_TYPE, BaseCache
 from langchain_core.embeddings import Embeddings
 from langchain_core.load.dump import dumps
 from langchain_core.load.load import loads
-from langchain_core.load.serializable import Serializable
-from langchain_core.messages import (
-    AIMessage,
-    AIMessageChunk,
-    HumanMessage,
-    HumanMessageChunk,
-    RemoveMessage,
-    SystemMessage,
-    SystemMessageChunk,
-    ToolMessage,
-    ToolMessageChunk,
-)
-from langchain_core.outputs import ChatGeneration, Generation
 from pydantic import ConfigDict, Field
 from redis import Redis
 from redis.commands.json.path import Path
@@ -211,7 +198,7 @@ class RedisCache(BaseCache):
         Returns:
             The cached result if found, or `None` if not present in the cache.
 
-                The result is typically a list containing a single `Generation` object.
+                The result is typically a list of `Generation` objects.
 
         Example:
             ```python
@@ -238,56 +225,19 @@ class RedisCache(BaseCache):
         """
         key = self._key(prompt, llm_string)
         result = self.redis.json().get(key)
-        if result:
+        if not result:
+            return None
+        if isinstance(result, list):
             # `allowed_objects="core"` matches the current default explicitly, so
             # this keeps existing behavior stable when langchain-core changes its
             # default (see LangChainPendingDeprecationWarning) instead of silently
             # picking up a narrower allowlist on a future langchain-core upgrade.
-            return [loads(json.dumps(result), allowed_objects="core")]
-        return None
+            return [loads(json.dumps(gen), allowed_objects="core") for gen in result]
+        # Entries written before multi-generation support stored a single
+        # Generation as the JSON root instead of a list.
+        return [loads(json.dumps(result), allowed_objects="core")]
 
-    def update(self, prompt: str, llm_string: str, return_val: RETURN_VAL_TYPE) -> None:
-        """Update the cache with a new result for a given prompt and language model.
-
-        This method stores a new result in the Redis cache for the specified prompt and
-        language model combination.
-
-        Args:
-            prompt (str): The input prompt associated with the result.
-            llm_string (str): A string representation of the language model
-                and its parameters.
-            return_val (RETURN_VAL_TYPE): The result to be cached, typically a list
-                containing a single `Generation` object.
-
-        Example:
-            ```python
-            from langchain_core.outputs import Generation
-
-            cache = RedisCache(redis_url="redis://localhost:6379", ttl=3600)
-            prompt = "What is the capital of France?"
-            llm_string = "openai/gpt-3.5-turbo"
-            result = [Generation(text="The capital of France is Paris.")]
-
-            cache.update(prompt, llm_string, result)
-            ```
-
-        Note:
-            - The method uses an MD5 hash of the `prompt` and `llm_string` to create the
-                cache key.
-            - The result is stored as JSON in Redis.
-            - If a TTL (Time To Live) was specified when initializing the cache,
-                it will be applied to this entry.
-            - This method is typically called internally by LangChain after a language
-                model generates a response, but it can be used directly
-                for manual cache updates.
-            - If the cache already contains an entry for this `prompt` and `llm_string`,
-                it will be overwritten.
-        """
-        key = self._key(prompt, llm_string)
-        json_value = [json.loads(dumps(gen)) for gen in return_val]
-        self.redis.json().set(key, Path.root_path(), json_value)
-        if self.ttl is not None:
-            self.redis.expire(key, self.ttl)
+t
 
     def clear(self, **kwargs: Any) -> None:
         """Clear all entries in the Redis cache that match the cache prefix.
@@ -511,12 +461,7 @@ class RedisSemanticCache(BaseCache):
                             loads(gen_str, allowed_objects="core")
                             for gen_str in json.loads(result.get("response"))
                         ]
-                    except (
-                        json.JSONDecodeError,
-                        TypeError,
-                        ValueError,
-                        NotImplementedError,
-                    ):
+                    except (json.JSONDecodeError, TypeError):
                         return None
         return None
 
@@ -705,12 +650,7 @@ class RedisSemanticCache(BaseCache):
                             loads(gen_str, allowed_objects="core")
                             for gen_str in json.loads(result.get("response"))
                         ]
-                    except (
-                        json.JSONDecodeError,
-                        TypeError,
-                        ValueError,
-                        NotImplementedError,
-                    ):
+                    except (json.JSONDecodeError, TypeError):
                         return None
         return None
 
