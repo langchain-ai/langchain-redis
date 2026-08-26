@@ -132,6 +132,8 @@ docs = vector_store.similarity_search(query, k=2)
 docs_and_scores = vector_store.similarity_search_with_score(query, k=2)
 
 # Similarity search with filtering
+from redisvl.query.filter import Tag
+
 filter_expr = Tag("category") == "science"
 filtered_docs = vector_store.similarity_search(query, k=2, filter=filter_expr)
 
