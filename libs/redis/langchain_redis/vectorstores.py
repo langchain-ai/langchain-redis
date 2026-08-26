@@ -829,8 +829,8 @@ class RedisVectorStore(VectorStore):
             from langchain_openai import OpenAIEmbeddings
 
             vector_store = RedisVectorStore(
+                embeddings=OpenAIEmbeddings(),
                 index_name="langchain-demo",
-                embedding=OpenAIEmbeddings(),
                 redis_url="redis://localhost:6379",
             )
 
@@ -839,7 +839,7 @@ class RedisVectorStore(VectorStore):
 
             result = vector_store.delete(ids=ids_to_delete)
             if result:
-                print("Documents were succesfully deleted")
+                print("Documents were successfully deleted")
             else:
                 print("No Documents were deleted")
             ```
