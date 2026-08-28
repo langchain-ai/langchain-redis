@@ -172,9 +172,14 @@ class RedisVectorStore(VectorStore):
         distance_metric: str
             Distance metric to use for similarity search. Default is `'COSINE'`.
         indexing_algorithm: str
-            Indexing algorithm to use. Default is `'FLAT'`.
+            Indexing algorithm to use: `'FLAT'`, `'HNSW'` or `'SVS-VAMANA'`.
+            Default is `'FLAT'`.
         vector_datatype: str
             Data type of the vector. Default is `'FLOAT32'`.
+        vector_attrs: Optional[Dict[str, Any]]
+            Algorithm-specific tuning attributes for the vector field, e.g.
+            `{"ef_runtime": 20}` for HNSW or `{"compression": "LVQ8"}` for
+            SVS-VAMANA. See `RedisConfig.vector_attrs`.
 
     Key init args — client params:
         redis_url: Optional[str]
@@ -404,6 +409,7 @@ class RedisVectorStore(VectorStore):
                                 "distance_metric": self.config.distance_metric,
                                 "algorithm": self.config.indexing_algorithm,
                                 "datatype": self.config.vector_datatype,
+                                **(self.config.vector_attrs or {}),
                             },
                         },
                         {"name": "_index_name", "type": "text"},
