@@ -559,8 +559,21 @@ class RedisVectorStore(VectorStore):
         else:
             result = self._index.load(records, ttl=self.ttl)
 
-        # Return list of IDs or empty list if result is None
-        return list(result) if result is not None else []
+        if result is None:
+            return []
+
+        # `SearchIndex.load` returns the full Redis keys it wrote, prefix
+        # included. `delete()` and `get_by_ids()` take bare ids and add that
+        # same prefix themselves, so strip it back off here. Otherwise the ids
+        # this method returns can't be passed to either of those without
+        # ending up double-prefixed.
+        if self.config.key_prefix:
+            full_prefix = f"{self.config.key_prefix}:"
+            return [
+                key[len(full_prefix) :] if key.startswith(full_prefix) else key
+                for key in result
+            ]
+        return list(result)
 
     @classmethod
     def from_texts(
