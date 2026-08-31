@@ -87,8 +87,8 @@ def maximal_marginal_relevance(
 
         embeddings = OpenAIEmbeddings()
         vector_store = RedisVectorStore(
+            embeddings=embeddings,
             index_name="langchain-demo",
-            embedding=embeddings,
             redis_url="redis://localhost:6379",
         )
 
@@ -173,8 +173,8 @@ class RedisVectorStore(VectorStore):
         from langchain_openai import OpenAIEmbeddings
 
         vector_store = RedisVectorStore(
+            embeddings=OpenAIEmbeddings(),
             index_name="langchain-demo",
-            embedding=OpenAIEmbeddings(),
             redis_url="redis://localhost:6379",
         )
         ```
@@ -192,7 +192,7 @@ class RedisVectorStore(VectorStore):
         redis_client = Redis.from_url("redis://localhost:6379")
 
         store = RedisVectorStore(
-            embedding=OpenAIEmbeddings(),
+            embeddings=OpenAIEmbeddings(),
             index_name="langchain-demo",
             redis_client=redis_client
         )
@@ -445,8 +445,8 @@ class RedisVectorStore(VectorStore):
             from langchain_openai import OpenAIEmbeddings
 
             vector_store = RedisVectorStore(
+                embeddings=OpenAIEmbeddings(),
                 index_name="langchain-demo",
-                embedding=OpenAIEmbeddings(),
                 redis_url="redis://localhost:6379",
             )
 
@@ -1339,8 +1339,8 @@ class RedisVectorStore(VectorStore):
             from langchain_openai import OpenAIEmbeddings
 
             vector_store = RedisVectorStore(
+                embeddings=OpenAIEmbeddings(),
                 index_name="langchain-demo",
-                embedding=OpenAIEmbeddings(),
                 redis_url="redis://localhost:6379",
             )
 
