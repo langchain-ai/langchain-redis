@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Type, Union
 
 from pydantic import BaseModel, ConfigDict, Field, SkipValidation, model_validator
 from redis import Redis
@@ -26,7 +26,11 @@ class RedisConfig(BaseModel):
         from_existing (bool): Whether to use an existing index.
 
             Defaults to `False`.
-        key_prefix (Optional[str]): Prefix for Redis keys.
+        key_prefix (Optional[Union[str, List[str]]]): Prefix for Redis keys.
+
+            A list makes the index span several key namespaces: searches
+            cover all of them, while new documents are written under the
+            first prefix (`primary_prefix`).
 
             Defaults to `index_name` if not set.
         redis_url (str): URL of the Redis instance.
@@ -52,6 +56,13 @@ class RedisConfig(BaseModel):
             override `dims`, `distance_metric`, `algorithm` or `datatype`
             (use the matching config fields), and cannot be combined with
             `index_schema` or `schema_path`.
+        stopwords (Optional[List[str]]): Index-level stopwords configuration.
+
+            `None` (default) keeps the Redis default stopwords, an empty
+            list disables stopwords entirely (`STOPWORDS 0`), and a
+            non-empty list replaces the defaults with custom stopwords.
+            Useful for non-English content or exact-phrase domains where
+            words like "the" are meaningful.
         storage_type (str): Storage type in Redis.
 
             Defaults to `'hash'`.
@@ -103,7 +114,7 @@ class RedisConfig(BaseModel):
 
     index_name: str = Field(default_factory=lambda: create_ulid())
     from_existing: bool = False
-    key_prefix: Optional[str] = None
+    key_prefix: Optional[Union[str, List[str]]] = None
     redis_url: str = "redis://localhost:6379"
     redis_client: Optional[Redis] = Field(default=None)
     connection_args: Optional[Dict[str, Any]] = Field(default={})
@@ -111,6 +122,7 @@ class RedisConfig(BaseModel):
     indexing_algorithm: str = "FLAT"
     vector_datatype: str = "FLOAT32"
     vector_attrs: Optional[Dict[str, Any]] = None
+    stopwords: Optional[List[str]] = None
     storage_type: str = "hash"
     id_field: str = "id"
     content_field: str = "text"
@@ -155,9 +167,20 @@ class RedisConfig(BaseModel):
 
     @model_validator(mode="after")
     def set_key_prefix(self) -> Self:
-        if self.key_prefix is None:
+        if self.key_prefix is None or self.key_prefix == []:
             self.key_prefix = self.index_name
         return self
+
+    @property
+    def primary_prefix(self) -> Optional[str]:
+        """The prefix used when constructing new keys.
+
+        For a multi-prefix index this is the first prefix; searches still
+        span all configured prefixes.
+        """
+        if isinstance(self.key_prefix, list):
+            return self.key_prefix[0]
+        return self.key_prefix
 
     @model_validator(mode="after")
     def check_vector_attrs(self) -> Self:
@@ -541,11 +564,13 @@ class RedisConfig(BaseModel):
         elif self.schema_path:
             return IndexSchema.from_yaml(self.schema_path)
         else:
-            index_info = {
+            index_info: Dict[str, Any] = {
                 "name": self.index_name,
                 "prefix": self.key_prefix,
                 "storage_type": self.storage_type,
             }
+            if self.stopwords is not None:
+                index_info["stopwords"] = self.stopwords
 
             fields = [
                 {"name": self.id_field, "type": "tag"},

@@ -927,8 +927,8 @@ class RedisVectorStore(VectorStore):
         if filter is not None:
             return self.delete_by_filter(filter) > 0
         if ids and len(ids) > 0:
-            if self.config.key_prefix:
-                keys = [f"{self.config.key_prefix}:{_id}" for _id in ids]
+            if self.config.primary_prefix:
+                keys = [f"{self.config.primary_prefix}:{_id}" for _id in ids]
             else:
                 keys = ids
             # Always return True if we delete at least one key
@@ -949,9 +949,10 @@ class RedisVectorStore(VectorStore):
         Args:
             filter: RedisVL `FilterExpression` selecting the documents to
                 delete — the same filter builder style accepted by
-                `similarity_search`. Raw filter strings are not accepted for
-                mutating operations because they cannot be safely combined with
-                the internal index-scoping filter.
+                `similarity_search`, including wildcard tag patterns like
+                `Tag("source") % "docs-v1*"`. Raw filter strings are not
+                accepted for mutating operations because they cannot be
+                safely combined with the internal index-scoping filter.
             dry_run: If `True`, nothing is deleted; the return value is the
                 number of documents that would be deleted.
             batch_size: Optional number of documents to resolve and delete
@@ -1353,7 +1354,9 @@ class RedisVectorStore(VectorStore):
         Args:
             query: Text to look up documents similar to.
             k: Number of `Document` objects to return.
-            filter: Optional `filter` expression to apply.
+            filter: Optional `filter` expression to apply. Tag filters
+                support wildcard patterns via the modulo operator, e.g.
+                `Tag("category") % "elec*"`.
             sort_by: Optional `sort_by` expression to apply.
             **kwargs: Other keyword arguments to pass to the search function.
 
@@ -2043,8 +2046,8 @@ class RedisVectorStore(VectorStore):
         !!! version-added "Added in `langchain-redis` 0.1.2"
         """
         redis = self.config.redis()
-        if self.config.key_prefix:
-            full_ids = [f"{self.config.key_prefix}:{_id}" for _id in ids]
+        if self.config.primary_prefix:
+            full_ids = [f"{self.config.primary_prefix}:{_id}" for _id in ids]
         else:
             full_ids = list(ids)
         if self.config.storage_type == StorageType.JSON.value:
