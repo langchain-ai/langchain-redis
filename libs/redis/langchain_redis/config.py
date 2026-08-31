@@ -63,7 +63,7 @@ class RedisConfig(BaseModel):
 
     Example:
         ```python
-        from langchain_redis import RedisConfig
+        from langchain_redis import RedisConfig, RedisVectorStore
 
         config = RedisConfig(
             index_name="my_index",
