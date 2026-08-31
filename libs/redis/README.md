@@ -158,6 +158,7 @@ The `RedisCache`, `RedisSemanticCache`, and `LangCacheSemanticCache` classes pro
 from langchain_redis import RedisCache, RedisSemanticCache, LangCacheSemanticCache
 from langchain_core.language_models import LLM
 from langchain_core.embeddings import Embeddings
+from langchain_core.outputs import Generation
 
 # Standard cache
 cache = RedisCache(redis_url="redis://localhost:6379", ttl=3600)
