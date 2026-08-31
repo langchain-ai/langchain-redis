@@ -24,6 +24,7 @@ from langchain_core.vectorstores import VectorStore
 from redisvl.index import SearchIndex  # type: ignore[import]
 from redisvl.query import (  # type: ignore[import]
     AggregateHybridQuery,
+    FilterQuery,
     HybridQuery,
     RangeQuery,
     TextQuery,
@@ -385,20 +386,32 @@ class RedisVectorStore(VectorStore):
             # Set legacy_key_format=False for correct single-colon format.
             # Note: key_prefix is always set by validator, so it's never None here
             key_prefix = self.config.key_prefix or self.config.index_name
-            if self.config.legacy_key_format:
+            prefix: Union[str, List[str]]
+            if isinstance(key_prefix, list):
+                # Multi-prefix index: searches span every prefix; writes use
+                # the first one (config.primary_prefix)
+                if self.config.legacy_key_format:
+                    prefix = [f"{key_pref}:" for key_pref in key_prefix]
+                else:
+                    prefix = list(key_prefix)
+            elif self.config.legacy_key_format:
                 # Legacy format: adds trailing ":" (creates "prefix::doc_id")
                 prefix = f"{key_prefix}:"
             else:
                 # Correct format: no trailing ":" (creates "prefix:doc_id")
                 prefix = key_prefix
 
+            index_info: Dict[str, Any] = {
+                "name": self.config.index_name,
+                "prefix": prefix,
+                "storage_type": self.config.storage_type,
+            }
+            if self.config.stopwords is not None:
+                index_info["stopwords"] = self.config.stopwords
+
             self._index = SearchIndex.from_dict(
                 {
-                    "index": {
-                        "name": self.config.index_name,
-                        "prefix": prefix,
-                        "storage_type": self.config.storage_type,
-                    },
+                    "index": index_info,
                     "fields": [
                         {"name": self.config.content_field, "type": "text"},
                         {
@@ -431,7 +444,7 @@ class RedisVectorStore(VectorStore):
         return self._embeddings
 
     @property
-    def key_prefix(self) -> Optional[str]:
+    def key_prefix(self) -> Optional[Union[str, List[str]]]:
         return self.config.key_prefix
 
     def add_texts(
@@ -587,8 +600,9 @@ class RedisVectorStore(VectorStore):
 
         # Load records into the index
         if keys:
-            # Already have key_prefix in index definition (with ending colon)
-            record_keys = [f"{self.config.key_prefix}:{key}" for key in keys]
+            # Already have key_prefix in index definition (with ending colon).
+            # New documents are always written under the primary prefix.
+            record_keys = [f"{self.config.primary_prefix}:{key}" for key in keys]
             result = self._index.load(records, keys=record_keys, ttl=self.ttl)
         else:
             result = self._index.load(records, ttl=self.ttl)
@@ -860,18 +874,31 @@ class RedisVectorStore(VectorStore):
         return RedisVectorStore(embedding, config=config, **kwargs)
 
     def delete(self, ids: Optional[List[str]] = None, **kwargs: Any) -> Optional[bool]:
-        """Delete ids from the vector store.
+        """Delete documents by id or by filter expression.
 
         Args:
             ids: Optional list of ids of the documents to delete.
-            **kwargs: Additional keyword arguments (not used in the
-                current implementation).
+            **kwargs: Additional keyword arguments.
+
+                Supported kwargs:
+
+                - `filter`: A RedisVL `FilterExpression`. Deletes every
+                    document in this index matching the filter. Mutually
+                    exclusive with `ids`.
 
         Returns:
-            Optional[bool]: `True` if one or more keys are deleted, `False` otherwise
+            Optional[bool]: `True` if one or more documents were deleted,
+                `False` otherwise.
+
+        Raises:
+            ValueError: If both `ids` and `filter` are provided.
 
         Example:
             ```python
+            from redisvl.query.filter import Tag
+
+            # Delete by ids
+            vector_store.delete(ids=["doc1", "doc2", "doc3"])
             from langchain_redis import RedisVectorStore
             from langchain_openai import OpenAIEmbeddings
 
@@ -881,25 +908,24 @@ class RedisVectorStore(VectorStore):
                 redis_url="redis://localhost:6379",
             )
 
-            # Assuming documents with these ids exist in the store
-            ids_to_delete = ["doc1", "doc2", "doc3"]
-
-            result = vector_store.delete(ids=ids_to_delete)
-            if result:
-                print("Documents were successfully deleted")
-            else:
-                print("No Documents were deleted")
+            # Delete every document matching a metadata filter
+            vector_store.delete(filter=Tag("source") == "handbook.pdf")
             ```
 
         Note:
-            - If `ids` is `None` or an empty list, the method returns `False`.
-            - If the number of actually deleted keys differs from the number of keys
-                submitted for deletion the method returns `False`
-            - The method uses the `drop_keys` functionality from RedisVL to delete
-                the keys from Redis.
-            - Keys are constructed by prefixing each id with the `key_prefix` specified
-                in the configuration.
+            - If neither `ids` nor `filter` is given, the method returns `False`.
+            - The ids path uses RedisVL's `drop_keys`; keys are constructed by
+                prefixing each id with the configured `key_prefix`.
+            - The filter path delegates to `delete_by_filter`, which also
+                exposes counts and a dry-run mode. Mutating filter operations
+                require RedisVL `FilterExpression` objects, not raw filter
+                strings, so the filter can be safely scoped to this index.
         """
+        filter = kwargs.get("filter")
+        if ids and filter is not None:
+            raise ValueError("Provide either 'ids' or 'filter', not both.")
+        if filter is not None:
+            return self.delete_by_filter(filter) > 0
         if ids and len(ids) > 0:
             if self.config.key_prefix:
                 keys = [f"{self.config.key_prefix}:{_id}" for _id in ids]
@@ -910,6 +936,250 @@ class RedisVectorStore(VectorStore):
             return self._index.drop_keys(keys) > 0
         else:
             return False
+
+    def delete_by_filter(
+        self,
+        filter: FilterExpression,
+        *,
+        dry_run: bool = False,
+        batch_size: Optional[int] = None,
+    ) -> int:
+        """Delete every document in this index matching a filter expression.
+
+        Args:
+            filter: RedisVL `FilterExpression` selecting the documents to
+                delete — the same filter builder style accepted by
+                `similarity_search`. Raw filter strings are not accepted for
+                mutating operations because they cannot be safely combined with
+                the internal index-scoping filter.
+            dry_run: If `True`, nothing is deleted; the return value is the
+                number of documents that would be deleted.
+            batch_size: Optional number of documents to resolve and delete
+                per round-trip.
+
+        Returns:
+            int: The number of documents deleted (or matched, for a dry run).
+
+        Example:
+            ```python
+            from redisvl.query.filter import Tag
+
+            # Preview a purge, then run it
+            would_delete = vector_store.delete_by_filter(
+                Tag("tenant_id") == "acme", dry_run=True
+            )
+            deleted = vector_store.delete_by_filter(Tag("tenant_id") == "acme")
+            ```
+
+        Note:
+            - When the schema has an `_index_name` field (default schemas do),
+                the filter is automatically restricted to this index's
+                documents, so indexes sharing a `key_prefix` cannot delete
+                each other's data.
+            - Use RedisVL filter builders such as `Tag`, `Num`, or `Text`
+                instead of raw RediSearch filter strings.
+            - A match-all filter on a schema without that restriction is
+                refused by RedisVL as a safety measure.
+        """
+        scoped_filter = self._prepare_bulk_filter(filter, "delete_by_filter")
+        bulk_kwargs: Dict[str, Any] = {"dry_run": dry_run}
+        if batch_size is not None:
+            bulk_kwargs["batch_size"] = batch_size
+        result = self._index.drop_by_filter(scoped_filter, **bulk_kwargs)
+        return result.matched if dry_run else result.processed
+
+    def update_metadata_by_filter(
+        self,
+        filter: FilterExpression,
+        values: Dict[str, Any],
+        *,
+        dry_run: bool = False,
+        batch_size: Optional[int] = None,
+    ) -> int:
+        """Set field values on every document matching a filter expression.
+
+        Updates stored fields in place without re-embedding — useful for
+        bulk metadata operations like flipping a status flag, reclassifying
+        documents, or backfilling a new field.
+
+        Args:
+            filter: RedisVL `FilterExpression` selecting the documents to
+                update. Raw filter strings are not accepted for mutating
+                operations because they cannot be safely combined with the
+                internal index-scoping filter.
+            values: Mapping of field names to their new values.
+            dry_run: If `True`, nothing is updated; the return value is the
+                number of documents that would be updated.
+            batch_size: Optional number of documents to update per
+                round-trip.
+
+        Returns:
+            int: The number of documents updated (or matched, for a dry run).
+
+        Example:
+            ```python
+            from redisvl.query.filter import Tag
+
+            updated = vector_store.update_metadata_by_filter(
+                Tag("status") == "draft", {"status": "published"}
+            )
+            ```
+
+        Note:
+            - This never re-computes embeddings. Protected fields such as
+                content and embeddings are rejected; re-add documents when
+                the embedding must change.
+            - The filter is automatically restricted to this index's
+                documents when the schema has an `_index_name` field.
+            - Use RedisVL filter builders such as `Tag`, `Num`, or `Text`
+                instead of raw RediSearch filter strings.
+        """
+        scoped_filter = self._prepare_bulk_filter(filter, "update_metadata_by_filter")
+        self._validate_metadata_update_values(values)
+
+        page_size = batch_size or 500
+        if page_size <= 0:
+            raise ValueError("batch_size must be greater than 0.")
+
+        rows = self._filter_rows_for_update(scoped_filter, page_size)
+        if dry_run:
+            return len(rows)
+
+        return self._update_metadata_rows(rows, values, page_size)
+
+    def _prepare_bulk_filter(
+        self,
+        filter: Optional[FilterExpression],
+        operation: str,
+    ) -> FilterExpression:
+        """Validate and scope a destructive bulk-operation filter.
+
+        Bulk writes require a RedisVL `FilterExpression` so the user's filter
+        can be combined with the internal `_index_name` guard before any
+        mutation is sent to Redis.
+        """
+        if filter is None:
+            raise ValueError(
+                f"{operation} requires a RedisVL FilterExpression. To delete "
+                "specific documents use delete(ids=...)."
+            )
+        if not isinstance(filter, FilterExpression):
+            raise ValueError(
+                f"{operation} strictly requires a RedisVL FilterExpression. "
+                "Use filter builders like Tag, Num, or Text instead of raw strings."
+            )
+        scoped_filter = self._with_index_name_filter(filter)
+        if scoped_filter is None or not isinstance(scoped_filter, FilterExpression):
+            raise ValueError(f"{operation} requires a filter expression.")
+        return scoped_filter
+
+    def _validate_metadata_update_values(self, values: Dict[str, Any]) -> None:
+        """Validate metadata updates before mutating matching documents.
+
+        `update_metadata_by_filter` updates fields in place without
+        re-embedding or rebuilding document identity, so callers may only
+        update user metadata fields.
+        """
+        if not values:
+            raise ValueError("update_metadata_by_filter requires non-empty values.")
+        protected_fields = {
+            self.config.id_field,
+            self.config.content_field,
+            self.config.embedding_field,
+            "_index_name",
+            "_metadata_json",
+        }
+        overlap = set(values) & protected_fields
+        if overlap:
+            raise ValueError(
+                "update_metadata_by_filter cannot update protected fields: "
+                f"{sorted(overlap)}"
+            )
+
+    def _filter_rows_for_update(
+        self, filter: FilterExpression, batch_size: int
+    ) -> List[Dict[str, Any]]:
+        """Return rows matching the scoped filter before applying updates.
+
+        Resolving all matches first keeps pagination stable when updated
+        fields also participate in the filter, and fetches `_metadata_json`
+        for the metadata merge step.
+        """
+        query = FilterQuery(
+            filter_expression=filter,
+            return_fields=["_metadata_json"],
+            num_results=batch_size,
+        )
+        rows = []
+        for batch in self._index.paginate(query, page_size=batch_size):
+            rows.extend(batch)
+        return rows
+
+    def _stored_metadata_value(self, value: Any) -> Any:
+        """Return the Redis field representation for a metadata value.
+
+        List metadata is stored as a tag-separator-delimited string for field
+        updates; `_metadata_json` keeps the original JSON metadata shape.
+        """
+        if isinstance(value, list):
+            return self.config.default_tag_separator.join(str(item) for item in value)
+        return value
+
+    def _metadata_json_for_update(
+        self, row: Dict[str, Any], values: Dict[str, Any]
+    ) -> str:
+        """Merge updated metadata values into a row's stored metadata JSON.
+
+        Redis/client decoding may return `_metadata_json` as bytes, a JSON
+        string, or an already-decoded dict, so normalize it before merging.
+        """
+        metadata = {}
+        metadata_json = row.get("_metadata_json")
+        if isinstance(metadata_json, bytes):
+            metadata_json = metadata_json.decode()
+        if isinstance(metadata_json, str):
+            try:
+                metadata = json.loads(metadata_json)
+            except (json.JSONDecodeError, TypeError):
+                metadata = {}
+        elif isinstance(metadata_json, dict):
+            metadata = metadata_json.copy()
+        metadata.update(values)
+        return json.dumps(metadata)
+
+    def _update_metadata_rows(
+        self, rows: List[Dict[str, Any]], values: Dict[str, Any], batch_size: int
+    ) -> int:
+        """Write metadata updates for resolved rows in Redis pipeline batches.
+
+        Each row gets both its individual stored fields and `_metadata_json`
+        updated so Redis queries and returned `Document.metadata` stay
+        consistent.
+        """
+        processed = 0
+        for start in range(0, len(rows), batch_size):
+            batch = rows[start : start + batch_size]
+            updates = []
+            for row in batch:
+                update = {
+                    name: self._stored_metadata_value(value)
+                    for name, value in values.items()
+                }
+                update["_metadata_json"] = self._metadata_json_for_update(row, values)
+                updates.append((row["id"], update))
+
+            if self.config.storage_type == StorageType.JSON.value:
+                with self._index.client.json().pipeline(transaction=False) as pipe:
+                    for key, update in updates:
+                        pipe.merge(key, ".", update)
+                    pipe.execute()
+            else:
+                with self._index.client.pipeline(transaction=False) as pipe:
+                    for key, update in updates:
+                        pipe.hset(key, mapping=update)
+                    pipe.execute()
+            processed += len(updates)
+        return processed
 
     def _with_index_name_filter(
         self, filter: Optional[Union[str, FilterExpression]]
