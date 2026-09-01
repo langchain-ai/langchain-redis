@@ -439,6 +439,14 @@ class RedisVectorStore(VectorStore):
         Returns:
             List of ids from adding the texts into the vector store.
 
+        Raises:
+            ValueError: If `metadatas` is provided and its length does not
+                match the number of `texts`.
+            ValueError: If `keys` is provided and its length does not
+                match the number of `texts`.
+            ValueError: If `ids` is provided (via `kwargs`) and its length
+                does not match the number of `texts`.
+
         Example:
             ```python
             from langchain_redis import RedisVectorStore
