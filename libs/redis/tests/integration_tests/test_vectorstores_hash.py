@@ -269,8 +269,9 @@ def test_custom_keys(texts: List[str], redis_url: str) -> None:
     )
     vector_store, keys_out = cast(Tuple[RedisVectorStore, List[str]], result)
 
-    # it will append the index key prefix to all keys
-    assert keys_out == [f"{vector_store.key_prefix}:{key}" for key in keys_in]
+    # keys come back without the index key prefix, ready to be passed
+    # straight to get_by_ids()/delete()
+    assert keys_out == keys_in
 
     # Clean up
     vector_store.index.delete(drop=True)
@@ -301,8 +302,8 @@ def test_custom_keys_from_docs(texts: List[str], redis_url: str) -> None:
     )
     # test all keys are stored
     assert client.hget(f"{vector_store.key_prefix}:test_key_2", "text")
-    # test all keys in are the same as the keys_out
-    assert [f"tst8:{key}" for key in keys_in] == keys_out
+    # keys come back without the index key prefix
+    assert keys_out == keys_in
     # Clean up
     vector_store.index.delete(drop=True)
 
@@ -604,6 +605,39 @@ def test_get_by_ids(redis_url: str) -> None:
     assert docs == [
         Document(page_content=doc_1_content, id=doc_1_id),
     ]
+
+    # Clean up
+    vector_store.index.delete(drop=True)
+
+
+def test_add_texts_returned_ids_round_trip(redis_url: str) -> None:
+    """Ids returned by add_texts() must work with get_by_ids() and delete()."""
+    index_name = f"test_index_{str(ULID())}"
+
+    vector_store = RedisVectorStore(
+        embeddings=get_embeddings_for_tests(),
+        index_name=index_name,
+        key_prefix="tst20",
+        redis_url=redis_url,
+    )
+
+    # No keys are passed in, so the returned ids are the only handle the
+    # caller has on these documents.
+    ids = vector_store.add_texts(["foo", "bar"])
+    client = vector_store.index.client
+
+    # An id plus the key prefix is the key that was actually written
+    for id_ in ids:
+        assert client.exists(f"{vector_store.key_prefix}:{id_}")
+
+    docs = vector_store.get_by_ids(ids)
+    assert [doc.id for doc in docs] == ids
+    assert [doc.page_content for doc in docs] == ["foo", "bar"]
+
+    assert vector_store.delete(ids=ids) is True
+    assert vector_store.get_by_ids(ids) == []
+    for id_ in ids:
+        assert not client.exists(f"{vector_store.key_prefix}:{id_}")
 
     # Clean up
     vector_store.index.delete(drop=True)
