@@ -118,3 +118,45 @@ def test_add_texts_with_both_keys_and_ids() -> None:
         args, kwargs = mock_index.load.call_args
         assert kwargs["keys"] == expected_keys
         assert len(result) == 2
+
+
+def test_add_texts_returns_ids_without_key_prefix() -> None:
+    """`SearchIndex.load` hands back the full Redis key it wrote (prefix
+    included), but `delete()` and `get_by_ids()` take bare ids and add that
+    prefix themselves, so `add_texts` has to strip it back off.
+    """
+    with (
+        patch("langchain_redis.vectorstores.RedisConfig") as mock_config,
+        patch("langchain_redis.vectorstores.SearchIndex") as mock_search_index_class,
+    ):
+        mock_embeddings = MagicMock()
+        mock_embeddings.embed_query.return_value = [0.1, 0.2, 0.3]
+        mock_embeddings.embed_documents.return_value = [[0.1, 0.2, 0.3]]
+
+        mock_index = MagicMock()
+        mock_index.load.return_value = ["myprefix:mykey"]
+        mock_index.schema.fields.values.return_value = []
+        mock_search_index_class.return_value = mock_index
+        mock_search_index_class.from_dict.return_value = mock_index
+
+        mock_config.return_value.index_name = "test_index"
+        mock_config.return_value.key_prefix = "myprefix"
+        mock_config.return_value.embedding_dimensions = 3
+        mock_config.return_value.content_field = "text"
+        mock_config.return_value.embedding_field = "embedding"
+        mock_config.return_value.redis.return_value = MagicMock()
+        mock_config.return_value.index_schema = None
+        mock_config.return_value.schema_path = None
+        mock_config.return_value.from_existing = False
+        mock_config.return_value.storage_type = "JSON"
+        mock_config.return_value.metadata_schema = None
+        mock_config.return_value.vector_datatype = "FLOAT32"
+        mock_config.return_value.default_tag_separator = ","
+        mock_config.return_value.distance_metric = "COSINE"
+        mock_config.return_value.indexing_algorithm = "FLAT"
+
+        vector_store = RedisVectorStore(embeddings=mock_embeddings)
+
+        result = vector_store.add_texts(texts=["hello"], keys=["mykey"])
+
+        assert result == ["mykey"]
