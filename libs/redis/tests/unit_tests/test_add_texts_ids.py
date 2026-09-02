@@ -32,6 +32,7 @@ def test_add_texts_with_ids_in_kwargs() -> None:
         # Setup config
         mock_config.return_value.index_name = "test_index"
         mock_config.return_value.key_prefix = "key1"
+        mock_config.return_value.primary_prefix = "key1"
         mock_config.return_value.embedding_dimensions = 3
         mock_config.return_value.content_field = "text"
         mock_config.return_value.embedding_field = "embedding"
@@ -89,6 +90,7 @@ def test_add_texts_with_both_keys_and_ids() -> None:
         # Setup config
         mock_config.return_value.index_name = "test_index"
         mock_config.return_value.key_prefix = "key1"
+        mock_config.return_value.primary_prefix = "key1"
         mock_config.return_value.embedding_dimensions = 3
         mock_config.return_value.content_field = "text"
         mock_config.return_value.embedding_field = "embedding"

@@ -94,10 +94,10 @@ jobs:
           - "3.10"
           - "3.11"
           - "3.12"
-        redis-stack-version: ['latest']
+        redis-image: ['redis:8.2', 'redis:8.4', 'redis:latest']
     services:
       redis:
-        image: redis/redis-stack-server:${{matrix.redis-stack-version}}
+        image: ${{ matrix.redis-image }}
         ports:
           - 6379:6379
 
