@@ -719,7 +719,7 @@ class RedisSemanticCache(BaseCache):
                 The value is a list of `Generation` objects (or subclasses).
         """
         serialized_response = json.dumps([dumps(gen) for gen in return_val])
-        vector = self.cache._vectorize_prompt(prompt)
+        vector = await self.cache._avectorize_prompt(prompt)
 
         await self.cache.astore(
             prompt=prompt,
