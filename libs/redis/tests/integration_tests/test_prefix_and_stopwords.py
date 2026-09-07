@@ -5,7 +5,6 @@ import json
 from typing import Any, List, Set, cast
 from uuid import uuid4
 
-import pytest
 from langchain_core.embeddings import Embeddings
 from redisvl.query.filter import Tag  # type: ignore[import]
 from redisvl.redis.utils import array_to_buffer  # type: ignore[import]
@@ -102,7 +101,7 @@ def test_multi_prefix_index_spans_namespaces(redis_url: str) -> None:
         assert store.get_by_ids(written_ids) == []
         assert _doc_ids(store) == {"planted"}
         assert client.keys(f"{prefix_a}:*") == []
-        assert len(client.keys(f"{prefix_b}:*")) == 1
+        assert len(cast(List[Any], client.keys(f"{prefix_b}:*"))) == 1
     finally:
         store.index.delete(drop=True)
 
@@ -117,13 +116,6 @@ def test_stopwords_disabled_reaches_server(redis_url: str) -> None:
         store.index.delete(drop=True)
 
 
-@pytest.mark.xfail(
-    reason="redisvl joins text queries and filters with a literal ' AND ' token, "
-    "which is only parseable because 'and' is a default stopword; on a "
-    "STOPWORDS-0 index filtered text queries match nothing. Remove this marker "
-    "once the redisvl fix ships.",
-    strict=True,
-)
 def test_stopwords_disabled_makes_stopwords_searchable(redis_url: str) -> None:
     """stopwords=[] makes default stopword terms discriminating search terms."""
     store = _make_store(redis_url, stopwords=[])
@@ -145,8 +137,7 @@ def test_custom_stopwords_make_default_stopwords_searchable(redis_url: str) -> N
     """A custom stopword list replaces the defaults: "the" becomes searchable.
 
     Client-side stopword stripping is disabled in the queries so the test
-    isolates the index-level behavior. ("and" stays in the custom list to
-    keep this test independent of the upstream ' AND '-join bug.)
+    isolates the index-level behavior.
     """
     texts = ["the quick brown fox", "lazy dog"]
     metadatas = [
