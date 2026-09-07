@@ -141,28 +141,36 @@ def _schema_with_index_marker(
     return SimpleNamespace(fields=fields)
 
 
-def test_delete_rejects_ids_and_filter_together(store: RedisVectorStore) -> None:
-    """ids and filter are mutually exclusive delete selectors."""
-    with pytest.raises(ValueError, match="not both"):
-        store.delete(ids=["doc1"], filter=USER_FILTER)
-
-
-def test_delete_without_ids_or_filter_returns_false(store: RedisVectorStore) -> None:
+@pytest.mark.parametrize(
+    "kwargs",
+    [pytest.param({}, id="omitted"), pytest.param({"filter": None}, id="none")],
+)
+def test_delete_without_selector_returns_false(
+    store: RedisVectorStore, kwargs: Dict[str, Any]
+) -> None:
     """The pre-existing no-op contract of delete() is preserved."""
-    assert store.delete() is False
+    assert store.delete(**kwargs) is False
 
 
 @pytest.mark.parametrize(
-    "processed,expected", [(3, True), (0, False)], ids=["deleted", "no-match"]
+    "ids",
+    [
+        pytest.param(None, id="omitted"),
+        pytest.param([], id="empty"),
+        pytest.param(["doc1"], id="populated"),
+    ],
 )
-def test_delete_with_filter_reports_whether_documents_removed(
-    store: RedisVectorStore, processed: int, expected: bool
+def test_delete_rejects_filter_without_mutating(
+    store: RedisVectorStore, ids: Optional[List[str]]
 ) -> None:
-    """delete(filter=...) returns True iff at least one document was deleted."""
-    FakeBulkIndex.bulk_result = SimpleNamespace(
-        matched=processed, processed=processed, completed=True
-    )
-    assert store.delete(filter=USER_FILTER) is expected
+    """A filter never activates either deletion path through delete()."""
+    with patch.object(store.index, "drop_keys", create=True) as drop_keys:
+        with patch.object(store, "delete_by_filter") as delete_by_filter:
+            with pytest.raises(ValueError, match="delete_by_filter"):
+                store.delete(ids=ids, filter=USER_FILTER)
+
+    drop_keys.assert_not_called()
+    delete_by_filter.assert_not_called()
 
 
 def test_delete_by_filter_scopes_to_index_name(store: RedisVectorStore) -> None:

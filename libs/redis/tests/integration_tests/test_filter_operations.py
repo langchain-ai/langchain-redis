@@ -123,15 +123,12 @@ def _remaining_doc_ids(store: RedisVectorStore) -> Set[str]:
 def test_delete_by_filter_removes_only_matching(
     redis_url: str, storage_type: str
 ) -> None:
-    """Filter delete removes exactly the matching docs; delete(filter=) works too."""
+    """Filter deletion removes exactly the matching documents."""
     store = _make_store(redis_url, storage_type=storage_type)
     try:
         deleted = store.delete_by_filter(Tag(TEAM_FIELD) == TEAM_A)
         assert deleted == len(TEAM_A_DOC_IDS)
         assert _remaining_doc_ids(store) == set(TEAM_B_DOC_IDS)
-
-        assert store.delete(filter=Tag(TEAM_FIELD) == TEAM_B) is True
-        assert _remaining_doc_ids(store) == set()
     finally:
         store.index.delete(drop=True)
 
@@ -147,13 +144,26 @@ def test_dry_run_counts_without_deleting(redis_url: str) -> None:
         store.index.delete(drop=True)
 
 
-def test_no_match_returns_zero_and_false(redis_url: str) -> None:
-    """A filter matching nothing deletes nothing and reports it truthfully."""
+def test_no_match_returns_zero(redis_url: str) -> None:
+    """An explicit filter matching nothing deletes nothing and returns zero."""
     store = _make_store(redis_url)
     try:
         assert store.delete_by_filter(Tag(TEAM_FIELD) == GHOST_TEAM) == 0
-        assert store.delete(filter=Tag(TEAM_FIELD) == GHOST_TEAM) is False
         assert _remaining_doc_ids(store) == set(ALL_DOC_IDS)
+    finally:
+        store.index.delete(drop=True)
+
+
+def test_delete_filter_overload_raises_without_deleting(redis_url: str) -> None:
+    """The ambiguous delete overload fails without changing Redis data."""
+    store = _make_store(redis_url)
+    try:
+        before = _remaining_doc_ids(store)
+
+        with pytest.raises(ValueError, match="delete_by_filter"):
+            store.delete(filter=Tag(TEAM_FIELD) == TEAM_A)
+
+        assert _remaining_doc_ids(store) == before
     finally:
         store.index.delete(drop=True)
 

@@ -920,58 +920,38 @@ class RedisVectorStore(VectorStore):
         return RedisVectorStore(embedding, config=config, **kwargs)
 
     def delete(self, ids: Optional[List[str]] = None, **kwargs: Any) -> Optional[bool]:
-        """Delete documents by id or by filter expression.
+        """Delete documents by id.
 
         Args:
             ids: Optional list of ids of the documents to delete.
-            **kwargs: Additional keyword arguments.
-
-                Supported kwargs:
-
-                - `filter`: A RedisVL `FilterExpression`. Deletes every
-                    document in this index matching the filter. Mutually
-                    exclusive with `ids`.
+            **kwargs: Additional keyword arguments. A non-`None` `filter` is
+                rejected; use `delete_by_filter()` for filter-based deletion.
 
         Returns:
             Optional[bool]: `True` if one or more documents were deleted,
                 `False` otherwise.
 
         Raises:
-            ValueError: If both `ids` and `filter` are provided.
+            ValueError: If a non-`None` `filter` argument is provided.
 
         Example:
             ```python
-            from redisvl.query.filter import Tag
-
-            # Delete by ids
             vector_store.delete(ids=["doc1", "doc2", "doc3"])
-            from langchain_redis import RedisVectorStore
-            from langchain_openai import OpenAIEmbeddings
-
-            vector_store = RedisVectorStore(
-                embeddings=OpenAIEmbeddings(),
-                index_name="langchain-demo",
-                redis_url="redis://localhost:6379",
-            )
-
-            # Delete every document matching a metadata filter
-            vector_store.delete(filter=Tag("source") == "handbook.pdf")
             ```
 
         Note:
-            - If neither `ids` nor `filter` is given, the method returns `False`.
+            - If `ids` is omitted or empty, the method returns `False`.
             - The ids path uses RedisVL's `drop_keys`; keys are constructed by
-                prefixing each id with the configured `key_prefix`.
-            - The filter path delegates to `delete_by_filter`, which also
-                exposes counts and a dry-run mode. Filter deletion requires a
-                RedisVL `FilterExpression`, not a raw filter string, so the
-                filter can be safely scoped to this index.
+                prefixing each id with the configured primary key prefix.
+            - Use `delete_by_filter()` for explicit filter deletion, exact
+                counts, and dry-run support.
         """
         filter = kwargs.get("filter")
-        if ids and filter is not None:
-            raise ValueError("Provide either 'ids' or 'filter', not both.")
         if filter is not None:
-            return self.delete_by_filter(filter) > 0
+            raise ValueError(
+                "delete(filter=...) is not supported. Use delete_by_filter() "
+                "for filter-based deletion."
+            )
         if ids and len(ids) > 0:
             if self.config.primary_prefix:
                 keys = [f"{self.config.primary_prefix}:{_id}" for _id in ids]

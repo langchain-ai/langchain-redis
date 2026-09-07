@@ -210,7 +210,7 @@ catalog above:
 
 ```python
 # Delete every document matching a filter
-store.delete(filter=Tag("category") == "furniture")
+store.delete_by_filter(Tag("category") == "furniture")
 
 # Preview a purge before running it, and get exact counts
 would_delete = store.delete_by_filter(Num("price") > 100, dry_run=True)
