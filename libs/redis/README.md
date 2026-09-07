@@ -216,6 +216,13 @@ deleted = store.delete_by_filter(Num("price") > 100)
 
 Filter deletion is automatically scoped to the store's own index, so indexes
 sharing a `key_prefix` cannot delete each other's documents.
+Generated schemas include the required exact `_index_name` TAG marker;
+existing or custom schemas without that marker must be migrated or recreated
+before using filter deletion. Existing custom TAG fields that store the raw
+index name must also be migrated or reindexed: current schemas store a hashed
+index-ownership marker, so changing only the field type is not sufficient.
+Until migration, legacy TEXT markers remain readable, but filter deletion is
+refused.
 
 #### Vector index tuning
 

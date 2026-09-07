@@ -31,6 +31,7 @@ def test_add_texts_with_ids_in_kwargs() -> None:
         mock_search_index_class.return_value = mock_index
         # Also mock the from_dict method
         mock_search_index_class.from_dict.return_value = mock_index
+        mock_search_index_class.from_existing.return_value = mock_index
 
         # Setup config
         mock_config.return_value.index_name = "test_index"
@@ -89,6 +90,7 @@ def test_add_texts_with_both_keys_and_ids() -> None:
         mock_search_index_class.return_value = mock_index
         # Also mock the from_dict method
         mock_search_index_class.from_dict.return_value = mock_index
+        mock_search_index_class.from_existing.return_value = mock_index
 
         # Setup config
         mock_config.return_value.index_name = "test_index"
@@ -152,6 +154,7 @@ def test_add_texts_returns_ids_without_key_prefix(
         mock_index.schema.fields.values.return_value = []
         mock_search_index_class.return_value = mock_index
         mock_search_index_class.from_dict.return_value = mock_index
+        mock_search_index_class.from_existing.return_value = mock_index
 
         mock_config.return_value.index_name = "test_index"
         mock_config.return_value.key_prefix = key_prefix

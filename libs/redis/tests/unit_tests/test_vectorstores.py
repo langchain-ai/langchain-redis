@@ -45,6 +45,8 @@ class MockStorage:
 
 
 class MockSearchIndex:
+    last_instance: Optional["MockSearchIndex"] = None
+
     def __init__(
         self,
         schema: Optional[Dict[str, Any]] = None,
@@ -64,7 +66,10 @@ class MockSearchIndex:
             schema["fields"] if schema and "fields" in schema else default_schema  # type: ignore
         )
         self.redis_client = redis_client or Mock()
+        self.client = self.redis_client
+        self.name = "test_index"
         self._storage = MockStorage()
+        type(self).last_instance = self
 
     def create(self, overwrite: bool = False) -> None:
         pass
@@ -113,6 +118,11 @@ class MockSearchIndex:
     @classmethod
     def from_dict(cls, dict_data: Dict[str, Any]) -> "MockSearchIndex":
         return cls(schema=dict_data)
+
+    @classmethod
+    def from_existing(cls, name: str, **kwargs: Any) -> "MockSearchIndex":
+        assert cls.last_instance is not None
+        return cls.last_instance
 
     def key(self, id: str) -> str:
         return f"key:{id}"

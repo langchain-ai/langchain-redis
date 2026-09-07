@@ -13,6 +13,8 @@ from redisvl.query import (  # type: ignore[import]
     TextQuery,
 )
 from redisvl.query.filter import Tag  # type: ignore[import]
+from redisvl.redis.utils import hashify  # type: ignore[import]
+from redisvl.schema import FieldTypes  # type: ignore[import]
 
 from langchain_redis import RedisVectorStore
 
@@ -44,9 +46,13 @@ class FakeSearchIndex:
         field_specs = (schema or {}).get("fields", [])
         self.schema = SimpleNamespace(
             fields={
-                spec["name"]: SimpleNamespace(name=spec["name"]) for spec in field_specs
+                spec["name"]: SimpleNamespace(
+                    name=spec["name"], type=FieldTypes(spec["type"])
+                )
+                for spec in field_specs
             }
         )
+        self.name = (schema or {}).get("index", {}).get("name", INDEX_NAME)
         self.client = SimpleNamespace(
             info=lambda section=None: {"redis_version": type(self).redis_version}
         )
@@ -56,6 +62,11 @@ class FakeSearchIndex:
     @classmethod
     def from_dict(cls, schema: Dict[str, Any], **kwargs: Any) -> "FakeSearchIndex":
         return cls(schema=schema)
+
+    @classmethod
+    def from_existing(cls, name: str, **kwargs: Any) -> "FakeSearchIndex":
+        assert cls.last_instance is not None
+        return cls.last_instance
 
     def create(self, overwrite: bool = False) -> None:
         pass
@@ -139,6 +150,7 @@ def test_index_name_filter_injected_when_field_exists(
     """
     combined = store._with_index_name_filter(Tag(CATEGORY_FIELD) == CATEGORY_VALUE)
     assert "_index_name" in str(combined)
+    assert hashify(INDEX_NAME) in str(combined)
     assert CATEGORY_FIELD in str(combined)
 
     default = store._with_index_name_filter(None)

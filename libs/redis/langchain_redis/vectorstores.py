@@ -29,18 +29,20 @@ from redisvl.query import (  # type: ignore[import]
     TextQuery,
     VectorQuery,
 )
-from redisvl.query.filter import FilterExpression  # type: ignore[import]
+from redisvl.query.filter import FilterExpression, Tag, Text  # type: ignore[import]
 from redisvl.redis.utils import (  # type: ignore[import]
     array_to_buffer,
     buffer_to_array,
     convert_bytes,
+    hashify,
 )
-from redisvl.schema import StorageType  # type: ignore[import]
+from redisvl.schema import FieldTypes, IndexSchema, StorageType  # type: ignore[import]
 
 from langchain_redis.config import RedisConfig
 from langchain_redis.version import __lib_name__
 
 Matrix = Union[List[List[float]], List[np.ndarray], np.ndarray]
+_INDEX_NAME_FIELD = "_index_name"
 
 
 def cosine_similarity(X: Matrix, Y: Matrix) -> np.ndarray:
@@ -424,7 +426,11 @@ class RedisVectorStore(VectorStore):
                                 **(self.config.vector_attrs or {}),
                             },
                         },
-                        {"name": "_index_name", "type": "text"},
+                        {
+                            "name": _INDEX_NAME_FIELD,
+                            "type": "tag",
+                            "attrs": {"case_sensitive": True},
+                        },
                         {"name": "_metadata_json", "type": "text"},
                         *modified_metadata_schema,
                     ],
@@ -433,6 +439,41 @@ class RedisVectorStore(VectorStore):
                 lib_name=__lib_name__,
             )
             self._index.create(overwrite=False)
+
+        # create(overwrite=False) leaves the configured schema unchanged when
+        # the index already exists. Rehydrate it so reads and writes use the
+        # schema that Redis actually retained.
+        if not self.config.from_existing:
+            self._index = SearchIndex.from_existing(
+                name=self._index.name,
+                redis_client=self._index.client,
+                lib_name=__lib_name__,
+            )
+        self._sync_config_with_live_index()
+
+    def _sync_config_with_live_index(self) -> None:
+        """Synchronize schema-owned runtime settings with the live index."""
+        schema = getattr(self._index, "schema", None)
+        if not isinstance(schema, IndexSchema):
+            # Some SearchIndex-compatible test doubles do not expose a complete
+            # RedisVL schema. A real SearchIndex always does.
+            return
+
+        self.config.storage_type = schema.index.storage_type.value
+
+        def logical_prefix(prefix: str) -> str:
+            # Generated legacy schemas include the key separator in the index
+            # prefix. Keep RedisConfig's logical prefix separator-free so IDs
+            # that already include the legacy leading colon still round-trip.
+            if self.config.legacy_key_format and prefix.endswith(":"):
+                return prefix[:-1]
+            return prefix
+
+        live_prefix = schema.index.prefix
+        if isinstance(live_prefix, list):
+            self.config.key_prefix = [logical_prefix(prefix) for prefix in live_prefix]
+        else:
+            self.config.key_prefix = logical_prefix(live_prefix)
 
     @property
     def index(self) -> SearchIndex:
@@ -552,9 +593,7 @@ class RedisVectorStore(VectorStore):
         document_embeddings = self._embeddings.embed_documents(texts_list)
 
         # Check if schema has _index_name and _metadata_json fields
-        has_index_name_field = any(
-            field.name == "_index_name" for field in self._index.schema.fields.values()
-        )
+        index_name_field = self._index.schema.fields.get(_INDEX_NAME_FIELD)
         has_metadata_json_field = any(
             field.name == "_metadata_json"
             for field in self._index.schema.fields.values()
@@ -576,15 +615,15 @@ class RedisVectorStore(VectorStore):
                 ),
             }
 
-            # Only add _index_name if the field exists in the schema
-            if has_index_name_field:
-                record["_index_name"] = self.config.index_name
-
             # Only add _metadata_json if the field exists in the schema
             if has_metadata_json_field:
                 metadata_json = json.dumps(metadata)
                 record["_metadata_json"] = metadata_json
             for field_name, field_value in metadata.items():
+                # _index_name is reserved for the internal ownership marker. The
+                # caller's value remains available through _metadata_json.
+                if field_name == _INDEX_NAME_FIELD:
+                    continue
                 # Skip empty values
                 if field_value is None:
                     continue
@@ -595,6 +634,13 @@ class RedisVectorStore(VectorStore):
                     )
                 else:
                     record[field_name] = field_value
+
+            # Assign the protected marker after user metadata so it cannot be
+            # overridden by a conflicting metadata field.
+            if index_name_field is not None:
+                record[_INDEX_NAME_FIELD] = self._index_name_value(
+                    index_name_field.type
+                )
             records.append(record)
 
         # Load records into the index
@@ -973,10 +1019,14 @@ class RedisVectorStore(VectorStore):
             ```
 
         Note:
-            - When the schema has an `_index_name` field (default schemas do),
-                the filter is automatically restricted to this index's
-                documents, so indexes sharing a `key_prefix` cannot delete
-                each other's data.
+            - Generated schemas use an exact `_index_name` TAG marker to keep
+                indexes sharing a `key_prefix` from deleting each other's data.
+                Existing or custom schemas without that TAG marker are refused;
+                recreate or migrate the index before using filter deletion.
+                Custom TAG markers containing raw index names must also be
+                reindexed with the current hashed marker values; changing only
+                the field type is not sufficient. Legacy TEXT markers remain
+                readable, but cannot be used for filter deletion.
             - Use RedisVL filter builders such as `Tag`, `Num`, or `Text`
                 instead of raw RediSearch filter strings.
             - Filters that render to Redis's global match-all expression are
@@ -1032,44 +1082,94 @@ class RedisVectorStore(VectorStore):
                 "Use index.clear() for an intentional full-index operation."
             )
 
-        scoped_filter = self._with_index_name_filter(filter)
-        if scoped_filter is None or not isinstance(scoped_filter, FilterExpression):
-            raise ValueError(f"{operation} requires a filter expression.")
-        return scoped_filter
+        return filter & self._require_exact_index_name_filter()
+
+    def _index_name_value(self, field_type: FieldTypes) -> str:
+        """Return the stored and queried value for the index marker."""
+        if field_type == FieldTypes.TAG:
+            return hashify(self._index.name)
+        return self.config.index_name
+
+    def _build_index_name_filter(
+        self,
+        schema: IndexSchema,
+        *,
+        allow_text: bool,
+    ) -> Optional[FilterExpression]:
+        """Build an index namespace filter from the provided schema."""
+        field = schema.fields.get(_INDEX_NAME_FIELD)
+        if field is None:
+            return None
+
+        value = self._index_name_value(field.type)
+        if field.type == FieldTypes.TAG:
+            return Tag(_INDEX_NAME_FIELD) == value
+        if allow_text and field.type == FieldTypes.TEXT:
+            return Text(_INDEX_NAME_FIELD) == value
+        return None
+
+    def _live_index_schema(self) -> IndexSchema:
+        """Fetch the schema currently installed in Redis."""
+        return SearchIndex.from_existing(
+            name=self._index.name,
+            redis_client=self._index.client,
+            lib_name=__lib_name__,
+        ).schema
+
+    def _require_exact_index_name_filter(self) -> FilterExpression:
+        """Return an exact TAG scope or refuse filter-based deletion."""
+        try:
+            field = self._live_index_schema().fields.get(_INDEX_NAME_FIELD)
+        except Exception as exc:
+            raise ValueError(
+                "delete_by_filter() could not inspect the live index schema; "
+                "the deletion was refused."
+            ) from exc
+
+        if field is None or field.type != FieldTypes.TAG:
+            raise ValueError(
+                "delete_by_filter() requires an '_index_name' TAG field. "
+                "Recreate or migrate this index before using filter deletion."
+            )
+
+        if field.attrs.no_index:
+            raise ValueError(
+                "delete_by_filter() requires the '_index_name' TAG field to be "
+                "indexed. Recreate or migrate this index before using filter "
+                "deletion."
+            )
+
+        marker = hashify(self._index.name)
+        if field.attrs.separator and field.attrs.separator in marker:
+            raise ValueError(
+                "delete_by_filter() cannot safely use the '_index_name' TAG "
+                "separator because it splits the index ownership marker. "
+                "Recreate or migrate this index with a compatible separator."
+            )
+
+        return Tag(_INDEX_NAME_FIELD) == marker
 
     def _with_index_name_filter(
         self, filter: Optional[Union[str, FilterExpression]]
     ) -> Optional[Union[str, FilterExpression]]:
         """Restrict a filter to documents belonging to the current index.
 
-        This is needed to ensure we only operate on results from the current
-        index when multiple indexes share the same key_prefix. The
-        `_index_name` filter is only applied if the field is in the schema.
+        Reads retain best-effort compatibility with existing TEXT markers and
+        custom schemas that do not define an `_index_name` field.
         """
         try:
-            # Check if we have an _index_name field in the schema
-            has_index_name_field = False
-            for field in self._index.schema.fields.values():
-                if field.name == "_index_name":
-                    has_index_name_field = True
-                    break
-
-            if has_index_name_field:
-                # Apply the filter since we have the field
-                from redisvl.query.filter import Text
-
-                index_filter = Text("_index_name") == self.config.index_name
-                if filter is not None:
-                    if hasattr(filter, "__and__"):
-                        filter = filter & index_filter
-                    else:
-                        # Don't apply the filter if we can't combine it safely
-                        pass
-                else:
-                    filter = index_filter
+            index_filter = self._build_index_name_filter(
+                self._index.schema, allow_text=True
+            )
         except Exception:
-            # If any issues occur, just use the original filter
-            pass
+            return filter
+
+        if index_filter is None:
+            return filter
+        if filter is None:
+            return index_filter
+        if isinstance(filter, FilterExpression):
+            return filter & index_filter
         return filter
 
     def _query_builder(

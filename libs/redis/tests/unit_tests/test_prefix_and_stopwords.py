@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 from langchain_core.embeddings import Embeddings
-from redisvl.schema import IndexSchema  # type: ignore[import]
+from redisvl.schema import IndexSchema, StorageType  # type: ignore[import]
 
 from langchain_redis import RedisConfig, RedisVectorStore
 
@@ -31,9 +31,12 @@ class CapturingIndex:
     """Records the schema dict and the keys passed to drop_keys."""
 
     last_schema: Optional[Dict[str, Any]] = None
+    last_instance: Optional["CapturingIndex"] = None
 
     def __init__(self) -> None:
         self.dropped_keys: List[str] = []
+        self.name = INDEX_NAME
+        self.client = object()
 
     @classmethod
     def from_dict(cls, schema: Dict[str, Any], **kwargs: Any) -> "CapturingIndex":
@@ -45,7 +48,13 @@ class CapturingIndex:
                 spec["name"]: SimpleNamespace(name=spec["name"]) for spec in field_specs
             }
         )
+        cls.last_instance = instance
         return instance
+
+    @classmethod
+    def from_existing(cls, name: str, **kwargs: Any) -> "CapturingIndex":
+        assert cls.last_instance is not None
+        return cls.last_instance
 
     def create(self, overwrite: bool = False) -> None:
         pass
@@ -104,6 +113,46 @@ def test_schema_list_prefix_uses_first_prefix_for_keys() -> None:
     )
     config = RedisConfig(schema=schema, embedding_dimensions=DIMS)
     assert config.primary_prefix == PREFIX_A
+
+
+@pytest.mark.parametrize(
+    ("live_prefix", "legacy_key_format", "expected_prefix"),
+    [
+        pytest.param("live:", True, "live", id="legacy"),
+        pytest.param("live", False, "live", id="modern"),
+        pytest.param(["live_a:", "live_b:"], True, ["live_a", "live_b"], id="list"),
+    ],
+)
+def test_live_schema_settings_replace_stale_config(
+    live_prefix: Union[str, List[str]],
+    legacy_key_format: bool,
+    expected_prefix: Union[str, List[str]],
+) -> None:
+    """Storage and prefix settings come from the schema Redis retained."""
+    schema = IndexSchema.from_dict(
+        {
+            "index": {
+                "name": INDEX_NAME,
+                "prefix": live_prefix,
+                "storage_type": "json",
+            },
+            "fields": [{"name": "text", "type": "text"}],
+        }
+    )
+    store = object.__new__(RedisVectorStore)
+    store.config = RedisConfig(
+        index_name=INDEX_NAME,
+        key_prefix="stale",
+        storage_type="hash",
+        embedding_dimensions=DIMS,
+        legacy_key_format=legacy_key_format,
+    )
+    store._index = SimpleNamespace(schema=schema)
+
+    store._sync_config_with_live_index()
+
+    assert store.config.storage_type == StorageType.JSON.value
+    assert store.config.key_prefix == expected_prefix
 
 
 @pytest.mark.parametrize(

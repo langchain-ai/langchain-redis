@@ -116,11 +116,22 @@ class SchemaCapturingIndex:
     """Records the schema dict the vector store builds for its index."""
 
     last_schema: Optional[Dict[str, Any]] = None
+    last_instance: Optional["SchemaCapturingIndex"] = None
+
+    def __init__(self) -> None:
+        self.name = "vector_attrs_unit"
+        self.client = object()
 
     @classmethod
     def from_dict(cls, schema: Dict[str, Any], **kwargs: Any) -> "SchemaCapturingIndex":
         cls.last_schema = schema
-        return cls()
+        cls.last_instance = cls()
+        return cls.last_instance
+
+    @classmethod
+    def from_existing(cls, name: str, **kwargs: Any) -> "SchemaCapturingIndex":
+        assert cls.last_instance is not None
+        return cls.last_instance
 
     def create(self, overwrite: bool = False) -> None:
         pass
