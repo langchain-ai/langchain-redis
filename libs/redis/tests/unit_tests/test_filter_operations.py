@@ -7,7 +7,11 @@ from unittest.mock import patch
 
 import pytest
 from langchain_core.embeddings import Embeddings
-from redisvl.query.filter import Tag  # type: ignore[import]
+from redisvl.query.filter import (  # type: ignore[import]
+    FilterExpression,
+    Num,
+    Tag,
+)
 
 from langchain_redis import RedisVectorStore
 
@@ -18,6 +22,8 @@ TEAM_VALUE = "alpha"
 USER_FILTER = Tag(TEAM_FIELD) == TEAM_VALUE
 NEW_VALUES = {"status": "archived"}
 EXISTING_METADATA = {TEAM_FIELD: TEAM_VALUE, "status": "draft", "doc_id": "doc1"}
+_MATCH_ALL_ERROR = "refuses filters that match all documents"
+_UNINITIALIZED_FILTER_ERROR = "specific, initialized filter expression"
 MATCHING_ROWS = [
     {"id": "filter_ops_unit:doc1", "_metadata_json": json.dumps(EXISTING_METADATA)}
 ]
@@ -160,6 +166,87 @@ def test_delete_by_filter_requires_filter(store: RedisVectorStore) -> None:
     """A None filter is refused instead of silently deleting the index."""
     with pytest.raises(ValueError):
         store.delete_by_filter(None)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("operation", ["delete", "update"])
+@pytest.mark.parametrize(
+    ("unsafe_filter", "expected_error"),
+    [
+        pytest.param(
+            FilterExpression("*"),
+            _MATCH_ALL_ERROR,
+            id="explicit-match-all",
+        ),
+        pytest.param(
+            FilterExpression("   *   "),
+            _MATCH_ALL_ERROR,
+            id="whitespace-match-all",
+        ),
+        pytest.param(
+            FilterExpression("(*)"),
+            _MATCH_ALL_ERROR,
+            id="parenthesized-match-all",
+        ),
+        pytest.param(
+            FilterExpression("(((*)))"),
+            _MATCH_ALL_ERROR,
+            id="nested-match-all",
+        ),
+        pytest.param(
+            Tag(TEAM_FIELD) == "",
+            _MATCH_ALL_ERROR,
+            id="empty-tag",
+        ),
+        pytest.param(
+            Tag(TEAM_FIELD) == [],
+            _MATCH_ALL_ERROR,
+            id="empty-tag-list",
+        ),
+        pytest.param(
+            Tag(TEAM_FIELD) != "",
+            _MATCH_ALL_ERROR,
+            id="not-empty-tag",
+        ),
+        pytest.param(
+            Num("priority") == None,  # noqa: E711
+            _MATCH_ALL_ERROR,
+            id="none-number",
+        ),
+        pytest.param(
+            FilterExpression(),
+            _UNINITIALIZED_FILTER_ERROR,
+            id="uninitialized",
+        ),
+    ],
+)
+def test_bulk_filter_operations_reject_unsafe_filters(
+    store: RedisVectorStore,
+    operation: str,
+    unsafe_filter: FilterExpression,
+    expected_error: str,
+) -> None:
+    """Unsafe filters are rejected through the intended validation path."""
+    with pytest.raises(ValueError, match=expected_error):
+        if operation == "delete":
+            store.delete_by_filter(unsafe_filter)
+        else:
+            store.update_metadata_by_filter(unsafe_filter, NEW_VALUES)
+
+    fake = _fake(store)
+    assert fake.captured_filter is None
+    assert fake.captured_query is None
+    assert fake.hset_calls == []
+
+
+def test_bulk_filter_operations_allow_field_wildcard(
+    store: RedisVectorStore,
+) -> None:
+    """A field-specific wildcard remains valid because it is not global `*`."""
+    store.delete_by_filter(Tag(TEAM_FIELD) % "*")
+
+    captured = str(_fake(store).captured_filter)
+    assert f"@{TEAM_FIELD}:{{*}}" in captured
+    assert "_index_name" in captured
 
 
 def test_update_metadata_by_filter_syncs_metadata_json(

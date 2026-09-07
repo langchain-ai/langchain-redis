@@ -1057,7 +1057,9 @@ class RedisVectorStore(VectorStore):
 
         Bulk writes require a RedisVL `FilterExpression` so the user's filter
         can be combined with the internal `_index_name` guard before any
-        mutation is sent to Redis.
+        mutation is sent to Redis. Filters that render to Redis's global
+        match-all expression (`*`) are intentionally rejected as a safety
+        guardrail; use `index.clear()` for an intentional full-index operation.
         """
         if filter is None:
             raise ValueError(
@@ -1069,6 +1071,25 @@ class RedisVectorStore(VectorStore):
                 f"{operation} strictly requires a RedisVL FilterExpression. "
                 "Use filter builders like Tag, Num, or Text instead of raw strings."
             )
+
+        # Validate before adding the index guard; otherwise `*` becomes a scoped
+        # expression and bypasses RedisVL's match-all protection.
+        try:
+            rendered_filter = str(filter).strip()
+        except ValueError as exc:
+            raise ValueError(
+                f"{operation} requires a specific, initialized filter expression."
+            ) from exc
+
+        match_all_candidate = rendered_filter
+        while match_all_candidate.startswith("(") and match_all_candidate.endswith(")"):
+            match_all_candidate = match_all_candidate[1:-1].strip()
+        if match_all_candidate in ("", "*"):
+            raise ValueError(
+                f"{operation} refuses filters that match all documents. "
+                "Use index.clear() for an intentional full-index operation."
+            )
+
         scoped_filter = self._with_index_name_filter(filter)
         if scoped_filter is None or not isinstance(scoped_filter, FilterExpression):
             raise ValueError(f"{operation} requires a filter expression.")
