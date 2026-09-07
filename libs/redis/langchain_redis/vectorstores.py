@@ -24,7 +24,6 @@ from langchain_core.vectorstores import VectorStore
 from redisvl.index import SearchIndex  # type: ignore[import]
 from redisvl.query import (  # type: ignore[import]
     AggregateHybridQuery,
-    FilterQuery,
     HybridQuery,
     RangeQuery,
     TextQuery,
@@ -918,9 +917,9 @@ class RedisVectorStore(VectorStore):
             - The ids path uses RedisVL's `drop_keys`; keys are constructed by
                 prefixing each id with the configured `key_prefix`.
             - The filter path delegates to `delete_by_filter`, which also
-                exposes counts and a dry-run mode. Mutating filter operations
-                require RedisVL `FilterExpression` objects, not raw filter
-                strings, so the filter can be safely scoped to this index.
+                exposes counts and a dry-run mode. Filter deletion requires a
+                RedisVL `FilterExpression`, not a raw filter string, so the
+                filter can be safely scoped to this index.
         """
         filter = kwargs.get("filter")
         if ids and filter is not None:
@@ -980,8 +979,9 @@ class RedisVectorStore(VectorStore):
                 each other's data.
             - Use RedisVL filter builders such as `Tag`, `Num`, or `Text`
                 instead of raw RediSearch filter strings.
-            - A match-all filter on a schema without that restriction is
-                refused by RedisVL as a safety measure.
+            - Filters that render to Redis's global match-all expression are
+                refused; use `index.clear()` for an intentional full-index
+                operation.
         """
         scoped_filter = self._prepare_bulk_filter(filter, "delete_by_filter")
         bulk_kwargs: Dict[str, Any] = {"dry_run": dry_run}
@@ -990,65 +990,6 @@ class RedisVectorStore(VectorStore):
         result = self._index.drop_by_filter(scoped_filter, **bulk_kwargs)
         return result.matched if dry_run else result.processed
 
-    def update_metadata_by_filter(
-        self,
-        filter: FilterExpression,
-        values: Dict[str, Any],
-        *,
-        dry_run: bool = False,
-        batch_size: Optional[int] = None,
-    ) -> int:
-        """Set field values on every document matching a filter expression.
-
-        Updates stored fields in place without re-embedding — useful for
-        bulk metadata operations like flipping a status flag, reclassifying
-        documents, or backfilling a new field.
-
-        Args:
-            filter: RedisVL `FilterExpression` selecting the documents to
-                update. Raw filter strings are not accepted for mutating
-                operations because they cannot be safely combined with the
-                internal index-scoping filter.
-            values: Mapping of field names to their new values.
-            dry_run: If `True`, nothing is updated; the return value is the
-                number of documents that would be updated.
-            batch_size: Optional number of documents to update per
-                round-trip.
-
-        Returns:
-            int: The number of documents updated (or matched, for a dry run).
-
-        Example:
-            ```python
-            from redisvl.query.filter import Tag
-
-            updated = vector_store.update_metadata_by_filter(
-                Tag("status") == "draft", {"status": "published"}
-            )
-            ```
-
-        Note:
-            - This never re-computes embeddings. Protected fields such as
-                content and embeddings are rejected; re-add documents when
-                the embedding must change.
-            - The filter is automatically restricted to this index's
-                documents when the schema has an `_index_name` field.
-            - Use RedisVL filter builders such as `Tag`, `Num`, or `Text`
-                instead of raw RediSearch filter strings.
-        """
-        scoped_filter = self._prepare_bulk_filter(filter, "update_metadata_by_filter")
-        self._validate_metadata_update_values(values)
-
-        page_size = batch_size or 500
-        if page_size <= 0:
-            raise ValueError("batch_size must be greater than 0.")
-
-        rows = self._filter_rows_for_update(scoped_filter, page_size)
-        if dry_run:
-            return len(rows)
-
-        return self._update_metadata_rows(rows, values, page_size)
-
     def _prepare_bulk_filter(
         self,
         filter: Optional[FilterExpression],
@@ -1056,9 +997,9 @@ class RedisVectorStore(VectorStore):
     ) -> FilterExpression:
         """Validate and scope a destructive bulk-operation filter.
 
-        Bulk writes require a RedisVL `FilterExpression` so the user's filter
-        can be combined with the internal `_index_name` guard before any
-        mutation is sent to Redis. Filters that render to Redis's global
+        Filter deletion requires a RedisVL `FilterExpression` so the user's
+        filter can be combined with the internal `_index_name` guard before
+        any mutation is sent to Redis. Filters that render to Redis's global
         match-all expression (`*`) are intentionally rejected as a safety
         guardrail; use `index.clear()` for an intentional full-index operation.
         """
@@ -1095,114 +1036,6 @@ class RedisVectorStore(VectorStore):
         if scoped_filter is None or not isinstance(scoped_filter, FilterExpression):
             raise ValueError(f"{operation} requires a filter expression.")
         return scoped_filter
-
-    def _validate_metadata_update_values(self, values: Dict[str, Any]) -> None:
-        """Validate metadata updates before mutating matching documents.
-
-        `update_metadata_by_filter` updates fields in place without
-        re-embedding or rebuilding document identity, so callers may only
-        update user metadata fields.
-        """
-        if not values:
-            raise ValueError("update_metadata_by_filter requires non-empty values.")
-        protected_fields = {
-            self.config.id_field,
-            self.config.content_field,
-            self.config.embedding_field,
-            "_index_name",
-            "_metadata_json",
-        }
-        overlap = set(values) & protected_fields
-        if overlap:
-            raise ValueError(
-                "update_metadata_by_filter cannot update protected fields: "
-                f"{sorted(overlap)}"
-            )
-
-    def _filter_rows_for_update(
-        self, filter: FilterExpression, batch_size: int
-    ) -> List[Dict[str, Any]]:
-        """Return rows matching the scoped filter before applying updates.
-
-        Resolving all matches first keeps pagination stable when updated
-        fields also participate in the filter, and fetches `_metadata_json`
-        for the metadata merge step.
-        """
-        query = FilterQuery(
-            filter_expression=filter,
-            return_fields=["_metadata_json"],
-            num_results=batch_size,
-        )
-        rows = []
-        for batch in self._index.paginate(query, page_size=batch_size):
-            rows.extend(batch)
-        return rows
-
-    def _stored_metadata_value(self, value: Any) -> Any:
-        """Return the Redis field representation for a metadata value.
-
-        List metadata is stored as a tag-separator-delimited string for field
-        updates; `_metadata_json` keeps the original JSON metadata shape.
-        """
-        if isinstance(value, list):
-            return self.config.default_tag_separator.join(str(item) for item in value)
-        return value
-
-    def _metadata_json_for_update(
-        self, row: Dict[str, Any], values: Dict[str, Any]
-    ) -> str:
-        """Merge updated metadata values into a row's stored metadata JSON.
-
-        Redis/client decoding may return `_metadata_json` as bytes, a JSON
-        string, or an already-decoded dict, so normalize it before merging.
-        """
-        metadata = {}
-        metadata_json = row.get("_metadata_json")
-        if isinstance(metadata_json, bytes):
-            metadata_json = metadata_json.decode()
-        if isinstance(metadata_json, str):
-            try:
-                metadata = json.loads(metadata_json)
-            except (json.JSONDecodeError, TypeError):
-                metadata = {}
-        elif isinstance(metadata_json, dict):
-            metadata = metadata_json.copy()
-        metadata.update(values)
-        return json.dumps(metadata)
-
-    def _update_metadata_rows(
-        self, rows: List[Dict[str, Any]], values: Dict[str, Any], batch_size: int
-    ) -> int:
-        """Write metadata updates for resolved rows in Redis pipeline batches.
-
-        Each row gets both its individual stored fields and `_metadata_json`
-        updated so Redis queries and returned `Document.metadata` stay
-        consistent.
-        """
-        processed = 0
-        for start in range(0, len(rows), batch_size):
-            batch = rows[start : start + batch_size]
-            updates = []
-            for row in batch:
-                update = {
-                    name: self._stored_metadata_value(value)
-                    for name, value in values.items()
-                }
-                update["_metadata_json"] = self._metadata_json_for_update(row, values)
-                updates.append((row["id"], update))
-
-            if self.config.storage_type == StorageType.JSON.value:
-                with self._index.client.json().pipeline(transaction=False) as pipe:
-                    for key, update in updates:
-                        pipe.merge(key, ".", update)
-                    pipe.execute()
-            else:
-                with self._index.client.pipeline(transaction=False) as pipe:
-                    for key, update in updates:
-                        pipe.hset(key, mapping=update)
-                    pipe.execute()
-            processed += len(updates)
-        return processed
 
     def _with_index_name_filter(
         self, filter: Optional[Union[str, FilterExpression]]

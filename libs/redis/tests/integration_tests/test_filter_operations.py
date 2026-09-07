@@ -1,4 +1,4 @@
-"""Integration tests for filter-based delete and metadata update."""
+"""Integration tests for filter-based deletion."""
 
 from typing import Any, List, Set
 from uuid import uuid4
@@ -13,7 +13,6 @@ TEAM_FIELD = "team"
 DOC_ID_FIELD = "doc_id"
 TEAM_A = "team_a"
 TEAM_B = "team_b"
-NEW_TEAM = "team_c"
 GHOST_TEAM = "team_ghost"
 
 TEAM_A_DOC_IDS = ["a1", "a2", "a3", "a4"]
@@ -115,44 +114,11 @@ def test_shared_prefix_indexes_are_isolated(redis_url: str) -> None:
         store_b.index.delete(drop=True)
 
 
-def test_update_metadata_by_filter_flips_tag(redis_url: str) -> None:
-    """Bulk metadata update rewrites fields in place without re-adding docs."""
-    store = _make_store(redis_url)
-    try:
-        updated = store.update_metadata_by_filter(
-            Tag(TEAM_FIELD) == TEAM_A, {TEAM_FIELD: NEW_TEAM}
-        )
-        assert updated == len(TEAM_A_DOC_IDS)
-
-        retagged = store.similarity_search(
-            QUERY, k=20, filter=Tag(TEAM_FIELD) == NEW_TEAM
-        )
-        assert {doc.metadata[DOC_ID_FIELD] for doc in retagged} == set(TEAM_A_DOC_IDS)
-        assert {doc.metadata[TEAM_FIELD] for doc in retagged} == {NEW_TEAM}
-        # content is untouched; only the tag changed
-        assert all(
-            doc.page_content == f"document {doc.metadata[DOC_ID_FIELD]}"
-            for doc in retagged
-        )
-    finally:
-        store.index.delete(drop=True)
-
-
-def test_filter_operations_on_json_storage(redis_url: str) -> None:
-    """Update and delete by filter work against JSON storage, not just hash."""
+def test_delete_by_filter_on_json_storage(redis_url: str) -> None:
+    """Filter deletion works against JSON storage, not just hash."""
     store = _make_store(redis_url, storage_type="json")
     try:
-        updated = store.update_metadata_by_filter(
-            Tag(TEAM_FIELD) == TEAM_A, {TEAM_FIELD: NEW_TEAM}
-        )
-        assert updated == len(TEAM_A_DOC_IDS)
-
-        retagged = store.similarity_search(
-            QUERY, k=20, filter=Tag(TEAM_FIELD) == NEW_TEAM
-        )
-        assert {doc.metadata[TEAM_FIELD] for doc in retagged} == {NEW_TEAM}
-
-        deleted = store.delete_by_filter(Tag(TEAM_FIELD) == NEW_TEAM)
+        deleted = store.delete_by_filter(Tag(TEAM_FIELD) == TEAM_A)
         assert deleted == len(TEAM_A_DOC_IDS)
         assert _remaining_doc_ids(store) == set(TEAM_B_DOC_IDS)
     finally:

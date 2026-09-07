@@ -198,12 +198,12 @@ docs = store.full_text_search(
 Hybrid scores are combined scores (rank-based for RRF), not comparable with
 the cosine distances returned by `similarity_search_with_score`.
 
-#### Filter-based deletion and metadata updates
+#### Filter-based deletion
 
-Documents can be deleted or updated by what they are, not just by id — using
-the same `FilterExpression` type as search. Useful for re-syncing a changed
-source, tenant offboarding, retention policies, or bulk retagging. Continuing
-with the product catalog above:
+Documents can be deleted by what they are, not just by id, using the same
+`FilterExpression` type as search. This is useful for re-syncing a changed
+source, tenant offboarding, or retention policies. Continuing with the product
+catalog above:
 
 ```python
 # Delete every document matching a filter
@@ -212,16 +212,10 @@ store.delete(filter=Tag("category") == "furniture")
 # Preview a purge before running it, and get exact counts
 would_delete = store.delete_by_filter(Num("price") > 100, dry_run=True)
 deleted = store.delete_by_filter(Num("price") > 100)
-
-# Bulk-update metadata in place — no re-embedding
-updated = store.update_metadata_by_filter(
-    Tag("category") == "footwear", {"category": "outdoor"}
-)
 ```
 
-Both operations are automatically scoped to the store's own index, so
-indexes sharing a `key_prefix` cannot delete or modify each other's
-documents.
+Filter deletion is automatically scoped to the store's own index, so indexes
+sharing a `key_prefix` cannot delete each other's documents.
 
 #### Vector index tuning
 
@@ -274,7 +268,7 @@ vector_store = RedisVectorStore(embeddings, config=config)
   linear fusion), with automatic engine selection by server version
 - Full-text (BM25) search with per-field weighting
 - Support for metadata filtering, including wildcard tag patterns
-- Filter-based bulk deletion (with dry-run) and in-place metadata updates
+- Filter-based bulk deletion with dry-run support
 - Multiple distance metrics: Cosine similarity, L2, and Inner Product
 - FLAT, HNSW, and SVS-VAMANA indexing algorithms with tunable
   algorithm-specific attributes (including SVS-VAMANA vector compression)

@@ -1,6 +1,5 @@
-"""Unit tests for filter-based delete and metadata update on RedisVectorStore."""
+"""Unit tests for filter-based deletion on RedisVectorStore."""
 
-import json
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 from unittest.mock import patch
@@ -20,38 +19,8 @@ REDIS_URL = "redis://localhost"
 TEAM_FIELD = "team"
 TEAM_VALUE = "alpha"
 USER_FILTER = Tag(TEAM_FIELD) == TEAM_VALUE
-NEW_VALUES = {"status": "archived"}
-EXISTING_METADATA = {TEAM_FIELD: TEAM_VALUE, "status": "draft", "doc_id": "doc1"}
 _MATCH_ALL_ERROR = "refuses filters that match all documents"
 _UNINITIALIZED_FILTER_ERROR = "specific, initialized filter expression"
-MATCHING_ROWS = [
-    {"id": "filter_ops_unit:doc1", "_metadata_json": json.dumps(EXISTING_METADATA)}
-]
-
-
-class FakePipeline:
-    def __init__(self, index: "FakeBulkIndex") -> None:
-        self.index = index
-
-    def __enter__(self) -> "FakePipeline":
-        return self
-
-    def __exit__(self, *args: Any) -> None:
-        pass
-
-    def hset(self, key: str, mapping: Dict[str, Any]) -> None:
-        self.index.hset_calls.append((key, mapping))
-
-    def execute(self) -> List[int]:
-        return [1 for _ in self.index.hset_calls]
-
-
-class FakeRedisClient:
-    def __init__(self, index: "FakeBulkIndex") -> None:
-        self.index = index
-
-    def pipeline(self, transaction: bool = False) -> FakePipeline:
-        return FakePipeline(self.index)
 
 
 class MockEmbeddings(Embeddings):
@@ -77,9 +46,6 @@ class FakeBulkIndex:
         )
         self.captured_filter: Any = None
         self.captured_kwargs: Dict[str, Any] = {}
-        self.captured_query: Any = None
-        self.hset_calls: List[tuple[str, Dict[str, Any]]] = []
-        self.client = FakeRedisClient(self)
         type(self).last_instance = self
 
     @classmethod
@@ -93,10 +59,6 @@ class FakeBulkIndex:
         self.captured_filter = filter_expression
         self.captured_kwargs = kwargs
         return type(self).bulk_result
-
-    def paginate(self, query: Any, page_size: int) -> List[List[Dict[str, Any]]]:
-        self.captured_query = query
-        return [MATCHING_ROWS]
 
 
 @pytest.fixture
@@ -168,7 +130,6 @@ def test_delete_by_filter_requires_filter(store: RedisVectorStore) -> None:
         store.delete_by_filter(None)  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("operation", ["delete", "update"])
 @pytest.mark.parametrize(
     ("unsafe_filter", "expected_error"),
     [
@@ -219,26 +180,19 @@ def test_delete_by_filter_requires_filter(store: RedisVectorStore) -> None:
         ),
     ],
 )
-def test_bulk_filter_operations_reject_unsafe_filters(
+def test_delete_by_filter_rejects_unsafe_filters(
     store: RedisVectorStore,
-    operation: str,
     unsafe_filter: FilterExpression,
     expected_error: str,
 ) -> None:
     """Unsafe filters are rejected through the intended validation path."""
     with pytest.raises(ValueError, match=expected_error):
-        if operation == "delete":
-            store.delete_by_filter(unsafe_filter)
-        else:
-            store.update_metadata_by_filter(unsafe_filter, NEW_VALUES)
+        store.delete_by_filter(unsafe_filter)
 
-    fake = _fake(store)
-    assert fake.captured_filter is None
-    assert fake.captured_query is None
-    assert fake.hset_calls == []
+    assert _fake(store).captured_filter is None
 
 
-def test_bulk_filter_operations_allow_field_wildcard(
+def test_delete_by_filter_allows_field_wildcard(
     store: RedisVectorStore,
 ) -> None:
     """A field-specific wildcard remains valid because it is not global `*`."""
@@ -249,41 +203,9 @@ def test_bulk_filter_operations_allow_field_wildcard(
     assert "_index_name" in captured
 
 
-def test_update_metadata_by_filter_syncs_metadata_json(
+def test_delete_by_filter_rejects_raw_string_filters(
     store: RedisVectorStore,
-) -> None:
-    """Values are written to fields and merged into _metadata_json."""
-    count = store.update_metadata_by_filter(USER_FILTER, NEW_VALUES)
-    fake = _fake(store)
-    assert count == len(MATCHING_ROWS)
-    assert "_index_name" in str(fake.captured_query.filter)
-
-    [(key, mapping)] = fake.hset_calls
-    assert key == MATCHING_ROWS[0]["id"]
-    assert mapping["status"] == NEW_VALUES["status"]
-    assert json.loads(mapping["_metadata_json"]) == {
-        **EXISTING_METADATA,
-        **NEW_VALUES,
-    }
-
-
-@pytest.mark.parametrize("operation", ["delete", "update"])
-def test_bulk_filter_operations_reject_raw_string_filters(
-    store: RedisVectorStore, operation: str
 ) -> None:
     """Raw strings are refused because destructive filters must be safely scoped."""
     with pytest.raises(ValueError, match="FilterExpression"):
-        if operation == "delete":
-            store.delete_by_filter("@team:{alpha}")  # type: ignore[arg-type]
-        else:
-            store.update_metadata_by_filter(  # type: ignore[arg-type]
-                "@team:{alpha}", NEW_VALUES
-            )
-
-
-def test_update_metadata_by_filter_rejects_protected_fields(
-    store: RedisVectorStore,
-) -> None:
-    """Metadata updates may not corrupt content, embeddings, or internal fields."""
-    with pytest.raises(ValueError, match="protected fields"):
-        store.update_metadata_by_filter(USER_FILTER, {"_metadata_json": "{}"})
+        store.delete_by_filter("@team:{alpha}")  # type: ignore[arg-type]
