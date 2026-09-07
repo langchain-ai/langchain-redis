@@ -115,16 +115,58 @@ def test_explicit_method_builds_matching_query(
 
 
 @pytest.mark.parametrize(
-    "server_version,expected_query_class",
-    [("8.4.0", HybridQuery), ("8.2.1", AggregateHybridQuery)],
+    "server_version,expected_query_class,expected_kwargs",
+    [
+        (
+            "8.4.0",
+            HybridQuery,
+            {"combination_method": "LINEAR", "linear_alpha": pytest.approx(0.3)},
+        ),
+        ("8.2.1", AggregateHybridQuery, {"alpha": 0.7}),
+    ],
 )
-def test_auto_selects_engine_by_server_version(
-    store: RedisVectorStore, server_version: str, expected_query_class: type
+def test_auto_uses_linear_fusion_across_engines(
+    store: RedisVectorStore,
+    server_version: str,
+    expected_query_class: type,
+    expected_kwargs: Dict[str, Any],
 ) -> None:
-    """method='auto' picks FT.HYBRID on servers >= 8.4 and falls back below."""
+    """The default call preserves LINEAR semantics across both engines."""
     FakeSearchIndex.redis_version = server_version
-    store.hybrid_search(QUERY)
+    target = f"langchain_redis.vectorstores.{expected_query_class.__name__}"
+    with patch(target, wraps=expected_query_class) as query_class:
+        store.hybrid_search(QUERY)
+
     assert isinstance(_captured(store), expected_query_class)
+    for name, expected in expected_kwargs.items():
+        assert query_class.call_args.kwargs[name] == expected
+
+
+def test_hybrid_options_are_case_insensitive(store: RedisVectorStore) -> None:
+    """Engine and fusion names are normalized before reaching RedisVL."""
+    with patch(
+        "langchain_redis.vectorstores.HybridQuery", wraps=HybridQuery
+    ) as query_class:
+        store.hybrid_search(
+            QUERY,
+            method="FT_HYBRID",
+            combination_method="linear",
+            alpha=0.5,
+        )
+
+    assert query_class.call_args.kwargs["combination_method"] == "LINEAR"
+    assert query_class.call_args.kwargs["linear_alpha"] == 0.5
+
+
+def test_rrf_omits_linear_alpha(store: RedisVectorStore) -> None:
+    """RRF reaches RedisVL without a meaningless LINEAR weight."""
+    with patch(
+        "langchain_redis.vectorstores.HybridQuery", wraps=HybridQuery
+    ) as query_class:
+        store.hybrid_search(QUERY, method="ft_hybrid", combination_method="rrf")
+
+    assert query_class.call_args.kwargs["combination_method"] == "RRF"
+    assert "linear_alpha" not in query_class.call_args.kwargs
 
 
 def test_explicit_ft_hybrid_on_old_server_raises(store: RedisVectorStore) -> None:
@@ -138,6 +180,47 @@ def test_unknown_method_raises(store: RedisVectorStore) -> None:
     """An unrecognized method raises ValueError instead of silently defaulting."""
     with pytest.raises(ValueError, match="Unknown hybrid search method"):
         store.hybrid_search(QUERY, method="bm42")
+
+
+def test_unknown_combination_method_raises_before_embedding(
+    store: RedisVectorStore,
+) -> None:
+    """Invalid fusion methods fail locally before doing embedding work."""
+    with patch.object(store.embeddings, "embed_query") as embed_query:
+        with pytest.raises(ValueError, match="Unknown combination method"):
+            store.hybrid_search(QUERY, combination_method="weighted")
+
+    embed_query.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "alpha",
+    [-1.0, 0.0, 1.0, 2.0, pytest.param(float("nan"), id="nan")],
+)
+def test_linear_rejects_invalid_alpha(store: RedisVectorStore, alpha: float) -> None:
+    """LINEAR weights must keep both text and vector signals active."""
+    with pytest.raises(ValueError, match="strictly between 0 and 1"):
+        store.hybrid_search(QUERY, combination_method="LINEAR", alpha=alpha)
+
+
+@pytest.mark.parametrize("alpha", [0.0, 0.5, 1.0])
+def test_rrf_rejects_explicit_alpha(store: RedisVectorStore, alpha: float) -> None:
+    """RRF rejects alpha even when the supplied value is falsy."""
+    with pytest.raises(ValueError, match="alpha cannot be used with RRF"):
+        store.hybrid_search(
+            QUERY,
+            method="ft_hybrid",
+            combination_method="RRF",
+            alpha=alpha,
+        )
+
+
+@pytest.mark.parametrize("method", ["auto", "aggregate"])
+def test_rrf_rejects_aggregate_engine(store: RedisVectorStore, method: str) -> None:
+    """RRF never silently changes to LINEAR through the aggregate fallback."""
+    FakeSearchIndex.redis_version = "8.2.0"
+    with pytest.raises(ValueError, match="RRF"):
+        store.hybrid_search(QUERY, method=method, combination_method="RRF")
 
 
 def test_index_name_filter_injected_when_field_exists(

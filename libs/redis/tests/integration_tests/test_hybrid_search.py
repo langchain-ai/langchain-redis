@@ -113,14 +113,13 @@ def ft_hybrid_server(redis_server_version: tuple) -> None:
 
 @pytest.mark.parametrize(
     "alpha,expected_winner",
-    [(1.0, VECTOR_WINNER_ID), (0.0, TEXT_WINNER_ID)],
-    ids=["vector-only", "text-only"],
+    [(0.99, VECTOR_WINNER_ID), (0.01, TEXT_WINNER_ID)],
+    ids=["vector-heavy", "text-heavy"],
 )
-def test_aggregate_alpha_extremes_pick_matching_winner(
+def test_aggregate_alpha_weights_pick_matching_winner(
     store: RedisVectorStore, alpha: float, expected_winner: str
 ) -> None:
-    """alpha fully weights one signal: 1.0 ranks the vector winner first,
-    0.0 the BM25 winner."""
+    """A weight near either boundary ranks that signal's winner first."""
     docs = store.hybrid_search(QUERY, k=2, method="aggregate", alpha=alpha)
     assert docs[0].metadata[DOC_ID_FIELD] == expected_winner
 
@@ -177,8 +176,14 @@ def test_auto_method_works_on_any_supported_server(
     Runs against whichever real server the suite uses, exercising the INFO
     version probe on genuine server output — the one thing mocks can't cover.
     """
-    docs = store.hybrid_search(QUERY, k=2)
-    assert {doc.metadata[DOC_ID_FIELD] for doc in docs} == {
+    default_docs = store.hybrid_search(QUERY, k=2)
+    explicit_docs = store.hybrid_search(
+        QUERY, k=2, combination_method="LINEAR", alpha=0.7
+    )
+    assert [doc.metadata[DOC_ID_FIELD] for doc in default_docs] == [
+        doc.metadata[DOC_ID_FIELD] for doc in explicit_docs
+    ]
+    assert {doc.metadata[DOC_ID_FIELD] for doc in default_docs} == {
         TEXT_WINNER_ID,
         VECTOR_WINNER_ID,
     }

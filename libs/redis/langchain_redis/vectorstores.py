@@ -1349,6 +1349,62 @@ class RedisVectorStore(VectorStore):
                 return None
         return self._ft_hybrid_support
 
+    def _resolve_hybrid_options(
+        self,
+        method: str,
+        combination_method: str,
+        alpha: Optional[float],
+    ) -> Tuple[str, str, Optional[float]]:
+        """Normalize and validate hybrid-search options and select an engine."""
+        method = method.lower()
+        combination_method = combination_method.upper()
+
+        if method not in ("auto", "ft_hybrid", "aggregate"):
+            raise ValueError(
+                f"Unknown hybrid search method: {method!r}. "
+                "Expected 'auto', 'ft_hybrid' or 'aggregate'."
+            )
+        if combination_method not in ("LINEAR", "RRF"):
+            raise ValueError(
+                f"Unknown combination method: {combination_method!r}. "
+                "Expected 'LINEAR' or 'RRF'."
+            )
+
+        if combination_method == "LINEAR":
+            alpha = 0.7 if alpha is None else alpha
+            if not 0 < alpha < 1:
+                raise ValueError(
+                    "alpha must be strictly between 0 and 1 for LINEAR fusion."
+                )
+        elif alpha is not None:
+            raise ValueError("alpha cannot be used with RRF fusion.")
+
+        if method == "aggregate":
+            if combination_method == "RRF":
+                raise ValueError(
+                    "RRF fusion is unavailable with method='aggregate'. "
+                    "Use LINEAR or method='ft_hybrid'."
+                )
+            return method, combination_method, alpha
+
+        supports_ft_hybrid = self._supports_ft_hybrid()
+        if method == "ft_hybrid":
+            if supports_ft_hybrid is False:
+                raise ValueError(
+                    "method='ft_hybrid' requires Redis >= 8.4.0 (the FT.HYBRID "
+                    "command). Use method='aggregate' on older servers."
+                )
+            return method, combination_method, alpha
+
+        if supports_ft_hybrid:
+            return "ft_hybrid", combination_method, alpha
+        if combination_method == "RRF":
+            raise ValueError(
+                "RRF fusion requires Redis >= 8.4.0 and cannot use the "
+                "aggregate fallback."
+            )
+        return "aggregate", combination_method, alpha
+
     def hybrid_search_with_score(
         self,
         query: str,
@@ -1357,8 +1413,8 @@ class RedisVectorStore(VectorStore):
         *,
         text_field: Optional[str] = None,
         method: str = "auto",
-        combination_method: str = "RRF",
-        alpha: float = 0.7,
+        combination_method: str = "LINEAR",
+        alpha: Optional[float] = None,
         text_scorer: str = "BM25STD",
         text_weights: Optional[Dict[str, float]] = None,
         stopwords: Optional[Union[str, Set[str]]] = "english",
@@ -1377,13 +1433,12 @@ class RedisVectorStore(VectorStore):
                 `'aggregate'` uses an `FT.AGGREGATE`-based combination that
                 works on any Redis with the Query Engine. `'auto'` (default)
                 probes the server version and picks accordingly.
-            combination_method: `'RRF'` (reciprocal rank fusion) or
-                `'LINEAR'`. Only used by `'ft_hybrid'`; the `'aggregate'`
-                method always combines linearly using `alpha`.
+            combination_method: `'LINEAR'` (default) or `'RRF'` (reciprocal
+                rank fusion). RRF requires native `FT.HYBRID` support.
             alpha: Weight of the vector similarity in linear combination:
                 `score = alpha * vector_score + (1 - alpha) * text_score`.
-                For `'ft_hybrid'` with `'LINEAR'`, use values strictly
-                between 0 and 1.
+                Defaults to 0.7 for LINEAR and must be strictly between 0 and
+                1. Do not provide it with RRF.
             text_scorer: Full-text scoring algorithm (default `'BM25STD'`).
             text_weights: Optional per-word importance weights for the
                 full-text part of the query.
@@ -1412,20 +1467,9 @@ class RedisVectorStore(VectorStore):
                 print(score, doc.page_content)
             ```
         """
-        if method not in ("auto", "ft_hybrid", "aggregate"):
-            raise ValueError(
-                f"Unknown hybrid search method: {method!r}. "
-                "Expected 'auto', 'ft_hybrid' or 'aggregate'."
-            )
-
-        resolved = method
-        if method == "auto":
-            resolved = "ft_hybrid" if self._supports_ft_hybrid() else "aggregate"
-        elif method == "ft_hybrid" and self._supports_ft_hybrid() is False:
-            raise ValueError(
-                "method='ft_hybrid' requires Redis >= 8.4.0 (the FT.HYBRID "
-                "command). Use method='aggregate' on older servers."
-            )
+        resolved, combination_method, alpha = self._resolve_hybrid_options(
+            method, combination_method, alpha
+        )
 
         embedding = self._embeddings.embed_query(query)
         filter = self._with_index_name_filter(filter)
@@ -1433,41 +1477,35 @@ class RedisVectorStore(VectorStore):
         dtype = self.config.vector_datatype.lower()
         text_field = text_field or self.config.content_field
 
+        query_kwargs: Dict[str, Any] = {
+            "text": query,
+            "text_field_name": text_field,
+            "vector": embedding,
+            "vector_field_name": self.config.embedding_field,
+            "text_scorer": text_scorer,
+            "filter_expression": filter,
+            "dtype": dtype,
+            "num_results": k,
+            "return_fields": return_fields,
+            "stopwords": stopwords,
+            "text_weights": text_weights,
+        }
+
         hybrid_query: Union[HybridQuery, AggregateHybridQuery]
         if resolved == "ft_hybrid":
-            hybrid_query = HybridQuery(
-                text=query,
-                text_field_name=text_field,
-                vector=embedding,
-                vector_field_name=self.config.embedding_field,
-                text_scorer=text_scorer,
-                filter_expression=filter,
-                combination_method=combination_method,
+            native_kwargs: Dict[str, Any] = {
+                "combination_method": combination_method,
+                "yield_combined_score_as": "hybrid_score",
+            }
+            if combination_method == "LINEAR":
+                assert alpha is not None
                 # Our alpha weights the vector score; FT.HYBRID's linear_alpha
                 # weights the text score.
-                linear_alpha=1 - alpha,
-                yield_combined_score_as="hybrid_score",
-                dtype=dtype,
-                num_results=k,
-                return_fields=return_fields,
-                stopwords=stopwords,
-                text_weights=text_weights,
-            )
+                native_kwargs["linear_alpha"] = 1 - alpha
+            hybrid_query = HybridQuery(**query_kwargs, **native_kwargs)
         else:
-            hybrid_query = AggregateHybridQuery(
-                text=query,
-                text_field_name=text_field,
-                vector=embedding,
-                vector_field_name=self.config.embedding_field,
-                text_scorer=text_scorer,
-                filter_expression=filter,
-                alpha=alpha,
-                dtype=dtype,
-                num_results=k,
-                return_fields=return_fields,
-                stopwords=stopwords,
-                text_weights=text_weights,
-            )
+            assert alpha is not None
+            hybrid_query = AggregateHybridQuery(**query_kwargs, alpha=alpha)
 
         results = self._index.query(hybrid_query)
 

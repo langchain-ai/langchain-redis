@@ -45,7 +45,9 @@ print(docs[0].page_content)
 | Hybrid search — native method (`FT.HYBRID`) | ✗ | ✗ | ✓ |
 | SVS-VAMANA vector indexing (with compression) | ✗ | ✓ | ✓ |
 
-`hybrid_search()` detects the server version automatically: it uses `FT.HYBRID` on Redis 8.4+ and falls back to the aggregate method on older servers.
+`hybrid_search()` uses LINEAR fusion by default and detects the server version
+automatically: it uses `FT.HYBRID` on Redis 8.4+ and falls back to the aggregate
+method on older servers. RRF fusion is available explicitly on Redis 8.4+.
 
 ## Configuration
 
@@ -175,8 +177,8 @@ store.add_texts(
 
 ```python
 # Hybrid search: text relevance + vector similarity, one ranked list.
-# Uses FT.HYBRID (RRF rank fusion) on Redis 8.4+ and transparently falls
-# back to an FT.AGGREGATE-based combination on older servers.
+# Uses LINEAR fusion with FT.HYBRID on Redis 8.4+ and transparently falls
+# back to the equivalent FT.AGGREGATE-based combination on older servers.
 docs = store.hybrid_search("running shoes", k=2)
 
 # With scores, an explicit engine, and linear weighting:
@@ -195,8 +197,9 @@ docs = store.full_text_search(
 )
 ```
 
-Hybrid scores are combined scores (rank-based for RRF), not comparable with
-the cosine distances returned by `similarity_search_with_score`.
+Hybrid scores are combined scores (rank-based when RRF is selected), not
+comparable with the cosine distances returned by
+`similarity_search_with_score`.
 
 #### Filter-based deletion
 
