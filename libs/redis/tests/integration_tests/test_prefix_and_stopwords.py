@@ -56,13 +56,22 @@ def test_multi_prefix_index_spans_namespaces(redis_url: str) -> None:
         redis_url, key_prefix=[prefix_a, prefix_b], legacy_key_format=False
     )
     try:
-        store.add_texts(
+        written_ids = store.add_texts(
             ["first doc", "second doc"],
             metadatas=[
                 {DOC_ID_FIELD: "written_1", CATEGORY_FIELD: "native"},
                 {DOC_ID_FIELD: "written_2", CATEGORY_FIELD: "native"},
             ],
         )
+        assert len(written_ids) == 2
+        assert all(not id_.startswith(f"{prefix_a}:") for id_ in written_ids)
+
+        written_docs = store.get_by_ids(written_ids)
+        assert {doc.metadata[DOC_ID_FIELD] for doc in written_docs} == {
+            "written_1",
+            "written_2",
+        }
+
         # Plant a conforming document under the second prefix, as an outside
         # writer (e.g. another application) would.
         store.index.load(
@@ -88,6 +97,12 @@ def test_multi_prefix_index_spans_namespaces(redis_url: str) -> None:
         keys_b = cast(List[Any], client.keys(f"{prefix_b}:*"))
         assert len(keys_a) == 2
         assert len(keys_b) == 1
+
+        assert store.delete(ids=written_ids) is True
+        assert store.get_by_ids(written_ids) == []
+        assert _doc_ids(store) == {"planted"}
+        assert client.keys(f"{prefix_a}:*") == []
+        assert len(client.keys(f"{prefix_b}:*")) == 1
     finally:
         store.index.delete(drop=True)
 

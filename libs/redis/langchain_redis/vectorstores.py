@@ -599,10 +599,11 @@ class RedisVectorStore(VectorStore):
             records.append(record)
 
         # Load records into the index
+        primary_prefix = self.config.primary_prefix
         if keys:
             # Already have key_prefix in index definition (with ending colon).
             # New documents are always written under the primary prefix.
-            record_keys = [f"{self.config.primary_prefix}:{key}" for key in keys]
+            record_keys = [f"{primary_prefix}:{key}" for key in keys]
             result = self._index.load(records, keys=record_keys, ttl=self.ttl)
         else:
             result = self._index.load(records, ttl=self.ttl)
@@ -615,8 +616,8 @@ class RedisVectorStore(VectorStore):
         # same prefix themselves, so strip it back off here. Otherwise the ids
         # this method returns can't be passed to either of those without
         # ending up double-prefixed.
-        if self.config.key_prefix:
-            full_prefix = f"{self.config.key_prefix}:"
+        if primary_prefix:
+            full_prefix = f"{primary_prefix}:"
             return [
                 key[len(full_prefix) :] if key.startswith(full_prefix) else key
                 for key in result

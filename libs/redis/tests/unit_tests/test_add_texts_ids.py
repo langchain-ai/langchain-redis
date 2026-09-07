@@ -1,6 +1,9 @@
 """Test that ids parameter in kwargs works correctly in add_texts."""
 
+from typing import List, Union
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from langchain_redis import RedisVectorStore
 
@@ -122,7 +125,16 @@ def test_add_texts_with_both_keys_and_ids() -> None:
         assert len(result) == 2
 
 
-def test_add_texts_returns_ids_without_key_prefix() -> None:
+@pytest.mark.parametrize(
+    ("key_prefix", "primary_prefix"),
+    [
+        pytest.param("myprefix", "myprefix", id="single-prefix"),
+        pytest.param(["myprefix", "secondary-prefix"], "myprefix", id="multi-prefix"),
+    ],
+)
+def test_add_texts_returns_ids_without_key_prefix(
+    key_prefix: Union[str, List[str]], primary_prefix: str
+) -> None:
     """`SearchIndex.load` hands back the full Redis key it wrote (prefix
     included), but `delete()` and `get_by_ids()` take bare ids and add that
     prefix themselves, so `add_texts` has to strip it back off.
@@ -142,7 +154,8 @@ def test_add_texts_returns_ids_without_key_prefix() -> None:
         mock_search_index_class.from_dict.return_value = mock_index
 
         mock_config.return_value.index_name = "test_index"
-        mock_config.return_value.key_prefix = "myprefix"
+        mock_config.return_value.key_prefix = key_prefix
+        mock_config.return_value.primary_prefix = primary_prefix
         mock_config.return_value.embedding_dimensions = 3
         mock_config.return_value.content_field = "text"
         mock_config.return_value.embedding_field = "embedding"
