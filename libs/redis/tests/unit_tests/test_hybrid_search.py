@@ -35,10 +35,17 @@ class MockEmbeddings(Embeddings):
         return [0.1, 0.2, 0.3]
 
 
+class BrokenSchema:
+    @property
+    def fields(self) -> Dict[str, Any]:
+        raise RuntimeError("schema unavailable")
+
+
 class FakeSearchIndex:
     """Captures the query object passed to query() and returns canned rows."""
 
     redis_version = "8.4.0"
+    info_calls = 0
     rows: List[Dict[str, Any]] = []
     last_instance: Optional["FakeSearchIndex"] = None
 
@@ -53,11 +60,13 @@ class FakeSearchIndex:
             }
         )
         self.name = (schema or {}).get("index", {}).get("name", INDEX_NAME)
-        self.client = SimpleNamespace(
-            info=lambda section=None: {"redis_version": type(self).redis_version}
-        )
+        self.client = SimpleNamespace(info=self._server_info)
         self.captured_query: Any = None
         type(self).last_instance = self
+
+    def _server_info(self, section: Optional[str] = None) -> Dict[str, str]:
+        type(self).info_calls += 1
+        return {"redis_version": type(self).redis_version}
 
     @classmethod
     def from_dict(cls, schema: Dict[str, Any], **kwargs: Any) -> "FakeSearchIndex":
@@ -87,6 +96,7 @@ def store() -> RedisVectorStore:
 @pytest.fixture(autouse=True)
 def reset_fake_index() -> None:
     FakeSearchIndex.redis_version = "8.4.0"
+    FakeSearchIndex.info_calls = 0
     FakeSearchIndex.rows = [
         {
             "text": QUERY,
@@ -100,6 +110,15 @@ def reset_fake_index() -> None:
 
 def _captured(store: RedisVectorStore) -> Any:
     return store.index.captured_query  # type: ignore[attr-defined]
+
+
+def _run_search(store: RedisVectorStore, search_method: str) -> None:
+    if search_method == "similarity":
+        store.similarity_search(QUERY)
+    elif search_method == "hybrid":
+        store.hybrid_search(QUERY)
+    else:
+        store.full_text_search(QUERY)
 
 
 @pytest.mark.parametrize(
@@ -238,6 +257,55 @@ def test_index_name_filter_injected_when_field_exists(
 
     default = store._with_index_name_filter(None)
     assert "_index_name" in str(default)
+
+
+@pytest.mark.parametrize(
+    "marker_type",
+    [pytest.param(None, id="missing"), pytest.param(FieldTypes.TEXT, id="legacy-text")],
+)
+@pytest.mark.parametrize("search_method", ["similarity", "hybrid", "full_text"])
+def test_search_rejects_schema_without_exact_tag_marker(
+    store: RedisVectorStore,
+    search_method: str,
+    marker_type: Optional[FieldTypes],
+) -> None:
+    """Every search entry point refuses an absent or tokenized ownership marker."""
+    if marker_type is None:
+        store.index.schema.fields.pop("_index_name")
+    else:
+        store.index.schema.fields["_index_name"].type = marker_type
+
+    with pytest.raises(ValueError, match="requires an exact '_index_name' TAG"):
+        _run_search(store, search_method)
+
+    assert _captured(store) is None
+    assert FakeSearchIndex.info_calls == 0
+
+
+@pytest.mark.parametrize("search_method", ["similarity", "hybrid", "full_text"])
+def test_search_rejects_schema_inspection_failure_before_redis(
+    store: RedisVectorStore,
+    search_method: str,
+) -> None:
+    """Schema failures are normalized before any search-related Redis call."""
+    store.index.schema = BrokenSchema()
+
+    with pytest.raises(ValueError, match="could not inspect the index schema"):
+        _run_search(store, search_method)
+
+    assert _captured(store) is None
+    assert FakeSearchIndex.info_calls == 0
+
+
+def test_similarity_search_scopes_raw_string_filter(
+    store: RedisVectorStore,
+) -> None:
+    """RedisVL-compatible raw filters are grouped with index ownership."""
+    store.similarity_search(QUERY, filter="@category:{pets}")
+
+    rendered_filter = str(_captured(store).filter)
+    assert "@category:{pets}" in rendered_filter
+    assert hashify(INDEX_NAME) in rendered_filter
 
 
 def test_hybrid_search_with_score_extracts_hybrid_score(

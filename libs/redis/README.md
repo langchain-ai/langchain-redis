@@ -221,11 +221,12 @@ Filter deletion is automatically scoped to the store's own index, so indexes
 sharing a `key_prefix` cannot delete each other's documents.
 Generated schemas include the required exact `_index_name` TAG marker;
 existing or custom schemas without that marker must be migrated or recreated
-before using filter deletion. Existing custom TAG fields that store the raw
-index name must also be migrated or reindexed: current schemas store a hashed
-index-ownership marker, so changing only the field type is not sufficient.
-Until migration, legacy TEXT markers remain readable, but filter deletion is
-refused.
+before searching, filter deletion, or direct-ID access. Existing custom TAG
+fields that store the raw index name must also be migrated or reindexed: current
+schemas store a hashed index-ownership marker, so changing only the field type
+is not sufficient. Until migration, direct-ID operations remain available for
+legacy TEXT markers, but searches and filter deletion are refused because TEXT
+tokenization cannot provide exact index isolation.
 
 #### Vector index tuning
 
@@ -271,6 +272,15 @@ schema = IndexSchema.from_yaml("index.yaml")   # or IndexSchema.from_dict(...)
 config = RedisConfig(schema=schema, redis_url="redis://localhost:6379")
 vector_store = RedisVectorStore(embeddings, config=config)
 ```
+
+Searches are always scoped by the internal `_index_name` ownership field.
+Generated schemas add this exact TAG field automatically. Existing and custom
+schemas must define `_index_name` as TAG before they can be searched; missing,
+legacy TEXT, and unsupported marker fields are refused instead of running
+without exact index isolation. Build metadata filters with RedisVL
+`FilterExpression` helpers such as `Tag` and `Num` when values come from user
+input. Trusted raw Redis query strings are also accepted and automatically
+intersected with the index ownership filter.
 
 #### Features
 - Efficient vector storage and retrieval

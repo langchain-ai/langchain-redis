@@ -29,7 +29,7 @@ from redisvl.query import (  # type: ignore[import]
     TextQuery,
     VectorQuery,
 )
-from redisvl.query.filter import FilterExpression, Tag, Text  # type: ignore[import]
+from redisvl.query.filter import FilterExpression, Tag  # type: ignore[import]
 from redisvl.redis.utils import (  # type: ignore[import]
     array_to_buffer,
     buffer_to_array,
@@ -932,7 +932,8 @@ class RedisVectorStore(VectorStore):
                 `False` otherwise.
 
         Raises:
-            ValueError: If a non-`None` `filter` argument is provided.
+            ValueError: If a non-`None` `filter` argument is provided, or the
+                index schema has no recognized ownership marker.
 
         Example:
             ```python
@@ -941,9 +942,9 @@ class RedisVectorStore(VectorStore):
 
         Note:
             - If `ids` is omitted or empty, the method returns `False`.
-            - When the index defines a recognized `_index_name` marker, only
-                records whose stored marker matches this index are deleted. The
-                ownership check and deletion are currently separate operations.
+            - The index must define a TAG or legacy TEXT `_index_name` marker.
+                Only records whose stored marker matches this index are deleted.
+                The ownership check and deletion are currently separate operations.
             - The ids path uses RedisVL's `drop_keys`; keys are constructed by
                 prefixing each id with the configured primary key prefix.
             - Use `delete_by_filter()` for explicit filter deletion, exact
@@ -957,7 +958,7 @@ class RedisVectorStore(VectorStore):
             )
         if ids and len(ids) > 0:
             keys = self._redis_keys(ids)
-            expected_marker = self._index_name_marker_for_delete()
+            expected_marker = self._require_index_name_marker("delete()")
             records = self._fetch_records_by_keys(keys)
             keys = [
                 key
@@ -1086,29 +1087,28 @@ class RedisVectorStore(VectorStore):
             return None
         return self._index_name_value(field.type)
 
-    def _index_name_marker_for_read(self) -> Optional[str]:
-        """Return the ownership marker, tolerating legacy custom schemas."""
+    def _require_index_name_marker(self, operation: str) -> str:
+        """Return the ownership marker or refuse an unverifiable ID operation."""
         try:
-            return self._index_name_marker_from_schema()
-        except Exception:
-            return None
-
-    def _index_name_marker_for_delete(self) -> Optional[str]:
-        """Return the ownership marker or refuse deletion on inspection failure."""
-        try:
-            return self._index_name_marker_from_schema()
+            marker = self._index_name_marker_from_schema()
         except Exception as exc:
             raise ValueError(
-                "delete() could not inspect the index schema; the deletion was refused."
+                f"{operation} could not inspect the index schema; the operation "
+                "was refused."
             ) from exc
 
+        if marker is None:
+            raise ValueError(
+                f"{operation} requires an '_index_name' TAG or legacy TEXT "
+                "ownership marker. Recreate or migrate this index before using "
+                "direct-ID operations."
+            )
+        return marker
+
     @staticmethod
-    def _record_belongs_to_index(
-        record: Dict[str, Any], expected_marker: Optional[str]
-    ) -> bool:
+    def _record_belongs_to_index(record: Dict[str, Any], expected_marker: str) -> bool:
         """Return whether a fetched record belongs to the current index."""
-        record_marker = record.get(_INDEX_NAME_FIELD)
-        return expected_marker is None or record_marker == expected_marker
+        return record.get(_INDEX_NAME_FIELD) == expected_marker
 
     def _redis_keys(self, ids: Sequence[str]) -> List[str]:
         """Return Redis keys for vector-store document IDs."""
@@ -1134,20 +1134,13 @@ class RedisVectorStore(VectorStore):
     def _build_index_name_filter(
         self,
         schema: IndexSchema,
-        *,
-        allow_text: bool,
     ) -> Optional[FilterExpression]:
-        """Build an index namespace filter from the provided schema."""
+        """Build an exact index namespace filter from the provided schema."""
         field = schema.fields.get(_INDEX_NAME_FIELD)
-        if field is None:
+        if field is None or field.type != FieldTypes.TAG:
             return None
 
-        value = self._index_name_value(field.type)
-        if field.type == FieldTypes.TAG:
-            return Tag(_INDEX_NAME_FIELD) == value
-        if allow_text and field.type == FieldTypes.TEXT:
-            return Text(_INDEX_NAME_FIELD) == value
-        return None
+        return Tag(_INDEX_NAME_FIELD) == self._index_name_value(field.type)
 
     def _live_index_schema(self) -> IndexSchema:
         """Fetch the schema currently installed in Redis."""
@@ -1192,44 +1185,47 @@ class RedisVectorStore(VectorStore):
 
     def _with_index_name_filter(
         self, filter: Optional[Union[str, FilterExpression]]
-    ) -> Optional[Union[str, FilterExpression]]:
-        """Restrict a filter to documents belonging to the current index.
-
-        Reads retain best-effort compatibility with existing TEXT markers and
-        custom schemas that do not define an `_index_name` field.
-        """
+    ) -> FilterExpression:
+        """Restrict every search to documents owned by the current index."""
         try:
-            index_filter = self._build_index_name_filter(
-                self._index.schema, allow_text=True
-            )
-        except Exception:
-            return filter
+            index_filter = self._build_index_name_filter(self._index.schema)
+        except Exception as exc:
+            raise ValueError(
+                "Search could not inspect the index schema; the query was refused."
+            ) from exc
 
         if index_filter is None:
-            return filter
+            raise ValueError(
+                "Search requires an exact '_index_name' TAG field. Recreate or "
+                "migrate this index before searching."
+            )
         if filter is None:
             return index_filter
-        if isinstance(filter, FilterExpression):
-            return filter & index_filter
-        return filter
+        if isinstance(filter, str):
+            rendered_filter = filter.strip()
+            if not rendered_filter or rendered_filter == "*":
+                return index_filter
+            # RedisVL accepts trusted raw query strings. Group the complete raw
+            # expression before intersecting it with the ownership marker.
+            filter = FilterExpression(f"({rendered_filter})")
+        return filter & index_filter
 
     def _query_builder(
         self,
         embedding: Union[List[float], bytes],
+        filter_expression: FilterExpression,
         k: int = 10,
         distance_threshold: Any = None,
         sort_by: Optional[str] = None,
-        filter: Optional[Union[str, FilterExpression]] = None,
         return_fields: Optional[List[str]] = None,
     ) -> Union[VectorQuery, RangeQuery]:
-        filter = self._with_index_name_filter(filter)
         if distance_threshold is None:
             return VectorQuery(
                 vector=embedding,
                 vector_field_name=self.config.embedding_field,
                 return_fields=return_fields,
                 num_results=k,
-                filter_expression=filter,
+                filter_expression=filter_expression,
                 sort_by=sort_by,
             )
         else:
@@ -1238,7 +1234,7 @@ class RedisVectorStore(VectorStore):
                 vector_field_name=self.config.embedding_field,
                 return_fields=return_fields,
                 num_results=k,
-                filter_expression=filter,
+                filter_expression=filter_expression,
                 distance_threshold=distance_threshold,
                 sort_by=sort_by,
             )
@@ -1247,7 +1243,7 @@ class RedisVectorStore(VectorStore):
         self,
         embedding: List[float],
         k: int = 4,
-        filter: Optional[FilterExpression] = None,
+        filter: Optional[Union[str, FilterExpression]] = None,
         sort_by: Optional[str] = None,
         **kwargs: Any,
     ) -> List[Document]:
@@ -1256,7 +1252,8 @@ class RedisVectorStore(VectorStore):
         Args:
             embedding: Embedding to look up documents similar to.
             k: Number of `Document` objects to return.
-            filter: Optional `filter` expression to apply.
+            filter: Optional RedisVL `FilterExpression` or trusted raw Redis
+                query string to apply.
             sort_by: Optional `sort_by` expression to apply.
             **kwargs: Other keyword arguments.
 
@@ -1272,6 +1269,7 @@ class RedisVectorStore(VectorStore):
         Returns:
             List of `Document` objects most similar to the query vector.
         """
+        filter_expression = self._with_index_name_filter(filter)
         return_metadata = kwargs.get("return_metadata", True)
         distance_threshold = kwargs.get("distance_threshold", None)
         return_all = kwargs.get("return_all", False)
@@ -1293,7 +1291,7 @@ class RedisVectorStore(VectorStore):
             embedding=embedding,
             k=k,
             sort_by=sort_by,
-            filter=filter,
+            filter_expression=filter_expression,
             return_fields=return_fields,
         )
 
@@ -1341,7 +1339,7 @@ class RedisVectorStore(VectorStore):
         self,
         query: str,
         k: int = 4,
-        filter: Optional[FilterExpression] = None,
+        filter: Optional[Union[str, FilterExpression]] = None,
         sort_by: Optional[str] = None,
         **kwargs: Any,
     ) -> List[Document]:
@@ -1350,9 +1348,9 @@ class RedisVectorStore(VectorStore):
         Args:
             query: Text to look up documents similar to.
             k: Number of `Document` objects to return.
-            filter: Optional `filter` expression to apply. Tag filters
-                support wildcard patterns via the modulo operator, e.g.
-                `Tag("category") % "elec*"`.
+            filter: Optional RedisVL `FilterExpression` or trusted raw Redis
+                query string to apply. Tag filters support wildcard patterns
+                via the modulo operator, e.g. `Tag("category") % "elec*"`.
             sort_by: Optional `sort_by` expression to apply.
             **kwargs: Other keyword arguments to pass to the search function.
 
@@ -1450,7 +1448,7 @@ class RedisVectorStore(VectorStore):
         self,
         query: str,
         k: int = 4,
-        filter: Optional[FilterExpression] = None,
+        filter: Optional[Union[str, FilterExpression]] = None,
         *,
         text_field: Optional[str] = None,
         method: str = "auto",
@@ -1467,7 +1465,8 @@ class RedisVectorStore(VectorStore):
             query: Query text. It is used both for full-text scoring and,
                 embedded, for vector similarity.
             k: Number of `Document` objects to return.
-            filter: Optional `FilterExpression` to apply.
+            filter: Optional RedisVL `FilterExpression` or trusted raw Redis
+                query string to apply.
             text_field: Text field to search in. Defaults to the configured
                 `content_field`.
             method: `'ft_hybrid'` uses the `FT.HYBRID` command (Redis 8.4+),
@@ -1508,12 +1507,12 @@ class RedisVectorStore(VectorStore):
                 print(score, doc.page_content)
             ```
         """
+        filter = self._with_index_name_filter(filter)
         resolved, combination_method, alpha = self._resolve_hybrid_options(
             method, combination_method, alpha
         )
 
         embedding = self._embeddings.embed_query(query)
-        filter = self._with_index_name_filter(filter)
         return_fields = self._default_return_fields(return_metadata)
         dtype = self.config.vector_datatype.lower()
         text_field = text_field or self.config.content_field
@@ -1568,7 +1567,7 @@ class RedisVectorStore(VectorStore):
         self,
         query: str,
         k: int = 4,
-        filter: Optional[FilterExpression] = None,
+        filter: Optional[Union[str, FilterExpression]] = None,
         **kwargs: Any,
     ) -> List[Document]:
         """Return docs ranked by combined full-text and vector similarity.
@@ -1576,7 +1575,8 @@ class RedisVectorStore(VectorStore):
         Args:
             query: Query text, used for both full-text and vector scoring.
             k: Number of `Document` objects to return.
-            filter: Optional `FilterExpression` to apply.
+            filter: Optional RedisVL `FilterExpression` or trusted raw Redis
+                query string to apply.
             **kwargs: See `hybrid_search_with_score` for the remaining
                 keyword arguments (`method`, `combination_method`, `alpha`,
                 `text_field`, `text_scorer`, `text_weights`, `stopwords`,
@@ -1593,7 +1593,7 @@ class RedisVectorStore(VectorStore):
         self,
         query: str,
         k: int = 4,
-        filter: Optional[FilterExpression] = None,
+        filter: Optional[Union[str, FilterExpression]] = None,
         *,
         text_fields: Optional[Union[str, Dict[str, float]]] = None,
         text_scorer: str = "BM25STD",
@@ -1605,7 +1605,8 @@ class RedisVectorStore(VectorStore):
         Args:
             query: Full-text query string.
             k: Number of `Document` objects to return.
-            filter: Optional `FilterExpression` to apply.
+            filter: Optional RedisVL `FilterExpression` or trusted raw Redis
+                query string to apply.
             text_fields: Text field to search in, or a mapping of field
                 names to weights (e.g. `{"title": 5.0, "text": 1.0}`).
                 Defaults to the configured `content_field`.
@@ -1788,7 +1789,7 @@ class RedisVectorStore(VectorStore):
         self,
         embedding: List[float],
         k: int = 4,
-        filter: Optional[FilterExpression] = None,
+        filter: Optional[Union[str, FilterExpression]] = None,
         sort_by: Optional[str] = None,
         **kwargs: Any,
     ) -> Sequence[Any]:
@@ -1797,7 +1798,8 @@ class RedisVectorStore(VectorStore):
         Args:
             embedding: Embedding to look up documents similar to.
             k: Number of `Document` objects to return.
-            filter: Optional `filter` expression to apply.
+            filter: Optional RedisVL `FilterExpression` or trusted raw Redis
+                query string to apply.
             sort_by: Optional `sort_by` expression to apply.
             **kwargs: Other keyword arguments.
 
@@ -1814,6 +1816,7 @@ class RedisVectorStore(VectorStore):
             List of tuples of `Document` objects most similar to the query vector,
                 score, and optionally the document vector.
         """
+        filter_expression = self._with_index_name_filter(filter)
         with_vectors = kwargs.get("with_vectors", False)
         return_metadata = kwargs.get("return_metadata", True)
         distance_threshold = kwargs.get("distance_threshold")
@@ -1839,7 +1842,7 @@ class RedisVectorStore(VectorStore):
             embedding=embedding,
             k=k,
             sort_by=sort_by,
-            filter=filter,
+            filter_expression=filter_expression,
             return_fields=return_fields,
         )
 
@@ -1897,7 +1900,7 @@ class RedisVectorStore(VectorStore):
         self,
         query: str,
         k: int = 4,
-        filter: Optional[FilterExpression] = None,
+        filter: Optional[Union[str, FilterExpression]] = None,
         sort_by: Optional[str] = None,
         **kwargs: Any,
     ) -> Sequence[Any]:
@@ -1906,7 +1909,8 @@ class RedisVectorStore(VectorStore):
         Args:
             query: Text to look up documents similar to.
             k: Number of `Document` objects to return.
-            filter: Optional `filter` expression to apply to the query.
+            filter: Optional RedisVL `FilterExpression` or trusted raw Redis
+                query string to apply to the query.
             sort_by: Optional `sort_by` expression to apply to the query.
             **kwargs: Other keyword arguments to pass to the search function.
 
@@ -2063,8 +2067,8 @@ class RedisVectorStore(VectorStore):
 
         Fewer documents may be returned than requested if some IDs are not found or
         if there are duplicated IDs. Records owned by another index that shares the
-        same key prefix are also omitted when the schema defines a recognized
-        `_index_name` marker.
+        same key prefix are also omitted. The schema must define a recognized
+        TAG or legacy TEXT `_index_name` ownership marker.
 
         Users should not assume that the order of the returned documents matches
         the order of the input IDs. Instead, users should rely on the ID field of the
@@ -2079,11 +2083,17 @@ class RedisVectorStore(VectorStore):
         Returns:
             List of `Document` objects.
 
+        Raises:
+            ValueError: If the index schema has no recognized ownership marker.
+
         !!! version-added "Added in `langchain-redis` 0.1.2"
         """
+        if not ids:
+            return []
+
+        expected_marker = self._require_index_name_marker("get_by_ids()")
         full_ids = self._redis_keys(ids)
         values = self._fetch_records_by_keys(full_ids)
-        expected_marker = self._index_name_marker_for_read()
         documents = []
         for id_, value in zip(ids, values):
             if value is None or not value:

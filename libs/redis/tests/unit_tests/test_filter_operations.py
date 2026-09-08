@@ -179,7 +179,7 @@ def test_direct_id_operations_reject_foreign_index_records(
     """Direct reads and deletes enforce the top-level ownership marker."""
     fake = _fake(store)
     own_marker = hashify(fake.name)
-    ids = ["owned", "foreign", "missing"]
+    ids = ["owned", "foreign", "unmarked", "missing"]
     records = [
         {
             "text": "owned document",
@@ -191,6 +191,7 @@ def test_direct_id_operations_reject_foreign_index_records(
             "_index_name": hashify("sibling-index"),
             "_metadata_json": json.dumps({"_index_name": own_marker}),
         },
+        {"text": "unmarked document", "_metadata_json": "{}"},
         None,
     ]
 
@@ -207,23 +208,21 @@ def test_direct_id_operations_reject_foreign_index_records(
     [
         pytest.param(FieldTypes.TAG, hashify(INDEX_NAME), id="tag"),
         pytest.param(FieldTypes.TEXT, INDEX_NAME, id="legacy-text"),
-        pytest.param(None, None, id="missing-marker-schema"),
     ],
 )
 def test_direct_id_operations_preserve_marker_schema_compatibility(
     store: RedisVectorStore,
-    field_type: Optional[FieldTypes],
-    record_marker: Optional[str],
+    field_type: FieldTypes,
+    record_marker: str,
 ) -> None:
-    """Recognized markers are exact; marker-less custom schemas stay compatible."""
+    """TAG and legacy TEXT markers support exact direct-ID ownership checks."""
     fake = _fake(store)
-    if field_type is None:
-        fake.schema.fields.pop("_index_name")
-    else:
-        fake.schema.fields["_index_name"].type = field_type
-    record = {"text": "document", "_metadata_json": "{}"}
-    if record_marker is not None:
-        record["_index_name"] = record_marker
+    fake.schema.fields["_index_name"].type = field_type
+    record = {
+        "text": "document",
+        "_index_name": record_marker,
+        "_metadata_json": "{}",
+    }
 
     with patch.object(store, "_fetch_records_by_keys", return_value=[record]):
         assert [doc.id for doc in store.get_by_ids(["doc"])] == ["doc"]
@@ -231,27 +230,58 @@ def test_direct_id_operations_preserve_marker_schema_compatibility(
             assert store.delete(["doc"]) is True
 
 
-def test_direct_id_delete_fails_closed_on_schema_error(
+@pytest.mark.parametrize(
+    "field_type",
+    [pytest.param(None, id="missing"), pytest.param(FieldTypes.NUMERIC, id="numeric")],
+)
+def test_direct_id_operations_reject_unverifiable_marker_schema(
     store: RedisVectorStore,
+    field_type: Optional[FieldTypes],
 ) -> None:
-    """A schema error cannot turn an ownership-checked delete into a broad one."""
+    """Missing or unsupported markers cannot authorize direct-ID access."""
     fake = _fake(store)
-    fake.schema = BrokenSchema()
+    if field_type is None:
+        fake.schema.fields.pop("_index_name")
+    else:
+        fake.schema.fields["_index_name"].type = field_type
 
-    with patch.object(fake, "drop_keys", create=True) as drop_keys:
-        with pytest.raises(ValueError, match="could not inspect the index schema"):
-            store.delete(["doc"])
+    with patch.object(store, "_fetch_records_by_keys") as fetch_records:
+        with patch.object(fake, "drop_keys", create=True) as drop_keys:
+            with pytest.raises(ValueError, match="requires an '_index_name'"):
+                store.get_by_ids(["doc"])
+            with pytest.raises(ValueError, match="requires an '_index_name'"):
+                store.delete(["doc"])
 
+    fetch_records.assert_not_called()
     drop_keys.assert_not_called()
 
 
-def test_direct_id_read_tolerates_schema_error(store: RedisVectorStore) -> None:
-    """Direct reads retain their existing best-effort schema policy."""
-    _fake(store).schema = BrokenSchema()
-    record = {"text": "document", "_metadata_json": "{}"}
+def test_direct_id_operations_fail_closed_on_schema_error(
+    store: RedisVectorStore,
+) -> None:
+    """Schema inspection failures cannot authorize direct-ID access."""
+    fake = _fake(store)
+    fake.schema = BrokenSchema()
 
-    with patch.object(store, "_fetch_records_by_keys", return_value=[record]):
-        assert [doc.id for doc in store.get_by_ids(["doc"])] == ["doc"]
+    with patch.object(store, "_fetch_records_by_keys") as fetch_records:
+        with patch.object(fake, "drop_keys", create=True) as drop_keys:
+            with pytest.raises(ValueError, match="could not inspect the index schema"):
+                store.get_by_ids(["doc"])
+            with pytest.raises(ValueError, match="could not inspect the index schema"):
+                store.delete(["doc"])
+
+    fetch_records.assert_not_called()
+    drop_keys.assert_not_called()
+
+
+def test_empty_direct_id_read_remains_a_noop(store: RedisVectorStore) -> None:
+    """An empty ID collection needs no ownership decision."""
+    _fake(store).schema = BrokenSchema()
+
+    with patch.object(store, "_fetch_records_by_keys") as fetch_records:
+        assert store.get_by_ids([]) == []
+
+    fetch_records.assert_not_called()
 
 
 def test_delete_by_filter_scopes_to_index_name(store: RedisVectorStore) -> None:
@@ -422,32 +452,53 @@ def test_delete_by_filter_rejects_unusable_tag_index_marker(
     assert fake.captured_filter is None
 
 
-def test_read_filter_supports_existing_text_index_marker(
+def test_read_filter_rejects_existing_text_index_marker(
     store: RedisVectorStore,
 ) -> None:
-    """Read queries retain compatibility with existing TEXT marker schemas."""
+    """Tokenized TEXT markers cannot provide exact search isolation."""
     _fake(store).schema.fields["_index_name"].type = FieldTypes.TEXT
 
-    scoped = store._with_index_name_filter(USER_FILTER)
-
-    assert INDEX_NAME in str(scoped)
-    assert hashify(INDEX_NAME) not in str(scoped)
+    with pytest.raises(ValueError, match="requires an exact '_index_name' TAG"):
+        store._with_index_name_filter(USER_FILTER)
 
 
-def test_read_filter_tolerates_missing_index_marker(store: RedisVectorStore) -> None:
-    """Custom schemas without the internal marker remain searchable."""
-    _fake(store).schema.fields.pop("_index_name")
+@pytest.mark.parametrize(
+    "marker_type",
+    [pytest.param(None, id="missing"), pytest.param(FieldTypes.NUMERIC, id="numeric")],
+)
+def test_read_filter_rejects_missing_or_unsupported_index_marker(
+    store: RedisVectorStore,
+    marker_type: Optional[FieldTypes],
+) -> None:
+    """Searches fail closed when the schema cannot express ownership."""
+    fake = _fake(store)
+    if marker_type is None:
+        fake.schema.fields.pop("_index_name")
+    else:
+        fake.schema.fields["_index_name"].type = marker_type
 
-    assert store._with_index_name_filter(USER_FILTER) is USER_FILTER
+    with pytest.raises(ValueError, match="requires an exact '_index_name' TAG"):
+        store._with_index_name_filter(USER_FILTER)
 
 
-def test_read_filter_tolerates_schema_inspection_failure(
+def test_read_filter_rejects_schema_inspection_failure(
     store: RedisVectorStore,
 ) -> None:
-    """Read scoping preserves its existing best-effort failure policy."""
+    """Schema inspection failures cannot silently remove search scoping."""
     _fake(store).schema = BrokenSchema()
 
-    assert store._with_index_name_filter(USER_FILTER) is USER_FILTER
+    with pytest.raises(ValueError, match="could not inspect the index schema"):
+        store._with_index_name_filter(USER_FILTER)
+
+
+def test_read_filter_scopes_raw_string(store: RedisVectorStore) -> None:
+    """A complete raw-string expression is grouped before ownership scoping."""
+    raw_filter = "@team:{alpha}|@team:{beta}"
+
+    scoped = str(store._with_index_name_filter(raw_filter))
+
+    assert f"({raw_filter})" in scoped
+    assert hashify(INDEX_NAME) in scoped
 
 
 @pytest.mark.parametrize(

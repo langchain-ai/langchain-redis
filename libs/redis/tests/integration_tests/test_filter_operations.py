@@ -304,6 +304,33 @@ def test_shared_prefix_deletion_uses_search_index_name(
         store_b.index.delete(drop=True)
 
 
+def test_shared_prefix_raw_string_filter_remains_index_scoped(redis_url: str) -> None:
+    """A raw union filter cannot widen a search beyond its logical index."""
+    shared_prefix = f"filter_ops_raw_{uuid4().hex[:8]}"
+    store_a = _make_store(
+        redis_url,
+        index_name=f"raw_a_{uuid4().hex[:8]}",
+        doc_id_prefix="a-",
+        key_prefix=shared_prefix,
+    )
+    store_b = _make_store(
+        redis_url,
+        index_name=f"raw_b_{uuid4().hex[:8]}",
+        doc_id_prefix="b-",
+        key_prefix=shared_prefix,
+    )
+    try:
+        raw_filter = f"@{TEAM_FIELD}:{{{TEAM_A}}}|@{TEAM_FIELD}:{{{TEAM_B}}}"
+        docs = store_a.similarity_search(QUERY, k=20, filter=raw_filter)
+
+        assert {doc.metadata[DOC_ID_FIELD] for doc in docs} == {
+            f"a-{doc_id}" for doc_id in ALL_DOC_IDS
+        }
+    finally:
+        store_a.index.delete(drop=True)
+        store_b.index.delete(drop=True)
+
+
 @pytest.mark.parametrize("storage_type", ["hash", "json"])
 def test_metadata_cannot_override_shared_prefix_ownership_marker(
     redis_url: str,
@@ -354,22 +381,71 @@ def test_metadata_cannot_override_shared_prefix_ownership_marker(
 
 
 @pytest.mark.parametrize(
+    "search",
+    [
+        pytest.param(
+            lambda store: store.similarity_search(QUERY),
+            id="similarity",
+        ),
+        pytest.param(
+            lambda store: store.hybrid_search(QUERY, method="aggregate"),
+            id="hybrid",
+        ),
+        pytest.param(
+            lambda store: store.full_text_search("document"),
+            id="full-text",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
     "marker_type",
     [pytest.param(None, id="missing"), pytest.param("text", id="legacy-text")],
 )
-def test_incompatible_marker_schema_is_searchable_but_not_filter_deletable(
+def test_schema_without_exact_tag_marker_refuses_unscoped_search(
     redis_url: str,
+    search: Callable[[RedisVectorStore], object],
     marker_type: Optional[str],
 ) -> None:
-    """Existing/custom schemas retain reads while destructive filters fail closed."""
+    """All Redis-backed search paths require an exact TAG ownership marker."""
     store = _make_custom_marker_store(redis_url, marker_type)
     try:
-        assert _remaining_doc_ids(store) == {"custom"}
+        with pytest.raises(ValueError, match="requires an exact '_index_name' TAG"):
+            search(store)
+    finally:
+        store.index.delete(drop=True)
+
+
+@pytest.mark.parametrize("storage_type", ["hash", "json"])
+def test_missing_marker_schema_refuses_direct_id_operations(
+    redis_url: str,
+    storage_type: str,
+) -> None:
+    """Markerless schemas cannot read or delete sibling keys by direct ID."""
+    store = _make_custom_marker_store(redis_url, None, storage_type)
+    raw_key = store._redis_keys(["custom"])[0]
+    try:
+        assert store.index.client.exists(raw_key) == 1
+        with pytest.raises(ValueError, match="requires an '_index_name'"):
+            store.get_by_ids(["custom"])
+        with pytest.raises(ValueError, match="requires an '_index_name'"):
+            store.delete(["custom"])
+        assert store.index.client.exists(raw_key) == 1
+    finally:
+        store.index.delete(drop=True)
+
+
+def test_legacy_text_marker_retains_id_operations_but_not_scoped_operations(
+    redis_url: str,
+) -> None:
+    """Legacy TEXT markers retain direct IDs while scoped operations fail closed."""
+    store = _make_custom_marker_store(redis_url, "text")
+    try:
+        with pytest.raises(ValueError, match="requires an exact '_index_name' TAG"):
+            store.similarity_search(QUERY)
 
         with pytest.raises(ValueError, match="requires an '_index_name' TAG field"):
             store.delete_by_filter(Tag(TEAM_FIELD) == TEAM_A)
 
-        assert _remaining_doc_ids(store) == {"custom"}
         assert [doc.id for doc in store.get_by_ids(["custom"])] == ["custom"]
         assert store.delete(["custom"]) is True
         assert store.get_by_ids(["custom"]) == []
@@ -393,22 +469,26 @@ def test_reopened_legacy_index_uses_live_schema(
     )
     try:
         assert reopened_store.index.schema.fields["_index_name"].type == FieldTypes.TEXT
-        assert _remaining_doc_ids(reopened_store) == {"custom"}
+        with pytest.raises(ValueError, match="requires an exact '_index_name' TAG"):
+            reopened_store.similarity_search(QUERY)
 
         reopened_store.add_texts(
             ["document new"],
             metadatas=[{DOC_ID_FIELD: "new", TEAM_FIELD: TEAM_B}],
+            keys=["new"],
         )
-        assert _remaining_doc_ids(reopened_store) == {"custom", "new"}
+        assert {doc.id for doc in reopened_store.get_by_ids(["custom", "new"])} == {
+            "custom",
+            "new",
+        }
 
         with pytest.raises(ValueError, match="requires an '_index_name' TAG field"):
             reopened_store.delete_by_filter(Tag(TEAM_FIELD) == TEAM_A)
 
-        assert _remaining_doc_ids(reopened_store) == {"custom", "new"}
         assert [doc.id for doc in reopened_store.get_by_ids(["custom"])] == ["custom"]
         assert reopened_store.delete(["custom"]) is True
         assert reopened_store.get_by_ids(["custom"]) == []
-        assert _remaining_doc_ids(reopened_store) == {"new"}
+        assert [doc.id for doc in reopened_store.get_by_ids(["new"])] == ["new"]
     finally:
         legacy_store.index.delete(drop=True)
 

@@ -4,6 +4,7 @@ from unittest.mock import Mock, patch
 import pytest
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
+from redisvl.redis.utils import hashify  # type: ignore[import]
 
 from langchain_redis import RedisConfig, RedisVectorStore
 
@@ -61,6 +62,7 @@ class MockSearchIndex:
                 "attrs": {"dims": 3, "distance_metric": "cosine"},
             },
             "metadata": {"type": "text"},
+            "_index_name": {"type": "tag"},
         }
         self.schema = MockSchema(
             schema["fields"] if schema and "fields" in schema else default_schema  # type: ignore
@@ -154,6 +156,7 @@ class TestRedisVectorStore:
                     "attrs": {"dims": 3, "distance_metric": "cosine"},
                 },
                 "metadata": {"type": "text"},
+                "_index_name": {"type": "tag"},
             }
         }
         return config
@@ -199,7 +202,10 @@ class TestRedisVectorStore:
         with patch.object(
             vector_store,
             "_fetch_records_by_keys",
-            return_value=[{"text": "Hello, world!"}, {"text": "Test document"}],
+            return_value=[
+                {"text": "Hello, world!", "_index_name": hashify("test_index")},
+                {"text": "Test document", "_index_name": hashify("test_index")},
+            ],
         ):
             result = vector_store.delete(keys)
         assert result is True
