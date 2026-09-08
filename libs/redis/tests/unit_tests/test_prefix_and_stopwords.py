@@ -6,7 +6,8 @@ from unittest.mock import patch
 
 import pytest
 from langchain_core.embeddings import Embeddings
-from redisvl.schema import IndexSchema, StorageType  # type: ignore[import]
+from redisvl.redis.utils import hashify  # type: ignore[import]
+from redisvl.schema import FieldTypes, IndexSchema, StorageType  # type: ignore[import]
 
 from langchain_redis import RedisConfig, RedisVectorStore
 
@@ -45,7 +46,10 @@ class CapturingIndex:
         field_specs = schema.get("fields", [])
         instance.schema = SimpleNamespace(  # type: ignore[attr-defined]
             fields={
-                spec["name"]: SimpleNamespace(name=spec["name"]) for spec in field_specs
+                spec["name"]: SimpleNamespace(
+                    name=spec["name"], type=FieldTypes(spec["type"])
+                )
+                for spec in field_specs
             }
         )
         cls.last_instance = instance
@@ -172,7 +176,12 @@ def test_inline_schema_formats_list_prefixes(
     assert CapturingIndex.last_schema is not None
     assert CapturingIndex.last_schema["index"]["prefix"] == expected_prefix
 
-    store.delete(ids=["doc1"])
+    with patch.object(
+        store,
+        "_fetch_records_by_keys",
+        return_value=[{"_index_name": hashify(store.index.name)}],
+    ):
+        store.delete(ids=["doc1"])
     assert store.index.dropped_keys == [f"{PREFIX_A}:doc1"]  # type: ignore[attr-defined]
 
 

@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from langchain_core.embeddings import Embeddings
 from redisvl.query.filter import Tag  # type: ignore[import]
-from redisvl.redis.utils import array_to_buffer  # type: ignore[import]
+from redisvl.redis.utils import array_to_buffer, hashify  # type: ignore[import]
 
 from langchain_redis import RedisVectorStore
 
@@ -78,7 +78,7 @@ def test_multi_prefix_index_spans_namespaces(redis_url: str) -> None:
                 {
                     "text": "planted doc",
                     "embedding": array_to_buffer([0.1] * DIMS, "float32"),
-                    "_index_name": store.config.index_name,
+                    "_index_name": hashify(store.index.name),
                     "_metadata_json": json.dumps(
                         {DOC_ID_FIELD: "planted", CATEGORY_FIELD: "external"}
                     ),

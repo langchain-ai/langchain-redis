@@ -173,6 +173,87 @@ def test_delete_rejects_filter_without_mutating(
     delete_by_filter.assert_not_called()
 
 
+def test_direct_id_operations_reject_foreign_index_records(
+    store: RedisVectorStore,
+) -> None:
+    """Direct reads and deletes enforce the top-level ownership marker."""
+    fake = _fake(store)
+    own_marker = hashify(fake.name)
+    ids = ["owned", "foreign", "missing"]
+    records = [
+        {
+            "text": "owned document",
+            "_index_name": own_marker,
+            "_metadata_json": "{}",
+        },
+        {
+            "text": "foreign document",
+            "_index_name": hashify("sibling-index"),
+            "_metadata_json": json.dumps({"_index_name": own_marker}),
+        },
+        None,
+    ]
+
+    with patch.object(store, "_fetch_records_by_keys", return_value=records):
+        assert [doc.id for doc in store.get_by_ids(ids)] == ["owned"]
+        with patch.object(fake, "drop_keys", return_value=1, create=True) as drop_keys:
+            assert store.delete(ids) is True
+
+    drop_keys.assert_called_once_with([store._redis_keys(["owned"])[0]])
+
+
+@pytest.mark.parametrize(
+    ("field_type", "record_marker"),
+    [
+        pytest.param(FieldTypes.TAG, hashify(INDEX_NAME), id="tag"),
+        pytest.param(FieldTypes.TEXT, INDEX_NAME, id="legacy-text"),
+        pytest.param(None, None, id="missing-marker-schema"),
+    ],
+)
+def test_direct_id_operations_preserve_marker_schema_compatibility(
+    store: RedisVectorStore,
+    field_type: Optional[FieldTypes],
+    record_marker: Optional[str],
+) -> None:
+    """Recognized markers are exact; marker-less custom schemas stay compatible."""
+    fake = _fake(store)
+    if field_type is None:
+        fake.schema.fields.pop("_index_name")
+    else:
+        fake.schema.fields["_index_name"].type = field_type
+    record = {"text": "document", "_metadata_json": "{}"}
+    if record_marker is not None:
+        record["_index_name"] = record_marker
+
+    with patch.object(store, "_fetch_records_by_keys", return_value=[record]):
+        assert [doc.id for doc in store.get_by_ids(["doc"])] == ["doc"]
+        with patch.object(fake, "drop_keys", return_value=1, create=True):
+            assert store.delete(["doc"]) is True
+
+
+def test_direct_id_delete_fails_closed_on_schema_error(
+    store: RedisVectorStore,
+) -> None:
+    """A schema error cannot turn an ownership-checked delete into a broad one."""
+    fake = _fake(store)
+    fake.schema = BrokenSchema()
+
+    with patch.object(fake, "drop_keys", create=True) as drop_keys:
+        with pytest.raises(ValueError, match="could not inspect the index schema"):
+            store.delete(["doc"])
+
+    drop_keys.assert_not_called()
+
+
+def test_direct_id_read_tolerates_schema_error(store: RedisVectorStore) -> None:
+    """Direct reads retain their existing best-effort schema policy."""
+    _fake(store).schema = BrokenSchema()
+    record = {"text": "document", "_metadata_json": "{}"}
+
+    with patch.object(store, "_fetch_records_by_keys", return_value=[record]):
+        assert [doc.id for doc in store.get_by_ids(["doc"])] == ["doc"]
+
+
 def test_delete_by_filter_scopes_to_index_name(store: RedisVectorStore) -> None:
     """The user filter is AND-combined with the _index_name guard.
 

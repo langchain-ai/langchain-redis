@@ -196,7 +196,12 @@ class TestRedisVectorStore:
 
     def test_delete(self, vector_store: RedisVectorStore) -> None:
         keys = vector_store.add_texts(["Hello, world!", "Test document"])
-        result = vector_store.delete(keys)
+        with patch.object(
+            vector_store,
+            "_fetch_records_by_keys",
+            return_value=[{"text": "Hello, world!"}, {"text": "Test document"}],
+        ):
+            result = vector_store.delete(keys)
         assert result is True
 
     @patch("langchain_redis.vectorstores.RedisVectorStore.add_texts")

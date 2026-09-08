@@ -221,6 +221,57 @@ def test_shared_prefix_indexes_are_exactly_isolated(
         store_b.index.delete(drop=True)
 
 
+@pytest.mark.parametrize("storage_type", ["hash", "json"])
+def test_shared_prefix_direct_ids_are_owned_by_their_index(
+    redis_url: str,
+    storage_type: str,
+) -> None:
+    """Direct ID reads and deletes cannot cross a shared-prefix boundary."""
+    shared_prefix = f"shared_ids_{uuid4().hex[:8]}"
+    store_a = RedisVectorStore(
+        ConstantEmbeddings(),
+        index_name=f"direct_a_{uuid4().hex[:8]}",
+        key_prefix=shared_prefix,
+        redis_url=redis_url,
+        metadata_schema=METADATA_SCHEMA,
+        storage_type=storage_type,
+    )
+    store_b = RedisVectorStore(
+        ConstantEmbeddings(),
+        index_name=f"direct_b_{uuid4().hex[:8]}",
+        key_prefix=shared_prefix,
+        redis_url=redis_url,
+        metadata_schema=METADATA_SCHEMA,
+        storage_type=storage_type,
+    )
+    owned_id = "owned"
+    foreign_id = "foreign"
+    try:
+        store_a.add_texts(
+            ["owned document"],
+            metadatas=[{DOC_ID_FIELD: owned_id, TEAM_FIELD: TEAM_A}],
+            keys=[owned_id],
+        )
+        store_b.add_texts(
+            ["foreign document"],
+            metadatas=[{DOC_ID_FIELD: foreign_id, TEAM_FIELD: TEAM_B}],
+            keys=[foreign_id],
+        )
+
+        assert [doc.id for doc in store_a.get_by_ids([owned_id, foreign_id])] == [
+            owned_id
+        ]
+        assert store_a.delete([foreign_id]) is False
+        assert [doc.id for doc in store_b.get_by_ids([foreign_id])] == [foreign_id]
+
+        assert store_a.delete([owned_id, foreign_id]) is True
+        assert store_a.get_by_ids([owned_id, foreign_id]) == []
+        assert [doc.id for doc in store_b.get_by_ids([foreign_id])] == [foreign_id]
+    finally:
+        store_a.index.delete(drop=True)
+        store_b.index.delete(drop=True)
+
+
 def test_shared_prefix_deletion_uses_search_index_name(
     redis_url: str,
 ) -> None:
@@ -306,7 +357,7 @@ def test_metadata_cannot_override_shared_prefix_ownership_marker(
     "marker_type",
     [pytest.param(None, id="missing"), pytest.param("text", id="legacy-text")],
 )
-def test_incompatible_marker_schema_is_searchable_but_not_deletable(
+def test_incompatible_marker_schema_is_searchable_but_not_filter_deletable(
     redis_url: str,
     marker_type: Optional[str],
 ) -> None:
@@ -319,6 +370,9 @@ def test_incompatible_marker_schema_is_searchable_but_not_deletable(
             store.delete_by_filter(Tag(TEAM_FIELD) == TEAM_A)
 
         assert _remaining_doc_ids(store) == {"custom"}
+        assert [doc.id for doc in store.get_by_ids(["custom"])] == ["custom"]
+        assert store.delete(["custom"]) is True
+        assert store.get_by_ids(["custom"]) == []
     finally:
         store.index.delete(drop=True)
 
@@ -351,6 +405,10 @@ def test_reopened_legacy_index_uses_live_schema(
             reopened_store.delete_by_filter(Tag(TEAM_FIELD) == TEAM_A)
 
         assert _remaining_doc_ids(reopened_store) == {"custom", "new"}
+        assert [doc.id for doc in reopened_store.get_by_ids(["custom"])] == ["custom"]
+        assert reopened_store.delete(["custom"]) is True
+        assert reopened_store.get_by_ids(["custom"]) == []
+        assert _remaining_doc_ids(reopened_store) == {"new"}
     finally:
         legacy_store.index.delete(drop=True)
 
@@ -371,12 +429,14 @@ def test_raw_tag_marker_requires_migration_before_filter_deletion(
         )
         store.index.client.hset(raw_key, "_index_name", store.config.index_name)
 
-        assert {doc.id for doc in store.get_by_ids([raw_id, current_id])} == {
-            raw_id,
-            current_id,
-        }
+        assert [doc.id for doc in store.get_by_ids([raw_id, current_id])] == [
+            current_id
+        ]
+        assert store.delete([raw_id]) is False
+        assert store.index.client.exists(raw_key) == 1
+
         assert store.delete_by_filter(Tag(TEAM_FIELD) == TEAM_A) == 1
-        assert [doc.id for doc in store.get_by_ids([raw_id, current_id])] == [raw_id]
+        assert store.get_by_ids([raw_id, current_id]) == []
 
         store.index.client.hset(raw_key, "_index_name", hashify(store.index.name))
         assert store.delete_by_filter(Tag(TEAM_FIELD) == TEAM_A) == 1

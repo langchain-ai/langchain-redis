@@ -941,6 +941,9 @@ class RedisVectorStore(VectorStore):
 
         Note:
             - If `ids` is omitted or empty, the method returns `False`.
+            - When the index defines a recognized `_index_name` marker, only
+                records whose stored marker matches this index are deleted. The
+                ownership check and deletion are currently separate operations.
             - The ids path uses RedisVL's `drop_keys`; keys are constructed by
                 prefixing each id with the configured primary key prefix.
             - Use `delete_by_filter()` for explicit filter deletion, exact
@@ -953,10 +956,16 @@ class RedisVectorStore(VectorStore):
                 "for filter-based deletion."
             )
         if ids and len(ids) > 0:
-            if self.config.primary_prefix:
-                keys = [f"{self.config.primary_prefix}:{_id}" for _id in ids]
-            else:
-                keys = ids
+            keys = self._redis_keys(ids)
+            expected_marker = self._index_name_marker_for_delete()
+            records = self._fetch_records_by_keys(keys)
+            keys = [
+                key
+                for key, record in zip(keys, records)
+                if record and self._record_belongs_to_index(record, expected_marker)
+            ]
+            if not keys:
+                return False
             # Always return True if we delete at least one key
             # This matches the behavior expected by the tests
             return self._index.drop_keys(keys) > 0
@@ -1069,6 +1078,58 @@ class RedisVectorStore(VectorStore):
         if field_type == FieldTypes.TAG:
             return hashify(self._index.name)
         return self.config.index_name
+
+    def _index_name_marker_from_schema(self) -> Optional[str]:
+        """Derive the ownership marker from the configured index schema."""
+        field = self._index.schema.fields.get(_INDEX_NAME_FIELD)
+        if field is None or field.type not in (FieldTypes.TAG, FieldTypes.TEXT):
+            return None
+        return self._index_name_value(field.type)
+
+    def _index_name_marker_for_read(self) -> Optional[str]:
+        """Return the ownership marker, tolerating legacy custom schemas."""
+        try:
+            return self._index_name_marker_from_schema()
+        except Exception:
+            return None
+
+    def _index_name_marker_for_delete(self) -> Optional[str]:
+        """Return the ownership marker or refuse deletion on inspection failure."""
+        try:
+            return self._index_name_marker_from_schema()
+        except Exception as exc:
+            raise ValueError(
+                "delete() could not inspect the index schema; the deletion was refused."
+            ) from exc
+
+    @staticmethod
+    def _record_belongs_to_index(
+        record: Dict[str, Any], expected_marker: Optional[str]
+    ) -> bool:
+        """Return whether a fetched record belongs to the current index."""
+        record_marker = record.get(_INDEX_NAME_FIELD)
+        return expected_marker is None or record_marker == expected_marker
+
+    def _redis_keys(self, ids: Sequence[str]) -> List[str]:
+        """Return Redis keys for vector-store document IDs."""
+        if self.config.primary_prefix:
+            return [f"{self.config.primary_prefix}:{_id}" for _id in ids]
+        return list(ids)
+
+    def _fetch_records_by_keys(
+        self, keys: Sequence[str]
+    ) -> List[Optional[Dict[str, Any]]]:
+        """Fetch raw HASH or JSON records for ownership validation."""
+        redis = self.config.redis()
+        if self.config.storage_type == StorageType.JSON.value:
+            return cast(
+                List[Optional[Dict[str, Any]]], redis.json().mget(list(keys), ".")
+            )
+
+        pipe = redis.pipeline()
+        for key in keys:
+            pipe.hgetall(key)
+        return [convert_bytes(value) if value else None for value in pipe.execute()]
 
     def _build_index_name_filter(
         self,
@@ -2001,7 +2062,9 @@ class RedisVectorStore(VectorStore):
         document in the vector store.
 
         Fewer documents may be returned than requested if some IDs are not found or
-        if there are duplicated IDs.
+        if there are duplicated IDs. Records owned by another index that shares the
+        same key prefix are also omitted when the schema defines a recognized
+        `_index_name` marker.
 
         Users should not assume that the order of the returned documents matches
         the order of the input IDs. Instead, users should rely on the ID field of the
@@ -2018,26 +2081,16 @@ class RedisVectorStore(VectorStore):
 
         !!! version-added "Added in `langchain-redis` 0.1.2"
         """
-        redis = self.config.redis()
-        if self.config.primary_prefix:
-            full_ids = [f"{self.config.primary_prefix}:{_id}" for _id in ids]
-        else:
-            full_ids = list(ids)
-        if self.config.storage_type == StorageType.JSON.value:
-            values = redis.json().mget(full_ids, ".")
-        else:
-            pipe = redis.pipeline()
-            for id_ in full_ids:
-                pipe.hgetall(id_)
-            values = pipe.execute()
+        full_ids = self._redis_keys(ids)
+        values = self._fetch_records_by_keys(full_ids)
+        expected_marker = self._index_name_marker_for_read()
         documents = []
         for id_, value in zip(ids, values):
             if value is None or not value:
                 continue
-            if self.config.storage_type == StorageType.JSON.value:
-                doc = cast(dict, value)
-            else:
-                doc = convert_bytes(value)
+            doc = value
+            if not self._record_belongs_to_index(doc, expected_marker):
+                continue
             # Process metadata the same way we do in _build_document_from_result
             metadata = {}
             if "_metadata_json" in doc:
