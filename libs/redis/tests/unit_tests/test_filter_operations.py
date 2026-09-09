@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 from langchain_core.embeddings import Embeddings
+from redisvl.index.index import BulkResult  # type: ignore[import]
 from redisvl.query.filter import (  # type: ignore[import]
     FilterExpression,
     Num,
@@ -37,7 +38,7 @@ class MockEmbeddings(Embeddings):
 class FakeBulkIndex:
     """Captures bulk-operation calls and returns a canned BulkResult."""
 
-    bulk_result = SimpleNamespace(matched=3, processed=3, completed=True)
+    bulk_result = BulkResult(matched=3, processed=3)
     last_instance: Optional["FakeBulkIndex"] = None
     live_schema: Any = None
     live_schema_error: Optional[Exception] = None
@@ -115,7 +116,7 @@ def store() -> Iterator[RedisVectorStore]:
 
 @pytest.fixture(autouse=True)
 def reset_fake_index() -> None:
-    FakeBulkIndex.bulk_result = SimpleNamespace(matched=3, processed=3, completed=True)
+    FakeBulkIndex.bulk_result = BulkResult(matched=3, processed=3)
     FakeBulkIndex.last_instance = None
     FakeBulkIndex.live_schema = None
     FakeBulkIndex.live_schema_error = None
@@ -340,14 +341,37 @@ def test_add_texts_protects_tag_index_marker_from_metadata(
     assert json.loads(record["_metadata_json"])["_index_name"] == caller_marker
 
 
-def test_delete_by_filter_dry_run_counts_without_deleting(
+def test_delete_by_filter_dry_run_returns_bulk_result(
     store: RedisVectorStore,
 ) -> None:
-    """dry_run=True forwards to redisvl and reports the matched count."""
-    FakeBulkIndex.bulk_result = SimpleNamespace(matched=7, processed=0, completed=True)
-    count = store.delete_by_filter(USER_FILTER, dry_run=True)
-    assert count == 7
+    """dry_run=True preserves RedisVL's complete result."""
+    expected = BulkResult(matched=7, processed=7, dry_run=True)
+    FakeBulkIndex.bulk_result = expected
+
+    result = store.delete_by_filter(USER_FILTER, dry_run=True)
+
+    assert result is expected
+    assert result.matched == 7
+    assert result.processed == 7
+    assert result.completed is True
+    assert result.dry_run is True
     assert _fake(store).captured_kwargs["dry_run"] is True
+
+
+def test_delete_by_filter_preserves_incomplete_bulk_result(
+    store: RedisVectorStore,
+) -> None:
+    """Callers can detect when RedisVL stops before deleting every match."""
+    expected = BulkResult(matched=10, processed=6, completed=False)
+    FakeBulkIndex.bulk_result = expected
+
+    result = store.delete_by_filter(USER_FILTER)
+
+    assert result is expected
+    assert result.matched == 10
+    assert result.processed == 6
+    assert result.completed is False
+    assert result.dry_run is False
 
 
 def test_delete_by_filter_requires_filter(store: RedisVectorStore) -> None:
@@ -415,7 +439,9 @@ def test_delete_by_filter_accepts_live_tag_schema_when_local_schema_is_stale(
     fake.schema.fields["_index_name"].type = FieldTypes.TEXT
     FakeBulkIndex.live_schema = _schema_with_index_marker(FieldTypes.TAG)
 
-    assert store.delete_by_filter(USER_FILTER) == 3
+    result = store.delete_by_filter(USER_FILTER)
+    assert result.processed == 3
+    assert result.completed is True
     assert hashify(INDEX_NAME) in str(fake.captured_filter)
 
 

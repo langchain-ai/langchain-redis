@@ -22,6 +22,7 @@ from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
 from redisvl.index import SearchIndex  # type: ignore[import]
+from redisvl.index.index import BulkResult  # type: ignore[import]
 from redisvl.query import (  # type: ignore[import]
     AggregateHybridQuery,
     HybridQuery,
@@ -979,7 +980,7 @@ class RedisVectorStore(VectorStore):
         *,
         dry_run: bool = False,
         batch_size: Optional[int] = None,
-    ) -> int:
+    ) -> BulkResult:
         """Delete every document in this index matching a filter expression.
 
         Args:
@@ -989,23 +990,28 @@ class RedisVectorStore(VectorStore):
                 `Tag("source") % "docs-v1*"`. Raw filter strings are not
                 accepted for mutating operations because they cannot be
                 safely combined with the internal index-scoping filter.
-            dry_run: If `True`, nothing is deleted; the return value is the
-                number of documents that would be deleted.
+            dry_run: If `True`, nothing is deleted and the returned result
+                reports how many documents would be processed.
             batch_size: Optional number of documents to resolve and delete
                 per round-trip.
 
         Returns:
-            int: The number of documents deleted (or matched, for a dry run).
+            RedisVL's `BulkResult`, including the number of matching and
+            processed documents, whether the operation completed, and whether
+            it was a dry run.
 
         Example:
             ```python
             from redisvl.query.filter import Tag
 
             # Preview a purge, then run it
-            would_delete = vector_store.delete_by_filter(
+            preview = vector_store.delete_by_filter(
                 Tag("tenant_id") == "acme", dry_run=True
             )
-            deleted = vector_store.delete_by_filter(Tag("tenant_id") == "acme")
+            print(preview.matched)
+
+            result = vector_store.delete_by_filter(Tag("tenant_id") == "acme")
+            print(result.processed, result.completed)
             ```
 
         Note:
@@ -1027,8 +1033,7 @@ class RedisVectorStore(VectorStore):
         bulk_kwargs: Dict[str, Any] = {"dry_run": dry_run}
         if batch_size is not None:
             bulk_kwargs["batch_size"] = batch_size
-        result = self._index.drop_by_filter(scoped_filter, **bulk_kwargs)
-        return result.matched if dry_run else result.processed
+        return self._index.drop_by_filter(scoped_filter, **bulk_kwargs)
 
     def _prepare_bulk_filter(
         self,

@@ -210,12 +210,17 @@ catalog above:
 
 ```python
 # Delete every document matching a filter
-store.delete_by_filter(Tag("category") == "furniture")
+result = store.delete_by_filter(Tag("category") == "furniture")
+print(result.processed, result.completed)
 
-# Preview a purge before running it, and get exact counts
-would_delete = store.delete_by_filter(Num("price") > 100, dry_run=True)
-deleted = store.delete_by_filter(Num("price") > 100)
+# Preview a purge before running it
+preview = store.delete_by_filter(Num("price") > 100, dry_run=True)
+print(preview.matched)
 ```
+
+`delete_by_filter()` returns RedisVL's `BulkResult`. Check `completed` as well
+as `processed`: RedisVL can stop a bulk deletion early under concurrent writes,
+in which case matching documents may remain.
 
 Filter deletion is automatically scoped to the store's own index, so indexes
 sharing a `key_prefix` cannot delete each other's documents.

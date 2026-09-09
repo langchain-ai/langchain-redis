@@ -126,8 +126,11 @@ def test_delete_by_filter_removes_only_matching(
     """Filter deletion removes exactly the matching documents."""
     store = _make_store(redis_url, storage_type=storage_type)
     try:
-        deleted = store.delete_by_filter(Tag(TEAM_FIELD) == TEAM_A)
-        assert deleted == len(TEAM_A_DOC_IDS)
+        result = store.delete_by_filter(Tag(TEAM_FIELD) == TEAM_A)
+        assert result.matched == len(TEAM_A_DOC_IDS)
+        assert result.processed == len(TEAM_A_DOC_IDS)
+        assert result.completed is True
+        assert result.dry_run is False
         assert _remaining_doc_ids(store) == set(TEAM_B_DOC_IDS)
     finally:
         store.index.delete(drop=True)
@@ -137,18 +140,24 @@ def test_dry_run_counts_without_deleting(redis_url: str) -> None:
     """dry_run reports the would-be count and leaves every document in place."""
     store = _make_store(redis_url)
     try:
-        would_delete = store.delete_by_filter(Tag(TEAM_FIELD) == TEAM_A, dry_run=True)
-        assert would_delete == len(TEAM_A_DOC_IDS)
+        result = store.delete_by_filter(Tag(TEAM_FIELD) == TEAM_A, dry_run=True)
+        assert result.matched == len(TEAM_A_DOC_IDS)
+        assert result.processed == len(TEAM_A_DOC_IDS)
+        assert result.completed is True
+        assert result.dry_run is True
         assert _remaining_doc_ids(store) == set(ALL_DOC_IDS)
     finally:
         store.index.delete(drop=True)
 
 
-def test_no_match_returns_zero(redis_url: str) -> None:
-    """An explicit filter matching nothing deletes nothing and returns zero."""
+def test_no_match_returns_empty_bulk_result(redis_url: str) -> None:
+    """A filter matching nothing returns zero counts without deleting."""
     store = _make_store(redis_url)
     try:
-        assert store.delete_by_filter(Tag(TEAM_FIELD) == GHOST_TEAM) == 0
+        result = store.delete_by_filter(Tag(TEAM_FIELD) == GHOST_TEAM)
+        assert result.matched == 0
+        assert result.processed == 0
+        assert result.completed is True
         assert _remaining_doc_ids(store) == set(ALL_DOC_IDS)
     finally:
         store.index.delete(drop=True)
@@ -208,8 +217,9 @@ def test_shared_prefix_indexes_are_exactly_isolated(
         assert _remaining_doc_ids(store_a) == store_a_ids
         assert _remaining_doc_ids(store_b) == store_b_ids
 
-        deleted = store_a.delete_by_filter(Tag(TEAM_FIELD) == TEAM_A)
-        assert deleted == len(TEAM_A_DOC_IDS)
+        result = store_a.delete_by_filter(Tag(TEAM_FIELD) == TEAM_A)
+        assert result.processed == len(TEAM_A_DOC_IDS)
+        assert result.completed is True
 
         assert _remaining_doc_ids(store_a) == {
             f"a-{doc_id}" for doc_id in TEAM_B_DOC_IDS
@@ -292,9 +302,10 @@ def test_shared_prefix_deletion_uses_search_index_name(
     try:
         store_a.config.index_name = store_b.index.name
 
-        deleted = store_a.delete_by_filter(Tag(TEAM_FIELD) == TEAM_A)
+        result = store_a.delete_by_filter(Tag(TEAM_FIELD) == TEAM_A)
 
-        assert deleted == len(TEAM_A_DOC_IDS)
+        assert result.processed == len(TEAM_A_DOC_IDS)
+        assert result.completed is True
         assert _remaining_doc_ids(store_a) == {
             f"a-{doc_id}" for doc_id in TEAM_B_DOC_IDS
         }
@@ -373,8 +384,12 @@ def test_metadata_cannot_override_shared_prefix_ownership_marker(
         assert len(docs) == 1
         assert docs[0].metadata["_index_name"] == caller_marker
 
-        assert store_b.delete_by_filter(Tag(DOC_ID_FIELD) == protected_doc_id) == 0
-        assert store_a.delete_by_filter(Tag(DOC_ID_FIELD) == protected_doc_id) == 1
+        sibling_result = store_b.delete_by_filter(Tag(DOC_ID_FIELD) == protected_doc_id)
+        owner_result = store_a.delete_by_filter(Tag(DOC_ID_FIELD) == protected_doc_id)
+        assert sibling_result.processed == 0
+        assert sibling_result.completed is True
+        assert owner_result.processed == 1
+        assert owner_result.completed is True
     finally:
         store_a.index.delete(drop=True)
         store_b.index.delete(drop=True)
@@ -515,11 +530,15 @@ def test_raw_tag_marker_requires_migration_before_filter_deletion(
         assert store.delete([raw_id]) is False
         assert store.index.client.exists(raw_key) == 1
 
-        assert store.delete_by_filter(Tag(TEAM_FIELD) == TEAM_A) == 1
+        legacy_result = store.delete_by_filter(Tag(TEAM_FIELD) == TEAM_A)
+        assert legacy_result.processed == 1
+        assert legacy_result.completed is True
         assert store.get_by_ids([raw_id, current_id]) == []
 
         store.index.client.hset(raw_key, "_index_name", hashify(store.index.name))
-        assert store.delete_by_filter(Tag(TEAM_FIELD) == TEAM_A) == 1
+        current_result = store.delete_by_filter(Tag(TEAM_FIELD) == TEAM_A)
+        assert current_result.processed == 1
+        assert current_result.completed is True
         assert store.get_by_ids([raw_id]) == []
     finally:
         store.index.delete(drop=True)
@@ -585,9 +604,10 @@ def test_delete_by_filter_works_after_reopening_generated_index(
         redis_url=redis_url,
     )
     try:
-        deleted = reopened_store.delete_by_filter(Tag(TEAM_FIELD) == TEAM_A)
+        result = reopened_store.delete_by_filter(Tag(TEAM_FIELD) == TEAM_A)
 
-        assert deleted == len(TEAM_A_DOC_IDS)
+        assert result.processed == len(TEAM_A_DOC_IDS)
+        assert result.completed is True
         assert _remaining_doc_ids(reopened_store) == set(TEAM_B_DOC_IDS)
     finally:
         store.index.delete(drop=True)
