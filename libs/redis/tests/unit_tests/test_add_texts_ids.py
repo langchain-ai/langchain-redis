@@ -25,6 +25,7 @@ def test_add_texts_with_ids_in_kwargs() -> None:
 
         # Mock SearchIndex instance
         mock_index = MagicMock()
+        mock_index.key.side_effect = lambda id_: f"key1:{id_}"
         mock_index.load.return_value = ["key1:id1", "key1:id2"]
         mock_index.schema.fields.values.return_value = []
         # Make the SearchIndex constructor return our mock
@@ -84,6 +85,7 @@ def test_add_texts_with_both_keys_and_ids() -> None:
 
         # Mock SearchIndex instance
         mock_index = MagicMock()
+        mock_index.key.side_effect = lambda id_: f"key1:{id_}"
         mock_index.load.return_value = ["key1:key1", "key1:key2"]
         mock_index.schema.fields.values.return_value = []
         # Make the SearchIndex constructor return our mock
@@ -150,7 +152,8 @@ def test_add_texts_returns_ids_without_key_prefix(
         mock_embeddings.embed_documents.return_value = [[0.1, 0.2, 0.3]]
 
         mock_index = MagicMock()
-        mock_index.load.return_value = ["myprefix:mykey"]
+        mock_index.key.side_effect = lambda id_: f"myprefix|{id_}"
+        mock_index.load.return_value = ["myprefix|mykey"]
         mock_index.schema.fields.values.return_value = []
         mock_search_index_class.return_value = mock_index
         mock_search_index_class.from_dict.return_value = mock_index
@@ -178,3 +181,4 @@ def test_add_texts_returns_ids_without_key_prefix(
         result = vector_store.add_texts(texts=["hello"], keys=["mykey"])
 
         assert result == ["mykey"]
+        assert mock_index.load.call_args.kwargs["keys"] == ["myprefix|mykey"]

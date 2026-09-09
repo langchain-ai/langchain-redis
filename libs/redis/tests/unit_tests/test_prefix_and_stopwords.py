@@ -63,6 +63,13 @@ class CapturingIndex:
     def create(self, overwrite: bool = False) -> None:
         pass
 
+    def key(self, id_: str) -> str:
+        assert self.last_schema is not None
+        prefix = self.last_schema["index"]["prefix"]
+        if isinstance(prefix, list):
+            prefix = prefix[0]
+        return f"{prefix.rstrip(':')}:{id_}"
+
     def drop_keys(self, keys: List[str]) -> int:
         self.dropped_keys = keys
         return len(keys)

@@ -5,11 +5,13 @@ import json
 from typing import Any, List, Set, cast
 from uuid import uuid4
 
+import pytest
 from langchain_core.embeddings import Embeddings
 from redisvl.query.filter import Tag  # type: ignore[import]
 from redisvl.redis.utils import array_to_buffer, hashify  # type: ignore[import]
+from redisvl.schema import IndexSchema  # type: ignore[import]
 
-from langchain_redis import RedisVectorStore
+from langchain_redis import RedisConfig, RedisVectorStore
 
 DIMS = 4
 DOC_ID_FIELD = "doc_id"
@@ -102,6 +104,61 @@ def test_multi_prefix_index_spans_namespaces(redis_url: str) -> None:
         assert _doc_ids(store) == {"planted"}
         assert client.keys(f"{prefix_a}:*") == []
         assert len(cast(List[Any], client.keys(f"{prefix_b}:*"))) == 1
+    finally:
+        store.index.delete(drop=True)
+
+
+@pytest.mark.parametrize("storage_type", ["hash", "json"])
+def test_custom_key_separator_round_trip(redis_url: str, storage_type: str) -> None:
+    """RedisVL's live key separator is honored for writes, reads, and deletes."""
+    index_name = f"separator_test_{uuid4().hex[:8]}"
+    prefix = f"separator_docs_{uuid4().hex[:8]}"
+    schema = IndexSchema.from_dict(
+        {
+            "index": {
+                "name": index_name,
+                "prefix": prefix,
+                "key_separator": "|",
+                "storage_type": storage_type,
+            },
+            "fields": [
+                {"name": "text", "type": "text"},
+                {
+                    "name": "embedding",
+                    "type": "vector",
+                    "attrs": {
+                        "dims": DIMS,
+                        "distance_metric": "cosine",
+                        "algorithm": "flat",
+                        "datatype": "float32",
+                    },
+                },
+                {"name": "_index_name", "type": "tag"},
+            ],
+        }
+    )
+    store = RedisVectorStore(
+        ConstantEmbeddings(),
+        config=RedisConfig(
+            schema=schema,
+            redis_url=redis_url,
+            embedding_dimensions=DIMS,
+        ),
+    )
+    try:
+        document_id = "section|2"
+        redis_key = f"{prefix}|{document_id}"
+        ids = store.add_texts(["document"], keys=[document_id])
+
+        assert ids == [document_id]
+        assert store.config.redis().exists(redis_key)
+        assert [
+            (document.id, document.page_content) for document in store.get_by_ids(ids)
+        ] == [(document_id, "document")]
+
+        assert store.delete(ids=ids) is True
+        assert not store.config.redis().exists(redis_key)
+        assert store.get_by_ids(ids) == []
     finally:
         store.index.delete(drop=True)
 

@@ -649,30 +649,14 @@ class RedisVectorStore(VectorStore):
             records.append(record)
 
         # Load records into the index
-        primary_prefix = self.config.primary_prefix
         if keys:
-            # Already have key_prefix in index definition (with ending colon).
-            # New documents are always written under the primary prefix.
-            record_keys = [f"{primary_prefix}:{key}" for key in keys]
-            result = self._index.load(records, keys=record_keys, ttl=self.ttl)
+            result = self._index.load(
+                records, keys=self._redis_keys(keys), ttl=self.ttl
+            )
         else:
             result = self._index.load(records, ttl=self.ttl)
 
-        if result is None:
-            return []
-
-        # `SearchIndex.load` returns the full Redis keys it wrote, prefix
-        # included. `delete()` and `get_by_ids()` take bare ids and add that
-        # same prefix themselves, so strip it back off here. Otherwise the ids
-        # this method returns can't be passed to either of those without
-        # ending up double-prefixed.
-        if primary_prefix:
-            full_prefix = f"{primary_prefix}:"
-            return [
-                key[len(full_prefix) :] if key.startswith(full_prefix) else key
-                for key in result
-            ]
-        return list(result)
+        return self._ids_from_redis_keys(result or [])
 
     @classmethod
     def from_texts(
@@ -1120,10 +1104,13 @@ class RedisVectorStore(VectorStore):
         return record.get(_INDEX_NAME_FIELD) == expected_marker
 
     def _redis_keys(self, ids: Sequence[str]) -> List[str]:
-        """Return Redis keys for vector-store document IDs."""
-        if self.config.primary_prefix:
-            return [f"{self.config.primary_prefix}:{_id}" for _id in ids]
-        return list(ids)
+        """Construct Redis keys using the live RedisVL index schema."""
+        return [self._index.key(document_id) for document_id in ids]
+
+    def _ids_from_redis_keys(self, redis_keys: Sequence[str]) -> List[str]:
+        """Convert RedisVL Redis keys back into vector-store document IDs."""
+        key_prefix = self._index.key("")
+        return [key.removeprefix(key_prefix) for key in redis_keys]
 
     def _fetch_records_by_keys(
         self, keys: Sequence[str]
