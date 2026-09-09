@@ -462,6 +462,10 @@ class RedisVectorStore(VectorStore):
 
         self.config.storage_type = schema.index.storage_type.value
 
+        vector_field = schema.fields.get(self.config.embedding_field)
+        if vector_field is not None and vector_field.type == FieldTypes.VECTOR:
+            self.config.vector_datatype = vector_field.attrs.datatype.value
+
         def logical_prefix(prefix: str) -> str:
             # Generated legacy schemas include the key separator in the index
             # prefix. Keep RedisConfig's logical prefix separator-free so IDs
@@ -1224,25 +1228,21 @@ class RedisVectorStore(VectorStore):
         sort_by: Optional[str] = None,
         return_fields: Optional[List[str]] = None,
     ) -> Union[VectorQuery, RangeQuery]:
+        query_kwargs: Dict[str, Any] = {
+            "vector": embedding,
+            "vector_field_name": self.config.embedding_field,
+            "return_fields": return_fields,
+            "num_results": k,
+            "filter_expression": filter_expression,
+            "sort_by": sort_by,
+            "dtype": self.config.vector_datatype.lower(),
+        }
         if distance_threshold is None:
-            return VectorQuery(
-                vector=embedding,
-                vector_field_name=self.config.embedding_field,
-                return_fields=return_fields,
-                num_results=k,
-                filter_expression=filter_expression,
-                sort_by=sort_by,
-            )
-        else:
-            return RangeQuery(
-                vector=embedding,
-                vector_field_name=self.config.embedding_field,
-                return_fields=return_fields,
-                num_results=k,
-                filter_expression=filter_expression,
-                distance_threshold=distance_threshold,
-                sort_by=sort_by,
-            )
+            return VectorQuery(**query_kwargs)
+        return RangeQuery(
+            **query_kwargs,
+            distance_threshold=distance_threshold,
+        )
 
     def similarity_search_by_vector(
         self,

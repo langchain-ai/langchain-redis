@@ -68,6 +68,37 @@ def test_hnsw_with_custom_attrs_round_trip(redis_url: str) -> None:
         assert "hnsw" in str(store.index.info()).lower()
 
 
+@pytest.mark.parametrize("storage_type", ["hash", "json"])
+def test_reopened_float64_index_uses_live_vector_datatype(
+    redis_url: str, storage_type: str
+) -> None:
+    """KNN, range, and MMR honor a reopened index's FLOAT64 schema."""
+    for store in _round_trip_store(
+        redis_url,
+        storage_type=storage_type,
+        vector_datatype="FLOAT64",
+    ):
+        reopened = RedisVectorStore.from_existing_index(
+            index_name=store.index.name,
+            embedding=KeywordEmbeddings(),
+            redis_url=redis_url,
+        )
+
+        assert reopened.config.vector_datatype == "FLOAT64"
+        assert len(reopened.similarity_search(QUERY, k=2)) == 2
+        assert (
+            len(
+                reopened.similarity_search(
+                    QUERY,
+                    k=2,
+                    distance_threshold=2.0,
+                )
+            )
+            == 2
+        )
+        assert len(reopened.max_marginal_relevance_search(QUERY, k=2, fetch_k=2)) == 2
+
+
 def test_svs_vamana_round_trip(redis_url: str, svs_server: None) -> None:
     """An SVS-VAMANA index with compression is created and searchable (8.2+)."""
     for store in _round_trip_store(

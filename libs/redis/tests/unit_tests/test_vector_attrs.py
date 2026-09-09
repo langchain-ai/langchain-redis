@@ -1,11 +1,13 @@
 """Unit tests for vector-field tuning attributes (RedisConfig.vector_attrs)."""
 
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 from unittest.mock import patch
 
 import pytest
 from langchain_core.embeddings import Embeddings
 from pydantic import ValidationError
+from redisvl.query.filter import FilterExpression  # type: ignore[import]
 from redisvl.schema import IndexSchema  # type: ignore[import]
 
 from langchain_redis import RedisConfig, RedisVectorStore
@@ -102,6 +104,66 @@ def test_no_vector_attrs_leaves_schema_unchanged() -> None:
     attrs = _generated_vector_attrs(config)
     assert {"dims", "distance_metric", "algorithm", "datatype"} <= set(attrs)
     assert not set(HNSW_ATTRS) & set(attrs)
+
+
+def test_live_vector_datatype_replaces_stale_config() -> None:
+    """Vector encoding comes from the live RedisVL schema."""
+    schema = IndexSchema.from_dict(
+        {
+            "index": {"name": "datatype-test", "prefix": "datatype-test"},
+            "fields": [
+                {
+                    "name": "embedding",
+                    "type": "vector",
+                    "attrs": {
+                        "dims": DIMS,
+                        "algorithm": "flat",
+                        "distance_metric": "cosine",
+                        "datatype": "float64",
+                    },
+                }
+            ],
+        }
+    )
+    store = object.__new__(RedisVectorStore)
+    store.config = RedisConfig(
+        index_name="datatype-test",
+        embedding_dimensions=DIMS,
+        vector_datatype="FLOAT32",
+    )
+    store._index = SimpleNamespace(schema=schema)
+
+    store._sync_config_with_live_index()
+
+    assert store.config.vector_datatype == "FLOAT64"
+
+
+@pytest.mark.parametrize(
+    ("distance_threshold", "query_class_name"),
+    [
+        pytest.param(None, "VectorQuery", id="knn"),
+        pytest.param(0.5, "RangeQuery", id="range"),
+    ],
+)
+def test_query_builder_passes_vector_datatype(
+    distance_threshold: Optional[float],
+    query_class_name: str,
+) -> None:
+    """KNN and range queries use the configured vector encoding."""
+    store = object.__new__(RedisVectorStore)
+    store.config = RedisConfig(
+        embedding_dimensions=2,
+        vector_datatype="FLOAT64",
+    )
+
+    with patch(f"langchain_redis.vectorstores.{query_class_name}") as query_class:
+        store._query_builder(
+            embedding=[0.1, 0.2],
+            filter_expression=FilterExpression("*"),
+            distance_threshold=distance_threshold,
+        )
+
+    assert query_class.call_args.kwargs["dtype"] == "float64"
 
 
 class MockEmbeddings(Embeddings):
