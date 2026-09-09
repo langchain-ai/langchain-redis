@@ -3,7 +3,7 @@
 import json
 from types import SimpleNamespace
 from typing import Any, Dict, Iterator, List, Optional
-from unittest.mock import patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 from langchain_core.embeddings import Embeddings
@@ -14,7 +14,7 @@ from redisvl.query.filter import (  # type: ignore[import]
     Tag,
 )
 from redisvl.redis.utils import hashify  # type: ignore[import]
-from redisvl.schema import FieldTypes  # type: ignore[import]
+from redisvl.schema import FieldTypes, StorageType  # type: ignore[import]
 
 from langchain_redis import RedisVectorStore
 
@@ -286,6 +286,49 @@ def test_empty_direct_id_read_remains_a_noop(store: RedisVectorStore) -> None:
         assert store.get_by_ids([]) == []
 
     fetch_records.assert_not_called()
+
+
+def test_fetch_records_by_keys_uses_single_key_json_commands(
+    store: RedisVectorStore,
+) -> None:
+    """JSON ownership reads remain safe across Redis Cluster hash slots."""
+    client = MagicMock()
+    pipe = client.pipeline.return_value.__enter__.return_value
+    json_pipe = pipe.json.return_value
+    pipe.execute.return_value = [
+        {b"text": b"owned", b"_index_name": b"marker"},
+        None,
+    ]
+    _fake(store).client = client
+    store.config.storage_type = StorageType.JSON.value
+
+    assert store._fetch_records_by_keys(["prefix:a", "prefix:b"]) == [
+        {"text": "owned", "_index_name": "marker"},
+        None,
+    ]
+    client.pipeline.assert_called_once_with(transaction=False)
+    assert json_pipe.get.call_args_list == [
+        call("prefix:a", "."),
+        call("prefix:b", "."),
+    ]
+    json_pipe.mget.assert_not_called()
+
+
+def test_fetch_records_by_keys_uses_non_transactional_hash_pipeline(
+    store: RedisVectorStore,
+) -> None:
+    """HASH ownership reads remain safe across Redis Cluster hash slots."""
+    client = MagicMock()
+    pipe = client.pipeline.return_value.__enter__.return_value
+    pipe.execute.return_value = [{b"text": b"owned"}, {}]
+    _fake(store).client = client
+
+    assert store._fetch_records_by_keys(["prefix:a", "prefix:b"]) == [
+        {"text": "owned"},
+        None,
+    ]
+    client.pipeline.assert_called_once_with(transaction=False)
+    assert pipe.hgetall.call_args_list == [call("prefix:a"), call("prefix:b")]
 
 
 def test_delete_by_filter_scopes_to_index_name(store: RedisVectorStore) -> None:

@@ -1123,16 +1123,23 @@ class RedisVectorStore(VectorStore):
         self, keys: Sequence[str]
     ) -> List[Optional[Dict[str, Any]]]:
         """Fetch raw HASH or JSON records for ownership validation."""
-        redis = self.config.redis()
-        if self.config.storage_type == StorageType.JSON.value:
-            return cast(
-                List[Optional[Dict[str, Any]]], redis.json().mget(list(keys), ".")
-            )
+        if not keys:
+            return []
 
-        pipe = redis.pipeline()
-        for key in keys:
-            pipe.hgetall(key)
-        return [convert_bytes(value) if value else None for value in pipe.execute()]
+        redis = self._index.client
+        with redis.pipeline(transaction=False) as pipe:
+            if self.config.storage_type == StorageType.JSON.value:
+                json_pipe = pipe.json()
+                for key in keys:
+                    json_pipe.get(key, ".")
+            else:
+                for key in keys:
+                    pipe.hgetall(key)
+            records = pipe.execute()
+
+        if self.config.storage_type == StorageType.JSON.value:
+            return cast(List[Optional[Dict[str, Any]]], convert_bytes(records))
+        return [convert_bytes(record) if record else None for record in records]
 
     def _build_index_name_filter(
         self,
