@@ -86,6 +86,9 @@ class FakeBulkIndex:
     def create(self, overwrite: bool = False) -> None:
         pass
 
+    def key(self, document_id: str) -> str:
+        return f"{self.name}:{document_id}"
+
     def drop_by_filter(self, filter_expression: Any, **kwargs: Any) -> Any:
         self.captured_filter = filter_expression
         self.captured_kwargs = kwargs
