@@ -50,12 +50,16 @@ def _doc_ids(store: RedisVectorStore, **search_kwargs: Any) -> Set[str]:
     return {doc.metadata[DOC_ID_FIELD] for doc in docs}
 
 
-def test_multi_prefix_index_spans_namespaces(redis_url: str) -> None:
+@pytest.mark.parametrize("storage_type", ["hash", "json"])
+def test_multi_prefix_index_spans_namespaces(redis_url: str, storage_type: str) -> None:
     """Searches cover every configured prefix; writes land under the first."""
     run_id = uuid4().hex[:8]
     prefix_a, prefix_b = f"tenant_a_{run_id}", f"tenant_b_{run_id}"
     store = _make_store(
-        redis_url, key_prefix=[prefix_a, prefix_b], legacy_key_format=False
+        redis_url,
+        key_prefix=[prefix_a, prefix_b],
+        legacy_key_format=False,
+        storage_type=storage_type,
     )
     try:
         written_ids = store.add_texts(
@@ -80,7 +84,11 @@ def test_multi_prefix_index_spans_namespaces(redis_url: str) -> None:
             [
                 {
                     "text": "planted doc",
-                    "embedding": array_to_buffer([0.1] * DIMS, "float32"),
+                    "embedding": (
+                        [0.1] * DIMS
+                        if storage_type == "json"
+                        else array_to_buffer([0.1] * DIMS, "float32")
+                    ),
                     "_index_name": hashify(store.index.name),
                     "_metadata_json": json.dumps(
                         {DOC_ID_FIELD: "planted", CATEGORY_FIELD: "external"}
