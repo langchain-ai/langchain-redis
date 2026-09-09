@@ -634,7 +634,7 @@ class RedisVectorStore(VectorStore):
                     continue
                 # Convert lists to tag strings with separator
                 elif isinstance(field_value, list):
-                    record[field_name] = self.config.default_tag_separator.join(
+                    record[field_name] = self._tag_separator(field_name).join(
                         field_value
                     )
                 else:
@@ -1111,6 +1111,13 @@ class RedisVectorStore(VectorStore):
         """Convert RedisVL Redis keys back into vector-store document IDs."""
         key_prefix = self._index.key("")
         return [key.removeprefix(key_prefix) for key in redis_keys]
+
+    def _tag_separator(self, field_name: str) -> str:
+        """Return a TAG field's live schema separator, or the configured default."""
+        field = self._index.schema.fields.get(field_name)
+        if field is not None and field.type == FieldTypes.TAG:
+            return field.attrs.separator
+        return self.config.default_tag_separator
 
     def _fetch_records_by_keys(
         self, keys: Sequence[str]

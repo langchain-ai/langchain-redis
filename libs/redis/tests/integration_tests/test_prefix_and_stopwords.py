@@ -34,11 +34,12 @@ class ConstantEmbeddings(Embeddings):
 
 
 def _make_store(redis_url: str, **config_kwargs: Any) -> RedisVectorStore:
+    metadata_schema = config_kwargs.pop("metadata_schema", METADATA_SCHEMA)
     return RedisVectorStore(
         ConstantEmbeddings(),
         index_name=f"prefix_test_{uuid4().hex[:8]}",
         redis_url=redis_url,
-        metadata_schema=METADATA_SCHEMA,
+        metadata_schema=metadata_schema,
         embedding_dimensions=DIMS,
         **config_kwargs,
     )
@@ -159,6 +160,26 @@ def test_custom_key_separator_round_trip(redis_url: str, storage_type: str) -> N
         assert store.delete(ids=ids) is True
         assert not store.config.redis().exists(redis_key)
         assert store.get_by_ids(ids) == []
+    finally:
+        store.index.delete(drop=True)
+
+
+@pytest.mark.parametrize("storage_type", ["hash", "json"])
+def test_tag_list_uses_field_separator(redis_url: str, storage_type: str) -> None:
+    """List metadata uses the separator declared by its RedisVL TAG field."""
+    store = _make_store(
+        redis_url,
+        storage_type=storage_type,
+        default_tag_separator="|",
+        metadata_schema=[
+            {"name": "labels", "type": "tag", "attrs": {"separator": ","}}
+        ],
+    )
+    try:
+        store.add_texts(["document"], metadatas=[{"labels": ["one", "two"]}])
+
+        documents = store.similarity_search(QUERY, k=1, filter=Tag("labels") == "two")
+        assert [document.page_content for document in documents] == ["document"]
     finally:
         store.index.delete(drop=True)
 

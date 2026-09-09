@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Optional, Union
 from unittest.mock import Mock, patch
 
@@ -18,9 +19,7 @@ class MockEmbeddings(Embeddings):
 
 
 class MockField:
-    def __init__(
-        self, name: str, field_type: str, attrs: Optional[Dict[str, Any]] = None
-    ) -> None:
+    def __init__(self, name: str, field_type: str, attrs: Optional[Any] = None) -> None:
         self.name = name
         self.type = field_type
         self.attrs = attrs or {}
@@ -174,6 +173,35 @@ class TestRedisVectorStore:
         keys = vector_store.add_texts(texts, metadatas)
         assert len(keys) == 2
         assert all(key.startswith("key_") for key in keys)
+
+    def test_add_texts_uses_each_tag_field_separator(
+        self, vector_store: RedisVectorStore
+    ) -> None:
+        index = MockSearchIndex.last_instance
+        assert index is not None
+        index.schema.fields.update(
+            {
+                "comma_tags": MockField(
+                    "comma_tags", "tag", SimpleNamespace(separator=",")
+                ),
+                "pipe_tags": MockField(
+                    "pipe_tags", "tag", SimpleNamespace(separator="|")
+                ),
+            }
+        )
+
+        vector_store.add_texts(
+            ["document"],
+            metadatas=[
+                {
+                    "comma_tags": ["one", "two"],
+                    "pipe_tags": ["one", "two"],
+                }
+            ],
+        )
+
+        assert index.data[-1]["comma_tags"] == "one,two"
+        assert index.data[-1]["pipe_tags"] == "one|two"
 
     def test_similarity_search(self, vector_store: RedisVectorStore) -> None:
         vector_store.add_texts(["Hello, world!", "Test document"])
