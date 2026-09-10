@@ -268,11 +268,21 @@ def test_shared_prefix_direct_ids_are_owned_by_their_index(
             keys=[foreign_id],
         )
 
+        with pytest.raises(ValueError, match="ownership could not be verified"):
+            store_a.add_texts(
+                ["replacement document"],
+                metadatas=[{DOC_ID_FIELD: foreign_id, TEAM_FIELD: TEAM_A}],
+                keys=[foreign_id],
+            )
+
         assert [doc.id for doc in store_a.get_by_ids([owned_id, foreign_id])] == [
             owned_id
         ]
         assert store_a.delete([foreign_id]) is False
-        assert [doc.id for doc in store_b.get_by_ids([foreign_id])] == [foreign_id]
+        foreign_docs = store_b.get_by_ids([foreign_id])
+        assert [(doc.id, doc.page_content) for doc in foreign_docs] == [
+            (foreign_id, "foreign document")
+        ]
 
         assert store_a.delete([owned_id, foreign_id]) is True
         assert store_a.get_by_ids([owned_id, foreign_id]) == []

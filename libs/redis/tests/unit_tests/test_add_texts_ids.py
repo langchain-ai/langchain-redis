@@ -58,10 +58,12 @@ def test_add_texts_with_ids_in_kwargs() -> None:
         # Test add_texts with ids in kwargs
         texts = ["text1", "text2"]
         ids = ["id1", "id2"]
-        result = vector_store.add_texts(texts=texts, ids=ids)
+        with patch.object(vector_store, "_validate_write_ownership") as validate:
+            result = vector_store.add_texts(texts=texts, ids=ids)
 
         # Verify that index.load was called with the expected keys
         expected_keys = ["key1:id1", "key1:id2"]
+        validate.assert_called_once_with(expected_keys)
         mock_index.load.assert_called_once()
         args, kwargs = mock_index.load.call_args
         assert kwargs["keys"] == expected_keys
@@ -119,10 +121,12 @@ def test_add_texts_with_both_keys_and_ids() -> None:
         texts = ["text1", "text2"]
         keys = ["key1", "key2"]
         ids = ["id1", "id2"]
-        result = vector_store.add_texts(texts=texts, keys=keys, ids=ids)
+        with patch.object(vector_store, "_validate_write_ownership") as validate:
+            result = vector_store.add_texts(texts=texts, keys=keys, ids=ids)
 
         # Verify that index.load was called with keys (not ids)
         expected_keys = ["key1:key1", "key1:key2"]
+        validate.assert_called_once_with(expected_keys)
         mock_index.load.assert_called_once()
         args, kwargs = mock_index.load.call_args
         assert kwargs["keys"] == expected_keys
@@ -178,7 +182,9 @@ def test_add_texts_returns_ids_without_key_prefix(
 
         vector_store = RedisVectorStore(embeddings=mock_embeddings)
 
-        result = vector_store.add_texts(texts=["hello"], keys=["mykey"])
+        with patch.object(vector_store, "_validate_write_ownership") as validate:
+            result = vector_store.add_texts(texts=["hello"], keys=["mykey"])
 
         assert result == ["mykey"]
+        validate.assert_called_once_with(["myprefix|mykey"])
         assert mock_index.load.call_args.kwargs["keys"] == ["myprefix|mykey"]

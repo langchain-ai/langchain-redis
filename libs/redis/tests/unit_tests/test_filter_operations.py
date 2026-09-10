@@ -229,9 +229,85 @@ def test_direct_id_operations_preserve_marker_schema_compatibility(
     }
 
     with patch.object(store, "_fetch_records_by_keys", return_value=[record]):
+        assert store.add_texts(["updated document"], keys=["doc"]) == ["doc"]
         assert [doc.id for doc in store.get_by_ids(["doc"])] == ["doc"]
         with patch.object(fake, "drop_keys", return_value=1, create=True):
             assert store.delete(["doc"]) is True
+
+
+@pytest.mark.parametrize(
+    "records",
+    [
+        pytest.param(
+            [{"_index_name": hashify("sibling-index")}],
+            id="foreign-owner",
+        ),
+        pytest.param([{}], id="unmarked-existing-record"),
+        pytest.param(
+            [
+                None,
+                {"_index_name": hashify(INDEX_NAME)},
+                {"_index_name": hashify("sibling-index")},
+            ],
+            id="mixed-batch",
+        ),
+    ],
+)
+def test_add_texts_rejects_foreign_existing_key_before_load(
+    store: RedisVectorStore,
+    records: List[Optional[Dict[str, Any]]],
+) -> None:
+    """No explicit-key records are written when any owner is foreign."""
+    fake = _fake(store)
+    keys = [f"doc-{index}" for index in range(len(records))]
+
+    with patch.object(store, "_fetch_records_by_keys", return_value=records):
+        with patch.object(fake, "load", wraps=fake.load) as load:
+            with pytest.raises(ValueError, match="ownership could not be verified"):
+                store.add_texts(["document"] * len(keys), keys=keys)
+
+    load.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "field_type",
+    [pytest.param(None, id="missing"), pytest.param(FieldTypes.NUMERIC, id="numeric")],
+)
+def test_add_texts_preserves_markerless_schema_behavior(
+    store: RedisVectorStore,
+    field_type: Optional[FieldTypes],
+) -> None:
+    """Schemas without a supported ownership marker retain explicit writes."""
+    fake = _fake(store)
+    if field_type is None:
+        fake.schema.fields.pop("_index_name")
+    else:
+        fake.schema.fields["_index_name"].type = field_type
+
+    with patch.object(store, "_fetch_records_by_keys") as fetch_records:
+        assert store.add_texts(["document"], keys=["doc"]) == ["doc"]
+
+    fetch_records.assert_not_called()
+
+
+def test_add_texts_uses_live_marker_schema_when_local_schema_is_stale(
+    store: RedisVectorStore,
+) -> None:
+    """A stale markerless schema cannot bypass live ownership checks."""
+    fake = _fake(store)
+    fake.schema.fields.pop("_index_name")
+    FakeBulkIndex.live_schema = _schema_with_index_marker(FieldTypes.TAG)
+
+    with patch.object(
+        store,
+        "_fetch_records_by_keys",
+        return_value=[{"_index_name": hashify("sibling-index")}],
+    ):
+        with patch.object(fake, "load", wraps=fake.load) as load:
+            with pytest.raises(ValueError, match="ownership could not be verified"):
+                store.add_texts(["document"], keys=["doc"])
+
+    load.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -353,10 +429,10 @@ def test_generated_index_name_field_is_case_sensitive_tag(
     assert field.attrs.case_sensitive is True
 
 
-def test_tag_index_marker_uses_search_index_name(
+def test_index_marker_uses_search_index_name(
     store: RedisVectorStore,
 ) -> None:
-    """TAG ownership follows RedisVL's index identity, not stale config."""
+    """Ownership follows RedisVL's live index identity, not stale config."""
     fake = _fake(store)
     fake.name = "live-index-name"
 
@@ -365,7 +441,28 @@ def test_tag_index_marker_uses_search_index_name(
     captured = str(fake.captured_filter)
     assert hashify(fake.name) in captured
     assert hashify(INDEX_NAME) not in captured
-    assert store._index_name_value(FieldTypes.TEXT) == INDEX_NAME
+    assert store._index_name_value(FieldTypes.TEXT) == fake.name
+
+
+def test_legacy_text_write_ownership_ignores_stale_config(
+    store: RedisVectorStore,
+) -> None:
+    """Stale config cannot authorize a write to another live index."""
+    fake = _fake(store)
+    fake.name = "live-index-name"
+    fake.schema.fields["_index_name"].type = FieldTypes.TEXT
+    store.config.index_name = "sibling-index"
+
+    with patch.object(
+        store,
+        "_fetch_records_by_keys",
+        return_value=[{"_index_name": "sibling-index"}],
+    ):
+        with patch.object(fake, "load", wraps=fake.load) as load:
+            with pytest.raises(ValueError, match="ownership could not be verified"):
+                store.add_texts(["document"], keys=["doc"])
+
+    load.assert_not_called()
 
 
 def test_add_texts_protects_tag_index_marker_from_metadata(
@@ -376,11 +473,12 @@ def test_add_texts_protects_tag_index_marker_from_metadata(
     fake.name = "live-index-name"
     caller_marker = hashify("sibling-index")
 
-    store.add_texts(
-        ["protected document"],
-        metadatas=[{"_index_name": caller_marker, TEAM_FIELD: TEAM_VALUE}],
-        keys=["protected"],
-    )
+    with patch.object(store, "_fetch_records_by_keys", return_value=[None]):
+        store.add_texts(
+            ["protected document"],
+            metadatas=[{"_index_name": caller_marker, TEAM_FIELD: TEAM_VALUE}],
+            keys=["protected"],
+        )
 
     record = fake.loaded_records[0]
     assert record["_index_name"] == hashify(fake.name)

@@ -530,6 +530,8 @@ class RedisVectorStore(VectorStore):
                 match the number of `texts`.
             ValueError: If `ids` is provided (via `kwargs`) and its length
                 does not match the number of `texts`.
+            ValueError: If explicit document IDs target an existing record whose
+                ownership does not match this index.
 
         Example:
             ```python
@@ -594,6 +596,10 @@ class RedisVectorStore(VectorStore):
                 )
             keys = ids
 
+        redis_keys = self._redis_keys(keys) if keys else None
+        if redis_keys:
+            self._validate_write_ownership(redis_keys)
+
         # Generate embeddings for all texts
         document_embeddings = self._embeddings.embed_documents(texts_list)
 
@@ -649,10 +655,8 @@ class RedisVectorStore(VectorStore):
             records.append(record)
 
         # Load records into the index
-        if keys:
-            result = self._index.load(
-                records, keys=self._redis_keys(keys), ttl=self.ttl
-            )
+        if redis_keys:
+            result = self._index.load(records, keys=redis_keys, ttl=self.ttl)
         else:
             result = self._index.load(records, ttl=self.ttl)
 
@@ -1071,11 +1075,14 @@ class RedisVectorStore(VectorStore):
         """Return the stored and queried value for the index marker."""
         if field_type == FieldTypes.TAG:
             return hashify(self._index.name)
-        return self.config.index_name
+        return self._index.name
 
-    def _index_name_marker_from_schema(self) -> Optional[str]:
-        """Derive the ownership marker from the configured index schema."""
-        field = self._index.schema.fields.get(_INDEX_NAME_FIELD)
+    def _index_name_marker_from_schema(
+        self, schema: Optional[IndexSchema] = None
+    ) -> Optional[str]:
+        """Derive the ownership marker from an index schema."""
+        source_schema = schema if schema is not None else self._index.schema
+        field = source_schema.fields.get(_INDEX_NAME_FIELD)
         if field is None or field.type not in (FieldTypes.TAG, FieldTypes.TEXT):
             return None
         return self._index_name_value(field.type)
@@ -1106,6 +1113,41 @@ class RedisVectorStore(VectorStore):
     def _redis_keys(self, ids: Sequence[str]) -> List[str]:
         """Construct Redis keys using the live RedisVL index schema."""
         return [self._index.key(document_id) for document_id in ids]
+
+    def _validate_write_ownership(self, redis_keys: Sequence[str]) -> None:
+        """Refuse explicit-key writes to records owned by another index.
+
+        Markerless schemas retain their existing write behavior. The ownership
+        read and RedisVL write are separate operations; atomic enforcement is
+        deferred to a dedicated follow-up.
+        """
+        try:
+            expected_marker = self._index_name_marker_from_schema(
+                self._live_index_schema()
+            )
+        except Exception as exc:
+            raise ValueError(
+                "add_texts() could not inspect the live index schema; the write "
+                "was refused."
+            ) from exc
+        if expected_marker is None:
+            return
+
+        records = self._fetch_records_by_keys(redis_keys)
+        if len(records) != len(redis_keys):
+            raise ValueError(
+                "add_texts() could not verify ownership for every document ID."
+            )
+
+        if any(
+            record is not None
+            and not self._record_belongs_to_index(record, expected_marker)
+            for record in records
+        ):
+            raise ValueError(
+                "add_texts() cannot overwrite one or more existing documents "
+                "because their index ownership could not be verified."
+            )
 
     def _ids_from_redis_keys(self, redis_keys: Sequence[str]) -> List[str]:
         """Convert RedisVL Redis keys back into vector-store document IDs."""
