@@ -9,9 +9,8 @@ import pytest
 from langchain_core.embeddings import Embeddings
 from redisvl.query.filter import Tag  # type: ignore[import]
 from redisvl.redis.utils import array_to_buffer, hashify  # type: ignore[import]
-from redisvl.schema import IndexSchema  # type: ignore[import]
 
-from langchain_redis import RedisConfig, RedisVectorStore
+from langchain_redis import RedisVectorStore
 
 DIMS = 4
 DOC_ID_FIELD = "doc_id"
@@ -21,6 +20,7 @@ METADATA_SCHEMA = [
     {"name": CATEGORY_FIELD, "type": "tag"},
 ]
 QUERY = "any query"
+CUSTOM_KEY_SEPARATOR = "|"
 
 
 class ConstantEmbeddings(Embeddings):
@@ -121,53 +121,38 @@ def test_multi_prefix_index_spans_namespaces(redis_url: str, storage_type: str) 
 def test_custom_key_separator_round_trip(redis_url: str, storage_type: str) -> None:
     """RedisVL's live key separator is honored for writes, reads, and deletes."""
     index_name = f"separator_test_{uuid4().hex[:8]}"
-    prefix = f"separator_docs_{uuid4().hex[:8]}"
-    schema = IndexSchema.from_dict(
-        {
-            "index": {
-                "name": index_name,
-                "prefix": prefix,
-                "key_separator": "|",
-                "storage_type": storage_type,
-            },
-            "fields": [
-                {"name": "text", "type": "text"},
-                {
-                    "name": "embedding",
-                    "type": "vector",
-                    "attrs": {
-                        "dims": DIMS,
-                        "distance_metric": "cosine",
-                        "algorithm": "flat",
-                        "datatype": "float32",
-                    },
-                },
-                {"name": "_index_name", "type": "tag"},
-            ],
-        }
-    )
+    prefix = f"tenant{CUSTOM_KEY_SEPARATOR}separator_docs_{uuid4().hex[:8]}"
     store = RedisVectorStore(
         ConstantEmbeddings(),
-        config=RedisConfig(
-            schema=schema,
-            redis_url=redis_url,
-            embedding_dimensions=DIMS,
-        ),
+        index_name=index_name,
+        key_prefix=prefix,
+        key_separator=CUSTOM_KEY_SEPARATOR,
+        redis_url=redis_url,
+        embedding_dimensions=DIMS,
+        storage_type=storage_type,
     )
     try:
-        document_id = "section|2"
-        redis_key = f"{prefix}|{document_id}"
+        document_id = f"section{CUSTOM_KEY_SEPARATOR}2"
+        redis_key = f"{prefix}{CUSTOM_KEY_SEPARATOR}{document_id}"
         ids = store.add_texts(["document"], keys=[document_id])
 
         assert ids == [document_id]
         assert store.config.redis().exists(redis_key)
+
+        reopened = RedisVectorStore.from_existing_index(
+            index_name,
+            ConstantEmbeddings(),
+            redis_url=redis_url,
+            key_separator=CUSTOM_KEY_SEPARATOR,
+        )
         assert [
-            (document.id, document.page_content) for document in store.get_by_ids(ids)
+            (document.id, document.page_content)
+            for document in reopened.get_by_ids(ids)
         ] == [(document_id, "document")]
 
-        assert store.delete(ids=ids) is True
+        assert reopened.config.key_separator == CUSTOM_KEY_SEPARATOR
+        assert reopened.delete(ids=ids) is True
         assert not store.config.redis().exists(redis_key)
-        assert store.get_by_ids(ids) == []
     finally:
         store.index.delete(drop=True)
 

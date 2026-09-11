@@ -337,6 +337,7 @@ class RedisVectorStore(VectorStore):
 
         # 4. Initialize the index based on config settings
         redis_client = self.config.redis()
+        key_separator = self.config.key_separator
         if self.config.index_schema:
             # Create index from the provided schema
             self._index = SearchIndex(
@@ -387,25 +388,12 @@ class RedisVectorStore(VectorStore):
             # this behavior is maintained by default via legacy_key_format flag.
             # Set legacy_key_format=False for correct single-colon format.
             # Note: key_prefix is always set by validator, so it's never None here
-            key_prefix = self.config.key_prefix or self.config.index_name
-            prefix: Union[str, List[str]]
-            if isinstance(key_prefix, list):
-                # Multi-prefix index: searches span every prefix; writes use
-                # the first one (config.primary_prefix)
-                if self.config.legacy_key_format:
-                    prefix = [f"{key_pref}:" for key_pref in key_prefix]
-                else:
-                    prefix = list(key_prefix)
-            elif self.config.legacy_key_format:
-                # Legacy format: adds trailing ":" (creates "prefix::doc_id")
-                prefix = f"{key_prefix}:"
-            else:
-                # Correct format: no trailing ":" (creates "prefix:doc_id")
-                prefix = key_prefix
+            prefix = self._schema_key_prefix()
 
             index_info: Dict[str, Any] = {
                 "name": self.config.index_name,
                 "prefix": prefix,
+                "key_separator": key_separator,
                 "storage_type": self.config.storage_type,
             }
             if self.config.stopwords is not None:
@@ -445,12 +433,38 @@ class RedisVectorStore(VectorStore):
         # the index already exists. Rehydrate it so reads and writes use the
         # schema that Redis actually retained.
         if not self.config.from_existing:
+            declared_schema = getattr(self._index, "schema", None)
+            if isinstance(declared_schema, IndexSchema):
+                key_separator = declared_schema.index.key_separator
             self._index = SearchIndex.from_existing(
                 name=self._index.name,
                 redis_client=self._index.client,
                 lib_name=__lib_name__,
             )
+        # Redis does not persist RedisVL's client-side key separator, so
+        # FT.INFO cannot reconstruct it when the index is reopened.
+        live_schema = getattr(self._index, "schema", None)
+        if isinstance(live_schema, IndexSchema):
+            live_schema.index.key_separator = key_separator
+        self.config.key_separator = key_separator
         self._sync_config_with_live_index()
+
+    def _schema_key_prefix(self) -> Union[str, List[str]]:
+        """Return the key prefix to store in the RedisVL schema."""
+        key_prefix = self.config.key_prefix or self.config.index_name
+        legacy_suffix = self._legacy_prefix_suffix()
+
+        if isinstance(key_prefix, list):
+            return [f"{prefix}{legacy_suffix}" for prefix in key_prefix]
+        return f"{key_prefix}{legacy_suffix}"
+
+    def _legacy_prefix_suffix(self) -> str:
+        """Return the suffix used by the historical colon key format."""
+        return (
+            ":"
+            if self.config.legacy_key_format and self.config.key_separator == ":"
+            else ""
+        )
 
     def _sync_config_with_live_index(self) -> None:
         """Synchronize schema-owned runtime settings with the live index."""
@@ -470,8 +484,9 @@ class RedisVectorStore(VectorStore):
             # Generated legacy schemas include the key separator in the index
             # prefix. Keep RedisConfig's logical prefix separator-free so IDs
             # that already include the legacy leading colon still round-trip.
-            if self.config.legacy_key_format and prefix.endswith(":"):
-                return prefix[:-1]
+            legacy_suffix = self._legacy_prefix_suffix()
+            if legacy_suffix and prefix.endswith(legacy_suffix):
+                return prefix.removesuffix(legacy_suffix)
             return prefix
 
         live_prefix = schema.index.prefix
@@ -864,6 +879,9 @@ class RedisVectorStore(VectorStore):
 
                 - `redis_url`: URL of the Redis instance to connect to.
                 - `redis_client`: Pre-existing Redis client to use.
+                - `key_separator`: Separator used between the index prefix and
+                    document IDs. Required when reopening an index created with
+                    a non-default separator.
                 - `vector_query_field`: Name of the field containing the vector
                     representations.
                 - `content_field`: Name of the field containing the document content.

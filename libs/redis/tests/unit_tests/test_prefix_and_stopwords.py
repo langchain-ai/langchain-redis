@@ -17,6 +17,7 @@ REDIS_URL = "redis://localhost"
 PREFIX_A = "tenant_a"
 PREFIX_B = "tenant_b"
 PREFIXES = [PREFIX_A, PREFIX_B]
+CUSTOM_KEY_SEPARATOR = "|"
 CUSTOM_STOPWORDS = ["the", "a"]
 
 
@@ -101,12 +102,48 @@ def test_primary_prefix_for_list_string_and_default(
     assert config.primary_prefix == expected
 
 
+def test_custom_key_separator_reaches_generated_schema() -> None:
+    """Custom separators bypass the colon-only legacy prefix format."""
+    store = _make_store(
+        key_prefix=PREFIX_A,
+        key_separator=CUSTOM_KEY_SEPARATOR,
+    )
+
+    assert store.config.key_separator == CUSTOM_KEY_SEPARATOR
+    assert CapturingIndex.last_schema is not None
+    assert CapturingIndex.last_schema["index"]["prefix"] == PREFIX_A
+    assert CapturingIndex.last_schema["index"]["key_separator"] == CUSTOM_KEY_SEPARATOR
+
+
+def test_redisvl_schema_key_separator_is_authoritative() -> None:
+    """A complete RedisVL schema does not require duplicate configuration."""
+    schema = IndexSchema.from_dict(
+        {
+            "index": {
+                "name": INDEX_NAME,
+                "prefix": PREFIX_A,
+                "key_separator": CUSTOM_KEY_SEPARATOR,
+            },
+            "fields": [{"name": "text", "type": "text"}],
+        }
+    )
+
+    config = RedisConfig(
+        schema=schema,
+        key_separator="/",
+        embedding_dimensions=DIMS,
+    )
+
+    assert config.key_separator == CUSTOM_KEY_SEPARATOR
+
+
 def test_generated_schema_preserves_list_prefix() -> None:
     """A prefix list reaches the generated schema as a list, spanning all
     namespaces at query time."""
     config = RedisConfig(key_prefix=PREFIXES, embedding_dimensions=DIMS)
     schema_index = config.to_index_schema().to_dict()["index"]
     assert schema_index["prefix"] == PREFIXES
+    assert schema_index["key_separator"] == ":"
 
 
 def test_schema_list_prefix_uses_first_prefix_for_keys() -> None:

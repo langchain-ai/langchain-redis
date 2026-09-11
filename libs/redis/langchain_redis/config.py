@@ -33,6 +33,11 @@ class RedisConfig(BaseModel):
             first prefix (`primary_prefix`).
 
             Defaults to `index_name` if not set.
+        key_separator (str): Separator between the key prefix and document ID.
+
+            Defaults to `":"`. When reopening an index created with a custom
+            separator, the same value must be supplied because Redis does not
+            persist this client-side setting.
         redis_url (str): URL of the Redis instance.
 
             Defaults to `'redis://localhost:6379'`.
@@ -115,6 +120,7 @@ class RedisConfig(BaseModel):
     index_name: str = Field(default_factory=lambda: create_ulid())
     from_existing: bool = False
     key_prefix: Optional[Union[str, List[str]]] = None
+    key_separator: str = ":"
     redis_url: str = "redis://localhost:6379"
     redis_client: Optional[Redis] = Field(default=None)
     connection_args: Optional[Dict[str, Any]] = Field(default={})
@@ -146,6 +152,9 @@ class RedisConfig(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def check_schema_options(cls, values: Dict) -> Dict:
+        schema = values.get("schema")
+        if schema is None:
+            schema = values.get("index_schema")
         options = [
             values.get("index_schema"),
             values.get("schema_path"),
@@ -162,6 +171,8 @@ class RedisConfig(BaseModel):
             values["key_prefix"] = schema.index.prefix
             values["storage_type"] = schema.index.storage_type.value
             values["index_schema"] = schema
+        if schema is not None:
+            values["key_separator"] = schema.index.key_separator
 
         return values
 
@@ -567,6 +578,7 @@ class RedisConfig(BaseModel):
             index_info: Dict[str, Any] = {
                 "name": self.index_name,
                 "prefix": self.key_prefix,
+                "key_separator": self.key_separator,
                 "storage_type": self.storage_type,
             }
             if self.stopwords is not None:
