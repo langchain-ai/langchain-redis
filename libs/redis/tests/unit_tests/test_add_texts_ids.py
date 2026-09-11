@@ -1,6 +1,9 @@
 """Test that ids parameter in kwargs works correctly in add_texts."""
 
+from typing import List, Union
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from langchain_redis import RedisVectorStore
 
@@ -22,16 +25,19 @@ def test_add_texts_with_ids_in_kwargs() -> None:
 
         # Mock SearchIndex instance
         mock_index = MagicMock()
+        mock_index.key.side_effect = lambda id_: f"key1:{id_}"
         mock_index.load.return_value = ["key1:id1", "key1:id2"]
         mock_index.schema.fields.values.return_value = []
         # Make the SearchIndex constructor return our mock
         mock_search_index_class.return_value = mock_index
         # Also mock the from_dict method
         mock_search_index_class.from_dict.return_value = mock_index
+        mock_search_index_class.from_existing.return_value = mock_index
 
         # Setup config
         mock_config.return_value.index_name = "test_index"
         mock_config.return_value.key_prefix = "key1"
+        mock_config.return_value.primary_prefix = "key1"
         mock_config.return_value.embedding_dimensions = 3
         mock_config.return_value.content_field = "text"
         mock_config.return_value.embedding_field = "embedding"
@@ -52,10 +58,12 @@ def test_add_texts_with_ids_in_kwargs() -> None:
         # Test add_texts with ids in kwargs
         texts = ["text1", "text2"]
         ids = ["id1", "id2"]
-        result = vector_store.add_texts(texts=texts, ids=ids)
+        with patch.object(vector_store, "_validate_write_ownership") as validate:
+            result = vector_store.add_texts(texts=texts, ids=ids)
 
         # Verify that index.load was called with the expected keys
         expected_keys = ["key1:id1", "key1:id2"]
+        validate.assert_called_once_with(expected_keys)
         mock_index.load.assert_called_once()
         args, kwargs = mock_index.load.call_args
         assert kwargs["keys"] == expected_keys
@@ -79,16 +87,19 @@ def test_add_texts_with_both_keys_and_ids() -> None:
 
         # Mock SearchIndex instance
         mock_index = MagicMock()
+        mock_index.key.side_effect = lambda id_: f"key1:{id_}"
         mock_index.load.return_value = ["key1:key1", "key1:key2"]
         mock_index.schema.fields.values.return_value = []
         # Make the SearchIndex constructor return our mock
         mock_search_index_class.return_value = mock_index
         # Also mock the from_dict method
         mock_search_index_class.from_dict.return_value = mock_index
+        mock_search_index_class.from_existing.return_value = mock_index
 
         # Setup config
         mock_config.return_value.index_name = "test_index"
         mock_config.return_value.key_prefix = "key1"
+        mock_config.return_value.primary_prefix = "key1"
         mock_config.return_value.embedding_dimensions = 3
         mock_config.return_value.content_field = "text"
         mock_config.return_value.embedding_field = "embedding"
@@ -110,17 +121,28 @@ def test_add_texts_with_both_keys_and_ids() -> None:
         texts = ["text1", "text2"]
         keys = ["key1", "key2"]
         ids = ["id1", "id2"]
-        result = vector_store.add_texts(texts=texts, keys=keys, ids=ids)
+        with patch.object(vector_store, "_validate_write_ownership") as validate:
+            result = vector_store.add_texts(texts=texts, keys=keys, ids=ids)
 
         # Verify that index.load was called with keys (not ids)
         expected_keys = ["key1:key1", "key1:key2"]
+        validate.assert_called_once_with(expected_keys)
         mock_index.load.assert_called_once()
         args, kwargs = mock_index.load.call_args
         assert kwargs["keys"] == expected_keys
         assert len(result) == 2
 
 
-def test_add_texts_returns_ids_without_key_prefix() -> None:
+@pytest.mark.parametrize(
+    ("key_prefix", "primary_prefix"),
+    [
+        pytest.param("myprefix", "myprefix", id="single-prefix"),
+        pytest.param(["myprefix", "secondary-prefix"], "myprefix", id="multi-prefix"),
+    ],
+)
+def test_add_texts_returns_ids_without_key_prefix(
+    key_prefix: Union[str, List[str]], primary_prefix: str
+) -> None:
     """`SearchIndex.load` hands back the full Redis key it wrote (prefix
     included), but `delete()` and `get_by_ids()` take bare ids and add that
     prefix themselves, so `add_texts` has to strip it back off.
@@ -134,13 +156,16 @@ def test_add_texts_returns_ids_without_key_prefix() -> None:
         mock_embeddings.embed_documents.return_value = [[0.1, 0.2, 0.3]]
 
         mock_index = MagicMock()
-        mock_index.load.return_value = ["myprefix:mykey"]
+        mock_index.key.side_effect = lambda id_: f"myprefix|{id_}"
+        mock_index.load.return_value = ["myprefix|mykey"]
         mock_index.schema.fields.values.return_value = []
         mock_search_index_class.return_value = mock_index
         mock_search_index_class.from_dict.return_value = mock_index
+        mock_search_index_class.from_existing.return_value = mock_index
 
         mock_config.return_value.index_name = "test_index"
-        mock_config.return_value.key_prefix = "myprefix"
+        mock_config.return_value.key_prefix = key_prefix
+        mock_config.return_value.primary_prefix = primary_prefix
         mock_config.return_value.embedding_dimensions = 3
         mock_config.return_value.content_field = "text"
         mock_config.return_value.embedding_field = "embedding"
@@ -157,6 +182,9 @@ def test_add_texts_returns_ids_without_key_prefix() -> None:
 
         vector_store = RedisVectorStore(embeddings=mock_embeddings)
 
-        result = vector_store.add_texts(texts=["hello"], keys=["mykey"])
+        with patch.object(vector_store, "_validate_write_ownership") as validate:
+            result = vector_store.add_texts(texts=["hello"], keys=["mykey"])
 
         assert result == ["mykey"]
+        validate.assert_called_once_with(["myprefix|mykey"])
+        assert mock_index.load.call_args.kwargs["keys"] == ["myprefix|mykey"]

@@ -1,9 +1,11 @@
+from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Optional, Union
 from unittest.mock import Mock, patch
 
 import pytest
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
+from redisvl.redis.utils import hashify  # type: ignore[import]
 
 from langchain_redis import RedisConfig, RedisVectorStore
 
@@ -17,9 +19,7 @@ class MockEmbeddings(Embeddings):
 
 
 class MockField:
-    def __init__(
-        self, name: str, field_type: str, attrs: Optional[Dict[str, Any]] = None
-    ) -> None:
+    def __init__(self, name: str, field_type: str, attrs: Optional[Any] = None) -> None:
         self.name = name
         self.type = field_type
         self.attrs = attrs or {}
@@ -45,6 +45,8 @@ class MockStorage:
 
 
 class MockSearchIndex:
+    last_instance: Optional["MockSearchIndex"] = None
+
     def __init__(
         self,
         schema: Optional[Dict[str, Any]] = None,
@@ -59,12 +61,16 @@ class MockSearchIndex:
                 "attrs": {"dims": 3, "distance_metric": "cosine"},
             },
             "metadata": {"type": "text"},
+            "_index_name": {"type": "tag"},
         }
         self.schema = MockSchema(
             schema["fields"] if schema and "fields" in schema else default_schema  # type: ignore
         )
         self.redis_client = redis_client or Mock()
+        self.client = self.redis_client
+        self.name = "test_index"
         self._storage = MockStorage()
+        type(self).last_instance = self
 
     def create(self, overwrite: bool = False) -> None:
         pass
@@ -114,6 +120,11 @@ class MockSearchIndex:
     def from_dict(cls, dict_data: Dict[str, Any]) -> "MockSearchIndex":
         return cls(schema=dict_data)
 
+    @classmethod
+    def from_existing(cls, name: str, **kwargs: Any) -> "MockSearchIndex":
+        assert cls.last_instance is not None
+        return cls.last_instance
+
     def key(self, id: str) -> str:
         return f"key:{id}"
 
@@ -144,6 +155,7 @@ class TestRedisVectorStore:
                     "attrs": {"dims": 3, "distance_metric": "cosine"},
                 },
                 "metadata": {"type": "text"},
+                "_index_name": {"type": "tag"},
             }
         }
         return config
@@ -161,6 +173,35 @@ class TestRedisVectorStore:
         keys = vector_store.add_texts(texts, metadatas)
         assert len(keys) == 2
         assert all(key.startswith("key_") for key in keys)
+
+    def test_add_texts_uses_each_tag_field_separator(
+        self, vector_store: RedisVectorStore
+    ) -> None:
+        index = MockSearchIndex.last_instance
+        assert index is not None
+        index.schema.fields.update(
+            {
+                "comma_tags": MockField(
+                    "comma_tags", "tag", SimpleNamespace(separator=",")
+                ),
+                "pipe_tags": MockField(
+                    "pipe_tags", "tag", SimpleNamespace(separator="|")
+                ),
+            }
+        )
+
+        vector_store.add_texts(
+            ["document"],
+            metadatas=[
+                {
+                    "comma_tags": ["one", "two"],
+                    "pipe_tags": ["one", "two"],
+                }
+            ],
+        )
+
+        assert index.data[-1]["comma_tags"] == "one,two"
+        assert index.data[-1]["pipe_tags"] == "one|two"
 
     def test_similarity_search(self, vector_store: RedisVectorStore) -> None:
         vector_store.add_texts(["Hello, world!", "Test document"])
@@ -186,7 +227,15 @@ class TestRedisVectorStore:
 
     def test_delete(self, vector_store: RedisVectorStore) -> None:
         keys = vector_store.add_texts(["Hello, world!", "Test document"])
-        result = vector_store.delete(keys)
+        with patch.object(
+            vector_store,
+            "_fetch_records_by_keys",
+            return_value=[
+                {"text": "Hello, world!", "_index_name": hashify("test_index")},
+                {"text": "Test document", "_index_name": hashify("test_index")},
+            ],
+        ):
+            result = vector_store.delete(keys)
         assert result is True
 
     @patch("langchain_redis.vectorstores.RedisVectorStore.add_texts")

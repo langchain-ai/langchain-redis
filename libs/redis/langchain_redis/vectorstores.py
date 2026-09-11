@@ -4,26 +4,46 @@ from __future__ import annotations
 
 import ast
 import json
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Union, cast
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    Union,
+    cast,
+)
 
 import numpy as np
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
 from redisvl.index import SearchIndex  # type: ignore[import]
-from redisvl.query import RangeQuery, VectorQuery  # type: ignore[import]
-from redisvl.query.filter import FilterExpression  # type: ignore[import]
+from redisvl.index.index import BulkResult  # type: ignore[import]
+from redisvl.query import (  # type: ignore[import]
+    AggregateHybridQuery,
+    HybridQuery,
+    RangeQuery,
+    TextQuery,
+    VectorQuery,
+)
+from redisvl.query.filter import FilterExpression, Tag  # type: ignore[import]
 from redisvl.redis.utils import (  # type: ignore[import]
     array_to_buffer,
     buffer_to_array,
     convert_bytes,
+    hashify,
 )
-from redisvl.schema import StorageType  # type: ignore[import]
+from redisvl.schema import FieldTypes, IndexSchema, StorageType  # type: ignore[import]
 
 from langchain_redis.config import RedisConfig
 from langchain_redis.version import __lib_name__
 
 Matrix = Union[List[List[float]], List[np.ndarray], np.ndarray]
+_INDEX_NAME_FIELD = "_index_name"
 
 
 def cosine_similarity(X: Matrix, Y: Matrix) -> np.ndarray:
@@ -144,7 +164,7 @@ class RedisVectorStore(VectorStore):
 
         ```bash
         pip install -qU langchain-redis
-        docker run -p 6379:6379 redis/redis-stack-server:latest
+        docker run -d --name redis -p 6379:6379 redis
         ```
 
     Key init args — indexing params:
@@ -155,9 +175,14 @@ class RedisVectorStore(VectorStore):
         distance_metric: str
             Distance metric to use for similarity search. Default is `'COSINE'`.
         indexing_algorithm: str
-            Indexing algorithm to use. Default is `'FLAT'`.
+            Indexing algorithm to use: `'FLAT'`, `'HNSW'` or `'SVS-VAMANA'`.
+            Default is `'FLAT'`.
         vector_datatype: str
             Data type of the vector. Default is `'FLOAT32'`.
+        vector_attrs: Optional[Dict[str, Any]]
+            Algorithm-specific tuning attributes for the vector field, e.g.
+            `{"ef_runtime": 20}` for HNSW or `{"compression": "LVQ8"}` for
+            SVS-VAMANA. See `RedisConfig.vector_attrs`.
 
     Key init args — client params:
         redis_url: Optional[str]
@@ -300,6 +325,9 @@ class RedisVectorStore(VectorStore):
         self._embeddings = embeddings
         self.ttl = ttl
 
+        # Lazily-probed FT.HYBRID support (None until first hybrid search)
+        self._ft_hybrid_support: Optional[bool] = None
+
         # 3. Determine embedding dimensions if not explicitly set
         if self.config.embedding_dimensions is None:
             sample_text = "The quick brown fox jumps over the lazy dog"
@@ -309,6 +337,7 @@ class RedisVectorStore(VectorStore):
 
         # 4. Initialize the index based on config settings
         redis_client = self.config.redis()
+        key_separator = self.config.key_separator
         if self.config.index_schema:
             # Create index from the provided schema
             self._index = SearchIndex(
@@ -359,21 +388,20 @@ class RedisVectorStore(VectorStore):
             # this behavior is maintained by default via legacy_key_format flag.
             # Set legacy_key_format=False for correct single-colon format.
             # Note: key_prefix is always set by validator, so it's never None here
-            key_prefix = self.config.key_prefix or self.config.index_name
-            if self.config.legacy_key_format:
-                # Legacy format: adds trailing ":" (creates "prefix::doc_id")
-                prefix = f"{key_prefix}:"
-            else:
-                # Correct format: no trailing ":" (creates "prefix:doc_id")
-                prefix = key_prefix
+            prefix = self._schema_key_prefix()
+
+            index_info: Dict[str, Any] = {
+                "name": self.config.index_name,
+                "prefix": prefix,
+                "key_separator": key_separator,
+                "storage_type": self.config.storage_type,
+            }
+            if self.config.stopwords is not None:
+                index_info["stopwords"] = self.config.stopwords
 
             self._index = SearchIndex.from_dict(
                 {
-                    "index": {
-                        "name": self.config.index_name,
-                        "prefix": prefix,
-                        "storage_type": self.config.storage_type,
-                    },
+                    "index": index_info,
                     "fields": [
                         {"name": self.config.content_field, "type": "text"},
                         {
@@ -384,9 +412,14 @@ class RedisVectorStore(VectorStore):
                                 "distance_metric": self.config.distance_metric,
                                 "algorithm": self.config.indexing_algorithm,
                                 "datatype": self.config.vector_datatype,
+                                **(self.config.vector_attrs or {}),
                             },
                         },
-                        {"name": "_index_name", "type": "text"},
+                        {
+                            "name": _INDEX_NAME_FIELD,
+                            "type": "tag",
+                            "attrs": {"case_sensitive": True},
+                        },
                         {"name": "_metadata_json", "type": "text"},
                         *modified_metadata_schema,
                     ],
@@ -395,6 +428,72 @@ class RedisVectorStore(VectorStore):
                 lib_name=__lib_name__,
             )
             self._index.create(overwrite=False)
+
+        # create(overwrite=False) leaves the configured schema unchanged when
+        # the index already exists. Rehydrate it so reads and writes use the
+        # schema that Redis actually retained.
+        if not self.config.from_existing:
+            declared_schema = getattr(self._index, "schema", None)
+            if isinstance(declared_schema, IndexSchema):
+                key_separator = declared_schema.index.key_separator
+            self._index = SearchIndex.from_existing(
+                name=self._index.name,
+                redis_client=self._index.client,
+                lib_name=__lib_name__,
+            )
+        # Redis does not persist RedisVL's client-side key separator, so
+        # FT.INFO cannot reconstruct it when the index is reopened.
+        live_schema = getattr(self._index, "schema", None)
+        if isinstance(live_schema, IndexSchema):
+            live_schema.index.key_separator = key_separator
+        self.config.key_separator = key_separator
+        self._sync_config_with_live_index()
+
+    def _schema_key_prefix(self) -> Union[str, List[str]]:
+        """Return the key prefix to store in the RedisVL schema."""
+        key_prefix = self.config.key_prefix or self.config.index_name
+        legacy_suffix = self._legacy_prefix_suffix()
+
+        if isinstance(key_prefix, list):
+            return [f"{prefix}{legacy_suffix}" for prefix in key_prefix]
+        return f"{key_prefix}{legacy_suffix}"
+
+    def _legacy_prefix_suffix(self) -> str:
+        """Return the suffix used by the historical colon key format."""
+        return (
+            ":"
+            if self.config.legacy_key_format and self.config.key_separator == ":"
+            else ""
+        )
+
+    def _sync_config_with_live_index(self) -> None:
+        """Synchronize schema-owned runtime settings with the live index."""
+        schema = getattr(self._index, "schema", None)
+        if not isinstance(schema, IndexSchema):
+            # Some SearchIndex-compatible test doubles do not expose a complete
+            # RedisVL schema. A real SearchIndex always does.
+            return
+
+        self.config.storage_type = schema.index.storage_type.value
+
+        vector_field = schema.fields.get(self.config.embedding_field)
+        if vector_field is not None and vector_field.type == FieldTypes.VECTOR:
+            self.config.vector_datatype = vector_field.attrs.datatype.value
+
+        def logical_prefix(prefix: str) -> str:
+            # Generated legacy schemas include the key separator in the index
+            # prefix. Keep RedisConfig's logical prefix separator-free so IDs
+            # that already include the legacy leading colon still round-trip.
+            legacy_suffix = self._legacy_prefix_suffix()
+            if legacy_suffix and prefix.endswith(legacy_suffix):
+                return prefix.removesuffix(legacy_suffix)
+            return prefix
+
+        live_prefix = schema.index.prefix
+        if isinstance(live_prefix, list):
+            self.config.key_prefix = [logical_prefix(prefix) for prefix in live_prefix]
+        else:
+            self.config.key_prefix = logical_prefix(live_prefix)
 
     @property
     def index(self) -> SearchIndex:
@@ -405,7 +504,7 @@ class RedisVectorStore(VectorStore):
         return self._embeddings
 
     @property
-    def key_prefix(self) -> Optional[str]:
+    def key_prefix(self) -> Optional[Union[str, List[str]]]:
         return self.config.key_prefix
 
     def add_texts(
@@ -446,6 +545,8 @@ class RedisVectorStore(VectorStore):
                 match the number of `texts`.
             ValueError: If `ids` is provided (via `kwargs`) and its length
                 does not match the number of `texts`.
+            ValueError: If explicit document IDs target an existing record whose
+                ownership does not match this index.
 
         Example:
             ```python
@@ -510,13 +611,15 @@ class RedisVectorStore(VectorStore):
                 )
             keys = ids
 
+        redis_keys = self._redis_keys(keys) if keys else None
+        if redis_keys:
+            self._validate_write_ownership(redis_keys)
+
         # Generate embeddings for all texts
         document_embeddings = self._embeddings.embed_documents(texts_list)
 
         # Check if schema has _index_name and _metadata_json fields
-        has_index_name_field = any(
-            field.name == "_index_name" for field in self._index.schema.fields.values()
-        )
+        index_name_field = self._index.schema.fields.get(_INDEX_NAME_FIELD)
         has_metadata_json_field = any(
             field.name == "_metadata_json"
             for field in self._index.schema.fields.values()
@@ -538,50 +641,41 @@ class RedisVectorStore(VectorStore):
                 ),
             }
 
-            # Only add _index_name if the field exists in the schema
-            if has_index_name_field:
-                record["_index_name"] = self.config.index_name
-
             # Only add _metadata_json if the field exists in the schema
             if has_metadata_json_field:
                 metadata_json = json.dumps(metadata)
                 record["_metadata_json"] = metadata_json
             for field_name, field_value in metadata.items():
+                # _index_name is reserved for the internal ownership marker. The
+                # caller's value remains available through _metadata_json.
+                if field_name == _INDEX_NAME_FIELD:
+                    continue
                 # Skip empty values
                 if field_value is None:
                     continue
                 # Convert lists to tag strings with separator
                 elif isinstance(field_value, list):
-                    record[field_name] = self.config.default_tag_separator.join(
+                    record[field_name] = self._tag_separator(field_name).join(
                         field_value
                     )
                 else:
                     record[field_name] = field_value
+
+            # Assign the protected marker after user metadata so it cannot be
+            # overridden by a conflicting metadata field.
+            if index_name_field is not None:
+                record[_INDEX_NAME_FIELD] = self._index_name_value(
+                    index_name_field.type
+                )
             records.append(record)
 
         # Load records into the index
-        if keys:
-            # Already have key_prefix in index definition (with ending colon)
-            record_keys = [f"{self.config.key_prefix}:{key}" for key in keys]
-            result = self._index.load(records, keys=record_keys, ttl=self.ttl)
+        if redis_keys:
+            result = self._index.load(records, keys=redis_keys, ttl=self.ttl)
         else:
             result = self._index.load(records, ttl=self.ttl)
 
-        if result is None:
-            return []
-
-        # `SearchIndex.load` returns the full Redis keys it wrote, prefix
-        # included. `delete()` and `get_by_ids()` take bare ids and add that
-        # same prefix themselves, so strip it back off here. Otherwise the ids
-        # this method returns can't be passed to either of those without
-        # ending up double-prefixed.
-        if self.config.key_prefix:
-            full_prefix = f"{self.config.key_prefix}:"
-            return [
-                key[len(full_prefix) :] if key.startswith(full_prefix) else key
-                for key in result
-            ]
-        return list(result)
+        return self._ids_from_redis_keys(result or [])
 
     @classmethod
     def from_texts(
@@ -785,6 +879,9 @@ class RedisVectorStore(VectorStore):
 
                 - `redis_url`: URL of the Redis instance to connect to.
                 - `redis_client`: Pre-existing Redis client to use.
+                - `key_separator`: Separator used between the index prefix and
+                    document IDs. Required when reopening an index created with
+                    a non-default separator.
                 - `vector_query_field`: Name of the field containing the vector
                     representations.
                 - `content_field`: Name of the field containing the document content.
@@ -834,119 +931,385 @@ class RedisVectorStore(VectorStore):
         return RedisVectorStore(embedding, config=config, **kwargs)
 
     def delete(self, ids: Optional[List[str]] = None, **kwargs: Any) -> Optional[bool]:
-        """Delete ids from the vector store.
+        """Delete documents by id.
 
         Args:
             ids: Optional list of ids of the documents to delete.
-            **kwargs: Additional keyword arguments (not used in the
-                current implementation).
+            **kwargs: Additional keyword arguments. A non-`None` `filter` is
+                rejected; use `delete_by_filter()` for filter-based deletion.
 
         Returns:
-            Optional[bool]: `True` if one or more keys are deleted, `False` otherwise
+            Optional[bool]: `True` if one or more documents were deleted,
+                `False` otherwise.
+
+        Raises:
+            ValueError: If a non-`None` `filter` argument is provided, or the
+                index schema has no recognized ownership marker.
 
         Example:
             ```python
-            from langchain_redis import RedisVectorStore
-            from langchain_openai import OpenAIEmbeddings
-
-            vector_store = RedisVectorStore(
-                embeddings=OpenAIEmbeddings(),
-                index_name="langchain-demo",
-                redis_url="redis://localhost:6379",
-            )
-
-            # Assuming documents with these ids exist in the store
-            ids_to_delete = ["doc1", "doc2", "doc3"]
-
-            result = vector_store.delete(ids=ids_to_delete)
-            if result:
-                print("Documents were successfully deleted")
-            else:
-                print("No Documents were deleted")
+            vector_store.delete(ids=["doc1", "doc2", "doc3"])
             ```
 
         Note:
-            - If `ids` is `None` or an empty list, the method returns `False`.
-            - If the number of actually deleted keys differs from the number of keys
-                submitted for deletion the method returns `False`
-            - The method uses the `drop_keys` functionality from RedisVL to delete
-                the keys from Redis.
-            - Keys are constructed by prefixing each id with the `key_prefix` specified
-                in the configuration.
+            - If `ids` is omitted or empty, the method returns `False`.
+            - The index must define a TAG or legacy TEXT `_index_name` marker.
+                Only records whose stored marker matches this index are deleted.
+                The ownership check and deletion are currently separate operations.
+            - The ids path uses RedisVL's `drop_keys`; keys are constructed by
+                prefixing each id with the configured primary key prefix.
+            - Use `delete_by_filter()` for explicit filter deletion, exact
+                counts, and dry-run support.
         """
+        filter = kwargs.get("filter")
+        if filter is not None:
+            raise ValueError(
+                "delete(filter=...) is not supported. Use delete_by_filter() "
+                "for filter-based deletion."
+            )
         if ids and len(ids) > 0:
-            if self.config.key_prefix:
-                keys = [f"{self.config.key_prefix}:{_id}" for _id in ids]
-            else:
-                keys = ids
+            keys = self._redis_keys(ids)
+            expected_marker = self._require_index_name_marker("delete()")
+            records = self._fetch_records_by_keys(keys)
+            keys = [
+                key
+                for key, record in zip(keys, records)
+                if record and self._record_belongs_to_index(record, expected_marker)
+            ]
+            if not keys:
+                return False
             # Always return True if we delete at least one key
             # This matches the behavior expected by the tests
             return self._index.drop_keys(keys) > 0
         else:
             return False
 
+    def delete_by_filter(
+        self,
+        filter: FilterExpression,
+        *,
+        dry_run: bool = False,
+        batch_size: Optional[int] = None,
+    ) -> BulkResult:
+        """Delete every document in this index matching a filter expression.
+
+        Args:
+            filter: RedisVL `FilterExpression` selecting the documents to
+                delete — the same filter builder style accepted by
+                `similarity_search`, including wildcard tag patterns like
+                `Tag("source") % "docs-v1*"`. Raw filter strings are not
+                accepted for mutating operations because they cannot be
+                safely combined with the internal index-scoping filter.
+            dry_run: If `True`, nothing is deleted and the returned result
+                reports how many documents would be processed.
+            batch_size: Optional number of documents to resolve and delete
+                per round-trip.
+
+        Returns:
+            RedisVL's `BulkResult`, including the number of matching and
+            processed documents, whether the operation completed, and whether
+            it was a dry run.
+
+        Example:
+            ```python
+            from redisvl.query.filter import Tag
+
+            # Preview a purge, then run it
+            preview = vector_store.delete_by_filter(
+                Tag("tenant_id") == "acme", dry_run=True
+            )
+            print(preview.matched)
+
+            result = vector_store.delete_by_filter(Tag("tenant_id") == "acme")
+            print(result.processed, result.completed)
+            ```
+
+        Note:
+            - Generated schemas use an exact `_index_name` TAG marker to keep
+                indexes sharing a `key_prefix` from deleting each other's data.
+                Existing or custom schemas without that TAG marker are refused;
+                recreate or migrate the index before using filter deletion.
+                Custom TAG markers containing raw index names must also be
+                reindexed with the current hashed marker values; changing only
+                the field type is not sufficient. Legacy TEXT markers remain
+                readable, but cannot be used for filter deletion.
+            - Use RedisVL filter builders such as `Tag`, `Num`, or `Text`
+                instead of raw RediSearch filter strings.
+            - Filters that render to Redis's global match-all expression are
+                refused; use `index.clear()` for an intentional full-index
+                operation.
+        """
+        scoped_filter = self._prepare_bulk_filter(filter, "delete_by_filter")
+        bulk_kwargs: Dict[str, Any] = {"dry_run": dry_run}
+        if batch_size is not None:
+            bulk_kwargs["batch_size"] = batch_size
+        return self._index.drop_by_filter(scoped_filter, **bulk_kwargs)
+
+    def _prepare_bulk_filter(
+        self,
+        filter: Optional[FilterExpression],
+        operation: str,
+    ) -> FilterExpression:
+        """Validate and scope a destructive bulk-operation filter.
+
+        Filter deletion requires a RedisVL `FilterExpression` so the user's
+        filter can be combined with the internal `_index_name` guard before
+        any mutation is sent to Redis. Filters that render to Redis's global
+        match-all expression (`*`) are intentionally rejected as a safety
+        guardrail; use `index.clear()` for an intentional full-index operation.
+        """
+        if filter is None:
+            raise ValueError(
+                f"{operation} requires a RedisVL FilterExpression. To delete "
+                "specific documents use delete(ids=...)."
+            )
+        if not isinstance(filter, FilterExpression):
+            raise ValueError(
+                f"{operation} strictly requires a RedisVL FilterExpression. "
+                "Use filter builders like Tag, Num, or Text instead of raw strings."
+            )
+
+        # Validate before adding the index guard; otherwise `*` becomes a scoped
+        # expression and bypasses RedisVL's match-all protection.
+        try:
+            rendered_filter = str(filter).strip()
+        except ValueError as exc:
+            raise ValueError(
+                f"{operation} requires a specific, initialized filter expression."
+            ) from exc
+
+        match_all_candidate = rendered_filter
+        while match_all_candidate.startswith("(") and match_all_candidate.endswith(")"):
+            match_all_candidate = match_all_candidate[1:-1].strip()
+        if match_all_candidate in ("", "*"):
+            raise ValueError(
+                f"{operation} refuses filters that match all documents. "
+                "Use index.clear() for an intentional full-index operation."
+            )
+
+        return filter & self._require_exact_index_name_filter()
+
+    def _index_name_value(self, field_type: FieldTypes) -> str:
+        """Return the stored and queried value for the index marker."""
+        if field_type == FieldTypes.TAG:
+            return hashify(self._index.name)
+        return self._index.name
+
+    def _index_name_marker_from_schema(
+        self, schema: Optional[IndexSchema] = None
+    ) -> Optional[str]:
+        """Derive the ownership marker from an index schema."""
+        source_schema = schema if schema is not None else self._index.schema
+        field = source_schema.fields.get(_INDEX_NAME_FIELD)
+        if field is None or field.type not in (FieldTypes.TAG, FieldTypes.TEXT):
+            return None
+        return self._index_name_value(field.type)
+
+    def _require_index_name_marker(self, operation: str) -> str:
+        """Return the ownership marker or refuse an unverifiable ID operation."""
+        try:
+            marker = self._index_name_marker_from_schema()
+        except Exception as exc:
+            raise ValueError(
+                f"{operation} could not inspect the index schema; the operation "
+                "was refused."
+            ) from exc
+
+        if marker is None:
+            raise ValueError(
+                f"{operation} requires an '_index_name' TAG or legacy TEXT "
+                "ownership marker. Recreate or migrate this index before using "
+                "direct-ID operations."
+            )
+        return marker
+
+    @staticmethod
+    def _record_belongs_to_index(record: Dict[str, Any], expected_marker: str) -> bool:
+        """Return whether a fetched record belongs to the current index."""
+        return record.get(_INDEX_NAME_FIELD) == expected_marker
+
+    def _redis_keys(self, ids: Sequence[str]) -> List[str]:
+        """Construct Redis keys using the live RedisVL index schema."""
+        return [self._index.key(document_id) for document_id in ids]
+
+    def _validate_write_ownership(self, redis_keys: Sequence[str]) -> None:
+        """Refuse explicit-key writes to records owned by another index.
+
+        Markerless schemas retain their existing write behavior. The ownership
+        read and RedisVL write are separate operations; atomic enforcement is
+        deferred to a dedicated follow-up.
+        """
+        try:
+            expected_marker = self._index_name_marker_from_schema(
+                self._live_index_schema()
+            )
+        except Exception as exc:
+            raise ValueError(
+                "add_texts() could not inspect the live index schema; the write "
+                "was refused."
+            ) from exc
+        if expected_marker is None:
+            return
+
+        records = self._fetch_records_by_keys(redis_keys)
+        if len(records) != len(redis_keys):
+            raise ValueError(
+                "add_texts() could not verify ownership for every document ID."
+            )
+
+        if any(
+            record is not None
+            and not self._record_belongs_to_index(record, expected_marker)
+            for record in records
+        ):
+            raise ValueError(
+                "add_texts() cannot overwrite one or more existing documents "
+                "because their index ownership could not be verified."
+            )
+
+    def _ids_from_redis_keys(self, redis_keys: Sequence[str]) -> List[str]:
+        """Convert RedisVL Redis keys back into vector-store document IDs."""
+        key_prefix = self._index.key("")
+        return [key.removeprefix(key_prefix) for key in redis_keys]
+
+    def _tag_separator(self, field_name: str) -> str:
+        """Return a TAG field's live schema separator, or the configured default."""
+        field = self._index.schema.fields.get(field_name)
+        if field is not None and field.type == FieldTypes.TAG:
+            return field.attrs.separator
+        return self.config.default_tag_separator
+
+    def _fetch_records_by_keys(
+        self, keys: Sequence[str]
+    ) -> List[Optional[Dict[str, Any]]]:
+        """Fetch raw HASH or JSON records for ownership validation."""
+        if not keys:
+            return []
+
+        redis = self._index.client
+        with redis.pipeline(transaction=False) as pipe:
+            if self.config.storage_type == StorageType.JSON.value:
+                json_pipe = pipe.json()
+                for key in keys:
+                    json_pipe.get(key, ".")
+            else:
+                for key in keys:
+                    pipe.hgetall(key)
+            records = pipe.execute()
+
+        if self.config.storage_type == StorageType.JSON.value:
+            return cast(List[Optional[Dict[str, Any]]], convert_bytes(records))
+        return [convert_bytes(record) if record else None for record in records]
+
+    def _build_index_name_filter(
+        self,
+        schema: IndexSchema,
+    ) -> Optional[FilterExpression]:
+        """Build an exact index namespace filter from the provided schema."""
+        field = schema.fields.get(_INDEX_NAME_FIELD)
+        if field is None or field.type != FieldTypes.TAG:
+            return None
+
+        return Tag(_INDEX_NAME_FIELD) == self._index_name_value(field.type)
+
+    def _live_index_schema(self) -> IndexSchema:
+        """Fetch the schema currently installed in Redis."""
+        return SearchIndex.from_existing(
+            name=self._index.name,
+            redis_client=self._index.client,
+            lib_name=__lib_name__,
+        ).schema
+
+    def _require_exact_index_name_filter(self) -> FilterExpression:
+        """Return an exact TAG scope or refuse filter-based deletion."""
+        try:
+            field = self._live_index_schema().fields.get(_INDEX_NAME_FIELD)
+        except Exception as exc:
+            raise ValueError(
+                "delete_by_filter() could not inspect the live index schema; "
+                "the deletion was refused."
+            ) from exc
+
+        if field is None or field.type != FieldTypes.TAG:
+            raise ValueError(
+                "delete_by_filter() requires an '_index_name' TAG field. "
+                "Recreate or migrate this index before using filter deletion."
+            )
+
+        if field.attrs.no_index:
+            raise ValueError(
+                "delete_by_filter() requires the '_index_name' TAG field to be "
+                "indexed. Recreate or migrate this index before using filter "
+                "deletion."
+            )
+
+        marker = hashify(self._index.name)
+        if field.attrs.separator and field.attrs.separator in marker:
+            raise ValueError(
+                "delete_by_filter() cannot safely use the '_index_name' TAG "
+                "separator because it splits the index ownership marker. "
+                "Recreate or migrate this index with a compatible separator."
+            )
+
+        return Tag(_INDEX_NAME_FIELD) == marker
+
+    def _with_index_name_filter(
+        self, filter: Optional[Union[str, FilterExpression]]
+    ) -> FilterExpression:
+        """Restrict every search to documents owned by the current index."""
+        try:
+            index_filter = self._build_index_name_filter(self._index.schema)
+        except Exception as exc:
+            raise ValueError(
+                "Search could not inspect the index schema; the query was refused."
+            ) from exc
+
+        if index_filter is None:
+            raise ValueError(
+                "Search requires an exact '_index_name' TAG field. Recreate or "
+                "migrate this index before searching."
+            )
+        if filter is None:
+            return index_filter
+        if isinstance(filter, str):
+            rendered_filter = filter.strip()
+            if not rendered_filter or rendered_filter == "*":
+                return index_filter
+            # RedisVL accepts trusted raw query strings. Group the complete raw
+            # expression before intersecting it with the ownership marker.
+            filter = FilterExpression(f"({rendered_filter})")
+        return filter & index_filter
+
     def _query_builder(
         self,
         embedding: Union[List[float], bytes],
+        filter_expression: FilterExpression,
         k: int = 10,
         distance_threshold: Any = None,
         sort_by: Optional[str] = None,
-        filter: Optional[Union[str, FilterExpression]] = None,
         return_fields: Optional[List[str]] = None,
     ) -> Union[VectorQuery, RangeQuery]:
-        # Add a filter to restrict search to the current index
-        # This is needed to ensure we only get results from the current index
-        # when multiple indexes share the same key_prefix
-        # Only apply the _index_name filter if we have the field in the schema
-        try:
-            # Check if we have an _index_name field in the schema
-            has_index_name_field = False
-            for field in self._index.schema.fields.values():
-                if field.name == "_index_name":
-                    has_index_name_field = True
-                    break
-
-            if has_index_name_field:
-                # Apply the filter since we have the field
-                from redisvl.query.filter import Text
-
-                index_filter = Text("_index_name") == self.config.index_name
-                if filter is not None:
-                    if hasattr(filter, "__and__"):
-                        filter = filter & index_filter
-                    else:
-                        # Don't apply the filter if we can't combine it safely
-                        pass
-                else:
-                    filter = index_filter
-        except Exception:
-            # If any issues occur, just use the original filter
-            pass
+        query_kwargs: Dict[str, Any] = {
+            "vector": embedding,
+            "vector_field_name": self.config.embedding_field,
+            "return_fields": return_fields,
+            "num_results": k,
+            "filter_expression": filter_expression,
+            "sort_by": sort_by,
+            "dtype": self.config.vector_datatype.lower(),
+        }
         if distance_threshold is None:
-            return VectorQuery(
-                vector=embedding,
-                vector_field_name=self.config.embedding_field,
-                return_fields=return_fields,
-                num_results=k,
-                filter_expression=filter,
-                sort_by=sort_by,
-            )
-        else:
-            return RangeQuery(
-                vector=embedding,
-                vector_field_name=self.config.embedding_field,
-                return_fields=return_fields,
-                num_results=k,
-                filter_expression=filter,
-                distance_threshold=distance_threshold,
-                sort_by=sort_by,
-            )
+            return VectorQuery(**query_kwargs)
+        return RangeQuery(
+            **query_kwargs,
+            distance_threshold=distance_threshold,
+        )
 
     def similarity_search_by_vector(
         self,
         embedding: List[float],
         k: int = 4,
-        filter: Optional[FilterExpression] = None,
+        filter: Optional[Union[str, FilterExpression]] = None,
         sort_by: Optional[str] = None,
         **kwargs: Any,
     ) -> List[Document]:
@@ -955,7 +1318,8 @@ class RedisVectorStore(VectorStore):
         Args:
             embedding: Embedding to look up documents similar to.
             k: Number of `Document` objects to return.
-            filter: Optional `filter` expression to apply.
+            filter: Optional RedisVL `FilterExpression` or trusted raw Redis
+                query string to apply.
             sort_by: Optional `sort_by` expression to apply.
             **kwargs: Other keyword arguments.
 
@@ -971,6 +1335,7 @@ class RedisVectorStore(VectorStore):
         Returns:
             List of `Document` objects most similar to the query vector.
         """
+        filter_expression = self._with_index_name_filter(filter)
         return_metadata = kwargs.get("return_metadata", True)
         distance_threshold = kwargs.get("distance_threshold", None)
         return_all = kwargs.get("return_all", False)
@@ -992,7 +1357,7 @@ class RedisVectorStore(VectorStore):
             embedding=embedding,
             k=k,
             sort_by=sort_by,
-            filter=filter,
+            filter_expression=filter_expression,
             return_fields=return_fields,
         )
 
@@ -1040,7 +1405,7 @@ class RedisVectorStore(VectorStore):
         self,
         query: str,
         k: int = 4,
-        filter: Optional[FilterExpression] = None,
+        filter: Optional[Union[str, FilterExpression]] = None,
         sort_by: Optional[str] = None,
         **kwargs: Any,
     ) -> List[Document]:
@@ -1049,7 +1414,9 @@ class RedisVectorStore(VectorStore):
         Args:
             query: Text to look up documents similar to.
             k: Number of `Document` objects to return.
-            filter: Optional `filter` expression to apply.
+            filter: Optional RedisVL `FilterExpression` or trusted raw Redis
+                query string to apply. Tag filters support wildcard patterns
+                via the modulo operator, e.g. `Tag("category") % "elec*"`.
             sort_by: Optional `sort_by` expression to apply.
             **kwargs: Other keyword arguments to pass to the search function.
 
@@ -1058,6 +1425,278 @@ class RedisVectorStore(VectorStore):
         """
         embedding = self._embeddings.embed_query(query)
         return self.similarity_search_by_vector(embedding, k, filter, sort_by, **kwargs)
+
+    def _default_return_fields(self, return_metadata: bool) -> List[str]:
+        """Return fields for search queries: content plus indexed metadata."""
+        return_fields = [self.config.content_field]
+        if return_metadata:
+            return_fields += [
+                field.name
+                for field in self._index.schema.fields.values()
+                if field.name
+                not in [self.config.embedding_field, self.config.content_field]
+            ]
+        return return_fields
+
+    def _supports_ft_hybrid(self) -> Optional[bool]:
+        """Whether the server supports `FT.HYBRID` (Redis >= 8.4.0).
+
+        Returns `None` when the server version cannot be determined. The
+        result is cached on the instance after the first successful probe.
+        """
+        if self._ft_hybrid_support is None:
+            try:
+                info = self._index.client.info("server")
+                version = str(info.get("redis_version", ""))
+                major, minor = (int(part) for part in version.split(".")[:2])
+                self._ft_hybrid_support = (major, minor) >= (8, 4)
+            except Exception:
+                return None
+        return self._ft_hybrid_support
+
+    def _resolve_hybrid_options(
+        self,
+        method: str,
+        combination_method: str,
+        alpha: Optional[float],
+    ) -> Tuple[str, str, Optional[float]]:
+        """Normalize and validate hybrid-search options and select an engine."""
+        method = method.lower()
+        combination_method = combination_method.upper()
+
+        if method not in ("auto", "ft_hybrid", "aggregate"):
+            raise ValueError(
+                f"Unknown hybrid search method: {method!r}. "
+                "Expected 'auto', 'ft_hybrid' or 'aggregate'."
+            )
+        if combination_method not in ("LINEAR", "RRF"):
+            raise ValueError(
+                f"Unknown combination method: {combination_method!r}. "
+                "Expected 'LINEAR' or 'RRF'."
+            )
+
+        if combination_method == "LINEAR":
+            alpha = 0.7 if alpha is None else alpha
+            if not 0 < alpha < 1:
+                raise ValueError(
+                    "alpha must be strictly between 0 and 1 for LINEAR fusion."
+                )
+        elif alpha is not None:
+            raise ValueError("alpha cannot be used with RRF fusion.")
+
+        if method == "aggregate":
+            if combination_method == "RRF":
+                raise ValueError(
+                    "RRF fusion is unavailable with method='aggregate'. "
+                    "Use LINEAR or method='ft_hybrid'."
+                )
+            return method, combination_method, alpha
+
+        supports_ft_hybrid = self._supports_ft_hybrid()
+        if method == "ft_hybrid":
+            if supports_ft_hybrid is False:
+                raise ValueError(
+                    "method='ft_hybrid' requires Redis >= 8.4.0 (the FT.HYBRID "
+                    "command). Use method='aggregate' on older servers."
+                )
+            return method, combination_method, alpha
+
+        if supports_ft_hybrid:
+            return "ft_hybrid", combination_method, alpha
+        if combination_method == "RRF":
+            raise ValueError(
+                "RRF fusion requires Redis >= 8.4.0 and cannot use the "
+                "aggregate fallback."
+            )
+        return "aggregate", combination_method, alpha
+
+    def hybrid_search_with_score(
+        self,
+        query: str,
+        k: int = 4,
+        filter: Optional[Union[str, FilterExpression]] = None,
+        *,
+        text_field: Optional[str] = None,
+        method: str = "auto",
+        combination_method: str = "LINEAR",
+        alpha: Optional[float] = None,
+        text_scorer: str = "BM25STD",
+        text_weights: Optional[Dict[str, float]] = None,
+        stopwords: Optional[Union[str, Set[str]]] = "english",
+        return_metadata: bool = True,
+    ) -> List[Tuple[Document, float]]:
+        """Return docs scored by combined full-text and vector similarity.
+
+        Args:
+            query: Query text. It is used both for full-text scoring and,
+                embedded, for vector similarity.
+            k: Number of `Document` objects to return.
+            filter: Optional RedisVL `FilterExpression` or trusted raw Redis
+                query string to apply.
+            text_field: Text field to search in. Defaults to the configured
+                `content_field`.
+            method: `'ft_hybrid'` uses the `FT.HYBRID` command (Redis 8.4+),
+                `'aggregate'` uses an `FT.AGGREGATE`-based combination that
+                works on any Redis with the Query Engine. `'auto'` (default)
+                probes the server version and picks accordingly.
+            combination_method: `'LINEAR'` (default) or `'RRF'` (reciprocal
+                rank fusion). RRF requires native `FT.HYBRID` support.
+            alpha: Weight of the vector similarity in linear combination:
+                `score = alpha * vector_score + (1 - alpha) * text_score`.
+                Defaults to 0.7 for LINEAR and must be strictly between 0 and
+                1. Do not provide it with RRF.
+            text_scorer: Full-text scoring algorithm (default `'BM25STD'`).
+            text_weights: Optional per-word importance weights for the
+                full-text part of the query.
+            stopwords: Stopwords to strip from the query text client-side.
+                Language string, set of words, or `None` to disable.
+            return_metadata: Whether to return metadata with the documents.
+
+        Returns:
+            List of `(Document, score)` tuples, best first. Higher scores
+            are better. Scores are combined hybrid scores — rank-based for
+            `'RRF'`, weighted sums for linear combination — and are not
+            comparable with the cosine distances returned by
+            `similarity_search_with_score`.
+
+        Example:
+            ```python
+            from redisvl.query.filter import Tag
+
+            results = vector_store.hybrid_search_with_score(
+                "durable message queue",
+                k=5,
+                filter=Tag("category") == "infra",
+                alpha=0.5,
+            )
+            for doc, score in results:
+                print(score, doc.page_content)
+            ```
+        """
+        filter = self._with_index_name_filter(filter)
+        resolved, combination_method, alpha = self._resolve_hybrid_options(
+            method, combination_method, alpha
+        )
+
+        embedding = self._embeddings.embed_query(query)
+        return_fields = self._default_return_fields(return_metadata)
+        dtype = self.config.vector_datatype.lower()
+        text_field = text_field or self.config.content_field
+
+        query_kwargs: Dict[str, Any] = {
+            "text": query,
+            "text_field_name": text_field,
+            "vector": embedding,
+            "vector_field_name": self.config.embedding_field,
+            "text_scorer": text_scorer,
+            "filter_expression": filter,
+            "dtype": dtype,
+            "num_results": k,
+            "return_fields": return_fields,
+            "stopwords": stopwords,
+            "text_weights": text_weights,
+        }
+
+        hybrid_query: Union[HybridQuery, AggregateHybridQuery]
+        if resolved == "ft_hybrid":
+            native_kwargs: Dict[str, Any] = {
+                "combination_method": combination_method,
+                "yield_combined_score_as": "hybrid_score",
+            }
+            if combination_method == "LINEAR":
+                assert alpha is not None
+                # Our alpha weights the vector score; FT.HYBRID's linear_alpha
+                # weights the text score.
+                native_kwargs["linear_alpha"] = 1 - alpha
+            hybrid_query = HybridQuery(**query_kwargs, **native_kwargs)
+        else:
+            assert alpha is not None
+            hybrid_query = AggregateHybridQuery(**query_kwargs, alpha=alpha)
+
+        results = self._index.query(hybrid_query)
+
+        docs_with_scores = []
+        for res in results:
+            score = float(res.get("hybrid_score", 0.0))
+            doc_fields = {
+                key: value
+                for key, value in res.items()
+                if key not in ("hybrid_score", "text_score", "vector_similarity")
+            }
+            doc = self._build_document_from_result(doc_fields)
+            if not return_metadata:
+                doc.metadata = {}
+            docs_with_scores.append((doc, score))
+        return docs_with_scores
+
+    def hybrid_search(
+        self,
+        query: str,
+        k: int = 4,
+        filter: Optional[Union[str, FilterExpression]] = None,
+        **kwargs: Any,
+    ) -> List[Document]:
+        """Return docs ranked by combined full-text and vector similarity.
+
+        Args:
+            query: Query text, used for both full-text and vector scoring.
+            k: Number of `Document` objects to return.
+            filter: Optional RedisVL `FilterExpression` or trusted raw Redis
+                query string to apply.
+            **kwargs: See `hybrid_search_with_score` for the remaining
+                keyword arguments (`method`, `combination_method`, `alpha`,
+                `text_field`, `text_scorer`, `text_weights`, `stopwords`,
+                `return_metadata`).
+
+        Returns:
+            List of `Document` objects, best first.
+        """
+        return [
+            doc for doc, _ in self.hybrid_search_with_score(query, k, filter, **kwargs)
+        ]
+
+    def full_text_search(
+        self,
+        query: str,
+        k: int = 4,
+        filter: Optional[Union[str, FilterExpression]] = None,
+        *,
+        text_fields: Optional[Union[str, Dict[str, float]]] = None,
+        text_scorer: str = "BM25STD",
+        stopwords: Optional[Union[str, Set[str]]] = "english",
+        return_metadata: bool = True,
+    ) -> List[Document]:
+        """Return docs matching the query by full-text relevance only.
+
+        Args:
+            query: Full-text query string.
+            k: Number of `Document` objects to return.
+            filter: Optional RedisVL `FilterExpression` or trusted raw Redis
+                query string to apply.
+            text_fields: Text field to search in, or a mapping of field
+                names to weights (e.g. `{"title": 5.0, "text": 1.0}`).
+                Defaults to the configured `content_field`.
+            text_scorer: Full-text scoring algorithm (default `'BM25STD'`).
+            stopwords: Stopwords to strip from the query text client-side.
+                Language string, set of words, or `None` to disable.
+            return_metadata: Whether to return metadata with the documents.
+
+        Returns:
+            List of `Document` objects, best first.
+        """
+        text_query = TextQuery(
+            text=query,
+            text_field_name=text_fields or self.config.content_field,
+            text_scorer=text_scorer,
+            filter_expression=self._with_index_name_filter(filter),
+            return_fields=self._default_return_fields(return_metadata),
+            num_results=k,
+            return_score=False,
+            stopwords=stopwords,
+        )
+
+        results = self._index.query(text_query)
+        return cast(List[Document], self._prepare_docs(False, results, return_metadata))
 
     def _build_document_from_result(self, res: Dict[str, Any]) -> Document:
         """Build a `Document` object from a Redis search result."""
@@ -1216,7 +1855,7 @@ class RedisVectorStore(VectorStore):
         self,
         embedding: List[float],
         k: int = 4,
-        filter: Optional[FilterExpression] = None,
+        filter: Optional[Union[str, FilterExpression]] = None,
         sort_by: Optional[str] = None,
         **kwargs: Any,
     ) -> Sequence[Any]:
@@ -1225,7 +1864,8 @@ class RedisVectorStore(VectorStore):
         Args:
             embedding: Embedding to look up documents similar to.
             k: Number of `Document` objects to return.
-            filter: Optional `filter` expression to apply.
+            filter: Optional RedisVL `FilterExpression` or trusted raw Redis
+                query string to apply.
             sort_by: Optional `sort_by` expression to apply.
             **kwargs: Other keyword arguments.
 
@@ -1242,6 +1882,7 @@ class RedisVectorStore(VectorStore):
             List of tuples of `Document` objects most similar to the query vector,
                 score, and optionally the document vector.
         """
+        filter_expression = self._with_index_name_filter(filter)
         with_vectors = kwargs.get("with_vectors", False)
         return_metadata = kwargs.get("return_metadata", True)
         distance_threshold = kwargs.get("distance_threshold")
@@ -1267,7 +1908,7 @@ class RedisVectorStore(VectorStore):
             embedding=embedding,
             k=k,
             sort_by=sort_by,
-            filter=filter,
+            filter_expression=filter_expression,
             return_fields=return_fields,
         )
 
@@ -1325,7 +1966,7 @@ class RedisVectorStore(VectorStore):
         self,
         query: str,
         k: int = 4,
-        filter: Optional[FilterExpression] = None,
+        filter: Optional[Union[str, FilterExpression]] = None,
         sort_by: Optional[str] = None,
         **kwargs: Any,
     ) -> Sequence[Any]:
@@ -1334,7 +1975,8 @@ class RedisVectorStore(VectorStore):
         Args:
             query: Text to look up documents similar to.
             k: Number of `Document` objects to return.
-            filter: Optional `filter` expression to apply to the query.
+            filter: Optional RedisVL `FilterExpression` or trusted raw Redis
+                query string to apply to the query.
             sort_by: Optional `sort_by` expression to apply to the query.
             **kwargs: Other keyword arguments to pass to the search function.
 
@@ -1490,7 +2132,9 @@ class RedisVectorStore(VectorStore):
         document in the vector store.
 
         Fewer documents may be returned than requested if some IDs are not found or
-        if there are duplicated IDs.
+        if there are duplicated IDs. Records owned by another index that shares the
+        same key prefix are also omitted. The schema must define a recognized
+        TAG or legacy TEXT `_index_name` ownership marker.
 
         Users should not assume that the order of the returned documents matches
         the order of the input IDs. Instead, users should rely on the ID field of the
@@ -1505,28 +2149,24 @@ class RedisVectorStore(VectorStore):
         Returns:
             List of `Document` objects.
 
+        Raises:
+            ValueError: If the index schema has no recognized ownership marker.
+
         !!! version-added "Added in `langchain-redis` 0.1.2"
         """
-        redis = self.config.redis()
-        if self.config.key_prefix:
-            full_ids = [f"{self.config.key_prefix}:{_id}" for _id in ids]
-        else:
-            full_ids = list(ids)
-        if self.config.storage_type == StorageType.JSON.value:
-            values = redis.json().mget(full_ids, ".")
-        else:
-            pipe = redis.pipeline()
-            for id_ in full_ids:
-                pipe.hgetall(id_)
-            values = pipe.execute()
+        if not ids:
+            return []
+
+        expected_marker = self._require_index_name_marker("get_by_ids()")
+        full_ids = self._redis_keys(ids)
+        values = self._fetch_records_by_keys(full_ids)
         documents = []
         for id_, value in zip(ids, values):
             if value is None or not value:
                 continue
-            if self.config.storage_type == StorageType.JSON.value:
-                doc = cast(dict, value)
-            else:
-                doc = convert_bytes(value)
+            doc = value
+            if not self._record_belongs_to_index(doc, expected_marker):
+                continue
             # Process metadata the same way we do in _build_document_from_result
             metadata = {}
             if "_metadata_json" in doc:
