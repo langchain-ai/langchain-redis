@@ -1133,6 +1133,11 @@ def test_similarity_search_by_vector_with_extra_fields(redis_url: str) -> None:
         {
             "index": {"name": index_name, "storage_type": "json"},
             "fields": [
+                {
+                    "name": "_index_name",
+                    "type": "tag",
+                    "attrs": {"case_sensitive": True},
+                },
                 {"name": "indexed_metadata", "type": "text"},
                 {"name": "text", "type": "text"},
                 {
@@ -1226,6 +1231,11 @@ def test_similarity_search_with_score_by_vector_with_extra_fields(
         {
             "index": {"name": index_name, "storage_type": "json"},
             "fields": [
+                {
+                    "name": "_index_name",
+                    "type": "tag",
+                    "attrs": {"case_sensitive": True},
+                },
                 {"name": "indexed_metadata", "type": "text"},
                 {"name": "text", "type": "text"},
                 {

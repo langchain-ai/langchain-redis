@@ -87,17 +87,19 @@ jobs:
       - build
       - test-pypi-publish
     runs-on: ubuntu-latest
+    env:
+      REDIS_IMAGE: ${{ matrix.redis-image }}
     strategy:
       matrix:
         python-version:
-          - "3.9"
           - "3.10"
           - "3.11"
           - "3.12"
-        redis-stack-version: ['latest']
+          - "3.13"
+        redis-image: ['redis:8.2', 'redis:8.4', 'redis:latest']
     services:
       redis:
-        image: redis/redis-stack-server:${{matrix.redis-stack-version}}
+        image: ${{ matrix.redis-image }}
         ports:
           - 6379:6379
 
@@ -120,7 +122,7 @@ jobs:
       - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
         uses: "./.github/actions/poetry_setup"
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: ${{ matrix.python-version }}
           poetry-version: ${{ env.POETRY_VERSION }}
           working-directory: ${{ inputs.working-directory }}
 

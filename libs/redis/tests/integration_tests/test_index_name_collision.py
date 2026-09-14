@@ -171,14 +171,10 @@ def test_index_namespace_isolation(redis_url: str) -> None:
     vector_store2.index.delete(drop=True)
 
 
-def test_custom_schema_without_index_name_field(redis_url: str) -> None:
-    """Test that custom schema without _index_name field still works correctly.
-
-    This reproduces issue #88 where documents added with a custom schema
-    that doesn't include the _index_name field fail to be retrieved because
-    the code tried to populate and filter by _index_name even when it wasn't
-    in the schema.
-    """
+def test_custom_schema_without_index_name_field_refuses_search(
+    redis_url: str,
+) -> None:
+    """Custom schemas must provide the marker required for isolated search."""
     # Create a custom schema without _index_name field
     suffix = os.urandom(4).hex()
     index_name = f"test_custom_schema_{suffix}"
@@ -222,22 +218,20 @@ def test_custom_schema_without_index_name_field(redis_url: str) -> None:
     ]
     vector_store.add_documents(docs)
 
-    # Try to search - this should work even without _index_name field
-    results = vector_store.similarity_search("Test", k=2)
-
-    # Should find both documents
-    assert len(results) == 2
-    assert all("Test document" in doc.page_content for doc in results)
-
-    # Clean up
-    vector_store.index.delete(drop=True)
+    try:
+        with pytest.raises(
+            ValueError, match="requires an exact '_index_name' TAG field"
+        ):
+            vector_store.similarity_search("Test", k=2)
+    finally:
+        vector_store.index.delete(drop=True)
 
 
-def test_custom_schema_with_index_name_field(redis_url: str) -> None:
-    """Test that custom schema WITH _index_name field works correctly.
+def test_custom_schema_with_tag_index_name_field(redis_url: str) -> None:
+    """Test that a custom schema with an exact TAG marker works correctly.
 
-    This verifies that when users explicitly include _index_name in their
-    custom schema, it gets populated and used for filtering as expected.
+    This verifies that when users explicitly include a TAG _index_name field
+    in their custom schema, it gets populated and used for exact filtering.
     """
     # Create a custom schema WITH _index_name field
     suffix = os.urandom(4).hex()
@@ -262,7 +256,7 @@ def test_custom_schema_with_index_name_field(redis_url: str) -> None:
                         "datatype": "FLOAT32",
                     },
                 },
-                {"name": "_index_name", "type": "text"},
+                {"name": "_index_name", "type": "tag"},
                 {"name": "_metadata_json", "type": "text"},
             ],
         }
