@@ -297,11 +297,11 @@ def test_search_rejects_schema_inspection_failure_before_redis(
     assert FakeSearchIndex.info_calls == 0
 
 
-def test_similarity_search_scopes_raw_string_filter(
+def test_similarity_search_scopes_filter_expression(
     store: RedisVectorStore,
 ) -> None:
-    """RedisVL-compatible raw filters are grouped with index ownership."""
-    store.similarity_search(QUERY, filter="@category:{pets}")
+    """RedisVL filter expressions are grouped with index ownership."""
+    store.similarity_search(QUERY, filter=Tag(CATEGORY_FIELD) == CATEGORY_VALUE)
 
     rendered_filter = str(_captured(store).filter)
     assert "@category:{pets}" in rendered_filter

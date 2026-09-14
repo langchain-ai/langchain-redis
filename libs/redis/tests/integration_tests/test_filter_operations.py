@@ -325,28 +325,88 @@ def test_shared_prefix_deletion_uses_search_index_name(
         store_b.index.delete(drop=True)
 
 
-def test_shared_prefix_raw_string_filter_remains_index_scoped(redis_url: str) -> None:
-    """A raw union filter cannot widen a search beyond its logical index."""
-    shared_prefix = f"filter_ops_raw_{uuid4().hex[:8]}"
+def test_shared_prefix_filter_union_remains_index_scoped(redis_url: str) -> None:
+    """A RedisVL-built union cannot widen a search beyond its logical index."""
+    shared_prefix = f"filter_ops_union_{uuid4().hex[:8]}"
     store_a = _make_store(
         redis_url,
-        index_name=f"raw_a_{uuid4().hex[:8]}",
+        index_name=f"union_a_{uuid4().hex[:8]}",
         doc_id_prefix="a-",
         key_prefix=shared_prefix,
     )
     store_b = _make_store(
         redis_url,
-        index_name=f"raw_b_{uuid4().hex[:8]}",
+        index_name=f"union_b_{uuid4().hex[:8]}",
         doc_id_prefix="b-",
         key_prefix=shared_prefix,
     )
     try:
-        raw_filter = f"@{TEAM_FIELD}:{{{TEAM_A}}}|@{TEAM_FIELD}:{{{TEAM_B}}}"
-        docs = store_a.similarity_search(QUERY, k=20, filter=raw_filter)
+        user_filter = (Tag(TEAM_FIELD) == TEAM_A) | (Tag(TEAM_FIELD) == TEAM_B)
+        docs = store_a.similarity_search(QUERY, k=20, filter=user_filter)
 
         assert {doc.metadata[DOC_ID_FIELD] for doc in docs} == {
             f"a-{doc_id}" for doc_id in ALL_DOC_IDS
         }
+    finally:
+        store_a.index.delete(drop=True)
+        store_b.index.delete(drop=True)
+
+
+def test_raw_string_cannot_escape_search_ownership_scope(redis_url: str) -> None:
+    """Unbalanced raw syntax is rejected before it can reach Redis Search."""
+    shared_prefix = f"filter_ops_search_escape_{uuid4().hex[:8]}"
+    store_a = _make_store(
+        redis_url,
+        index_name=f"search_escape_a_{uuid4().hex[:8]}",
+        doc_id_prefix="a-",
+        key_prefix=shared_prefix,
+    )
+    store_b = _make_store(
+        redis_url,
+        index_name=f"search_escape_b_{uuid4().hex[:8]}",
+        doc_id_prefix="b-",
+        key_prefix=shared_prefix,
+    )
+    try:
+        attack = f"@{TEAM_FIELD}:{{{TEAM_A}}})) | ((@{TEAM_FIELD}:{{{TEAM_B}}}"
+
+        with pytest.raises(ValueError, match="Raw string filters"):
+            store_a.similarity_search(  # type: ignore[arg-type]
+                QUERY, k=20, filter=attack
+            )
+
+        assert _remaining_doc_ids(store_a) == {f"a-{doc_id}" for doc_id in ALL_DOC_IDS}
+        assert _remaining_doc_ids(store_b) == {f"b-{doc_id}" for doc_id in ALL_DOC_IDS}
+    finally:
+        store_a.index.delete(drop=True)
+        store_b.index.delete(drop=True)
+
+
+def test_wrapped_raw_filter_cannot_escape_delete_scope(redis_url: str) -> None:
+    """FilterExpression cannot disguise syntax that escapes the delete scope."""
+    shared_prefix = f"filter_ops_delete_escape_{uuid4().hex[:8]}"
+    store_a = _make_store(
+        redis_url,
+        index_name=f"delete_escape_a_{uuid4().hex[:8]}",
+        doc_id_prefix="a-",
+        key_prefix=shared_prefix,
+    )
+    store_b = _make_store(
+        redis_url,
+        index_name=f"delete_escape_b_{uuid4().hex[:8]}",
+        doc_id_prefix="b-",
+        key_prefix=shared_prefix,
+    )
+    try:
+        attack = FilterExpression(
+            f"@{TEAM_FIELD}:{{{TEAM_A}}}) | (@{TEAM_FIELD}:{{{TEAM_B}}}"
+        )
+
+        with pytest.raises(ValueError, match="could not be safely combined"):
+            store_a.delete_by_filter(attack)
+
+        assert _remaining_doc_ids(store_a) == {f"a-{doc_id}" for doc_id in ALL_DOC_IDS}
+        assert _remaining_doc_ids(store_b) == {f"b-{doc_id}" for doc_id in ALL_DOC_IDS}
     finally:
         store_a.index.delete(drop=True)
         store_b.index.delete(drop=True)

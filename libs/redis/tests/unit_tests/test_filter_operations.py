@@ -661,14 +661,32 @@ def test_read_filter_rejects_schema_inspection_failure(
         store._with_index_name_filter(USER_FILTER)
 
 
-def test_read_filter_scopes_raw_string(store: RedisVectorStore) -> None:
-    """A complete raw-string expression is grouped before ownership scoping."""
-    raw_filter = "@team:{alpha}|@team:{beta}"
+def test_read_filter_rejects_raw_string(store: RedisVectorStore) -> None:
+    """Raw strings cannot be safely combined with the ownership scope."""
+    with pytest.raises(ValueError, match="Raw string filters"):
+        store._with_index_name_filter("@team:{alpha}|@team:{beta}")
 
-    scoped = str(store._with_index_name_filter(raw_filter))
 
-    assert f"({raw_filter})" in scoped
+def test_read_filter_scopes_filter_expression_union(store: RedisVectorStore) -> None:
+    """A RedisVL-built union stays nested inside the ownership scope."""
+    user_filter = (Tag(TEAM_FIELD) == "alpha") | (Tag(TEAM_FIELD) == "beta")
+
+    scoped = str(store._with_index_name_filter(user_filter))
+
+    assert "|" in scoped
     assert hashify(INDEX_NAME) in scoped
+
+
+def test_delete_by_filter_rejects_escapable_filter_expression(
+    store: RedisVectorStore,
+) -> None:
+    """Wrapping crafted raw syntax in FilterExpression cannot bypass scoping."""
+    attack = FilterExpression("@team:{alpha}) | (@team:{beta}")
+
+    with pytest.raises(ValueError, match="could not be safely combined"):
+        store.delete_by_filter(attack)
+
+    assert _fake(store).captured_filter is None
 
 
 @pytest.mark.parametrize(

@@ -46,6 +46,113 @@ Matrix = Union[List[List[float]], List[np.ndarray], np.ndarray]
 _INDEX_NAME_FIELD = "_index_name"
 
 
+def _find_unescaped(
+    rendered: str,
+    position: int,
+    character: str,
+    end: Optional[int] = None,
+) -> Optional[int]:
+    """Find the next unescaped character within an optional boundary."""
+    limit = len(rendered) if end is None else min(end, len(rendered))
+    while position < limit:
+        if rendered[position] == "\\":
+            position += 2
+            continue
+        if rendered[position] == character:
+            return position
+        position += 1
+    return None
+
+
+def _reject_escapable_filter(caller: FilterExpression) -> None:
+    """Reject a filter whose rendering could escape a locked AND expression.
+
+    This follows the locked-filter validation used internally by RedisVL's MCP
+    implementation. Keep this compatibility implementation here until RedisVL
+    exposes ``merge_locked_filter`` as a public query-layer utility, then replace
+    it with the public RedisVL import.
+    """
+    rendered = str(caller)
+    position = 0
+    depth = 0
+    unsafe = False
+
+    while position < len(rendered):
+        character = rendered[position]
+
+        if character == "\\":
+            position += 2
+            continue
+
+        if character == '"':
+            end = rendered.find('"', position + 1)
+            if end == -1:
+                unsafe = True
+                break
+            position = end + 1
+            continue
+
+        if character == "[":
+            # Parentheses inside numeric ranges can represent exclusive bounds,
+            # not expression grouping.
+            range_end = _find_unescaped(rendered, position + 1, "]")
+            if range_end is None:
+                unsafe = True
+                break
+            if _find_unescaped(rendered, position + 1, "|", range_end) is not None:
+                unsafe = True
+                break
+            position = range_end + 1
+            continue
+
+        if character in "({":
+            depth += 1
+        elif character in ")}":
+            depth -= 1
+            if depth < 0:
+                unsafe = True
+                break
+        elif character == "]":
+            unsafe = True
+            break
+        elif character == "|" and depth == 0:
+            unsafe = True
+            break
+
+        position += 1
+
+    if unsafe or depth != 0:
+        raise ValueError(
+            "Filter could not be safely combined with the index ownership "
+            "filter. Build filters with RedisVL filter builders such as Tag, "
+            "Text, or Num."
+        )
+
+
+def _merge_locked_filter(
+    locked: FilterExpression,
+    caller: Optional[Union[str, FilterExpression]],
+) -> FilterExpression:
+    """Combine a trusted ownership filter with a caller-provided filter.
+
+    This mirrors RedisVL's private MCP ``merge_locked_filter`` behavior. Raw
+    strings cannot be safely composed with a library-owned constraint. When
+    RedisVL publishes this helper, replace this compatibility function with an
+    import from ``redisvl.query.filter``.
+    """
+    if caller is None:
+        return locked
+
+    if not isinstance(caller, FilterExpression):
+        raise ValueError(
+            "Raw string filters cannot be safely combined with the index "
+            "ownership filter. Use a RedisVL FilterExpression."
+        )
+
+    _reject_escapable_filter(caller)
+    return locked & caller
+
+
 def cosine_similarity(X: Matrix, Y: Matrix) -> np.ndarray:
     """Row-wise cosine similarity between two equal-width matrices."""
     if len(X) == 0 or len(Y) == 0:
@@ -1087,7 +1194,7 @@ class RedisVectorStore(VectorStore):
                 "Use index.clear() for an intentional full-index operation."
             )
 
-        return filter & self._require_exact_index_name_filter()
+        return _merge_locked_filter(self._require_exact_index_name_filter(), filter)
 
     def _index_name_value(self, field_type: FieldTypes) -> str:
         """Return the stored and queried value for the index marker."""
@@ -1256,7 +1363,13 @@ class RedisVectorStore(VectorStore):
     def _with_index_name_filter(
         self, filter: Optional[Union[str, FilterExpression]]
     ) -> FilterExpression:
-        """Restrict every search to documents owned by the current index."""
+        """Restrict every search to documents owned by the current index.
+
+        Caller filters use the locked-filter safeguards from RedisVL's MCP
+        implementation so raw syntax cannot escape the library-owned
+        ``_index_name`` constraint. This compatibility path can use RedisVL's
+        public helper directly once one is available.
+        """
         try:
             index_filter = self._build_index_name_filter(self._index.schema)
         except Exception as exc:
@@ -1275,10 +1388,7 @@ class RedisVectorStore(VectorStore):
             rendered_filter = filter.strip()
             if not rendered_filter or rendered_filter == "*":
                 return index_filter
-            # RedisVL accepts trusted raw query strings. Group the complete raw
-            # expression before intersecting it with the ownership marker.
-            filter = FilterExpression(f"({rendered_filter})")
-        return filter & index_filter
+        return _merge_locked_filter(index_filter, filter)
 
     def _query_builder(
         self,
@@ -1309,7 +1419,7 @@ class RedisVectorStore(VectorStore):
         self,
         embedding: List[float],
         k: int = 4,
-        filter: Optional[Union[str, FilterExpression]] = None,
+        filter: Optional[FilterExpression] = None,
         sort_by: Optional[str] = None,
         **kwargs: Any,
     ) -> List[Document]:
@@ -1318,8 +1428,7 @@ class RedisVectorStore(VectorStore):
         Args:
             embedding: Embedding to look up documents similar to.
             k: Number of `Document` objects to return.
-            filter: Optional RedisVL `FilterExpression` or trusted raw Redis
-                query string to apply.
+            filter: Optional RedisVL `FilterExpression` to apply.
             sort_by: Optional `sort_by` expression to apply.
             **kwargs: Other keyword arguments.
 
@@ -1405,7 +1514,7 @@ class RedisVectorStore(VectorStore):
         self,
         query: str,
         k: int = 4,
-        filter: Optional[Union[str, FilterExpression]] = None,
+        filter: Optional[FilterExpression] = None,
         sort_by: Optional[str] = None,
         **kwargs: Any,
     ) -> List[Document]:
@@ -1414,9 +1523,9 @@ class RedisVectorStore(VectorStore):
         Args:
             query: Text to look up documents similar to.
             k: Number of `Document` objects to return.
-            filter: Optional RedisVL `FilterExpression` or trusted raw Redis
-                query string to apply. Tag filters support wildcard patterns
-                via the modulo operator, e.g. `Tag("category") % "elec*"`.
+            filter: Optional RedisVL `FilterExpression` to apply. Tag filters
+                support wildcard patterns via the modulo operator, e.g.
+                `Tag("category") % "elec*"`.
             sort_by: Optional `sort_by` expression to apply.
             **kwargs: Other keyword arguments to pass to the search function.
 
@@ -1514,7 +1623,7 @@ class RedisVectorStore(VectorStore):
         self,
         query: str,
         k: int = 4,
-        filter: Optional[Union[str, FilterExpression]] = None,
+        filter: Optional[FilterExpression] = None,
         *,
         text_field: Optional[str] = None,
         method: str = "auto",
@@ -1531,8 +1640,7 @@ class RedisVectorStore(VectorStore):
             query: Query text. It is used both for full-text scoring and,
                 embedded, for vector similarity.
             k: Number of `Document` objects to return.
-            filter: Optional RedisVL `FilterExpression` or trusted raw Redis
-                query string to apply.
+            filter: Optional RedisVL `FilterExpression` to apply.
             text_field: Text field to search in. Defaults to the configured
                 `content_field`.
             method: `'ft_hybrid'` uses the `FT.HYBRID` command (Redis 8.4+),
@@ -1633,7 +1741,7 @@ class RedisVectorStore(VectorStore):
         self,
         query: str,
         k: int = 4,
-        filter: Optional[Union[str, FilterExpression]] = None,
+        filter: Optional[FilterExpression] = None,
         **kwargs: Any,
     ) -> List[Document]:
         """Return docs ranked by combined full-text and vector similarity.
@@ -1641,8 +1749,7 @@ class RedisVectorStore(VectorStore):
         Args:
             query: Query text, used for both full-text and vector scoring.
             k: Number of `Document` objects to return.
-            filter: Optional RedisVL `FilterExpression` or trusted raw Redis
-                query string to apply.
+            filter: Optional RedisVL `FilterExpression` to apply.
             **kwargs: See `hybrid_search_with_score` for the remaining
                 keyword arguments (`method`, `combination_method`, `alpha`,
                 `text_field`, `text_scorer`, `text_weights`, `stopwords`,
@@ -1659,7 +1766,7 @@ class RedisVectorStore(VectorStore):
         self,
         query: str,
         k: int = 4,
-        filter: Optional[Union[str, FilterExpression]] = None,
+        filter: Optional[FilterExpression] = None,
         *,
         text_fields: Optional[Union[str, Dict[str, float]]] = None,
         text_scorer: str = "BM25STD",
@@ -1671,8 +1778,7 @@ class RedisVectorStore(VectorStore):
         Args:
             query: Full-text query string.
             k: Number of `Document` objects to return.
-            filter: Optional RedisVL `FilterExpression` or trusted raw Redis
-                query string to apply.
+            filter: Optional RedisVL `FilterExpression` to apply.
             text_fields: Text field to search in, or a mapping of field
                 names to weights (e.g. `{"title": 5.0, "text": 1.0}`).
                 Defaults to the configured `content_field`.
@@ -1855,7 +1961,7 @@ class RedisVectorStore(VectorStore):
         self,
         embedding: List[float],
         k: int = 4,
-        filter: Optional[Union[str, FilterExpression]] = None,
+        filter: Optional[FilterExpression] = None,
         sort_by: Optional[str] = None,
         **kwargs: Any,
     ) -> Sequence[Any]:
@@ -1864,8 +1970,7 @@ class RedisVectorStore(VectorStore):
         Args:
             embedding: Embedding to look up documents similar to.
             k: Number of `Document` objects to return.
-            filter: Optional RedisVL `FilterExpression` or trusted raw Redis
-                query string to apply.
+            filter: Optional RedisVL `FilterExpression` to apply.
             sort_by: Optional `sort_by` expression to apply.
             **kwargs: Other keyword arguments.
 
@@ -1966,7 +2071,7 @@ class RedisVectorStore(VectorStore):
         self,
         query: str,
         k: int = 4,
-        filter: Optional[Union[str, FilterExpression]] = None,
+        filter: Optional[FilterExpression] = None,
         sort_by: Optional[str] = None,
         **kwargs: Any,
     ) -> Sequence[Any]:
@@ -1975,8 +2080,7 @@ class RedisVectorStore(VectorStore):
         Args:
             query: Text to look up documents similar to.
             k: Number of `Document` objects to return.
-            filter: Optional RedisVL `FilterExpression` or trusted raw Redis
-                query string to apply to the query.
+            filter: Optional RedisVL `FilterExpression` to apply to the query.
             sort_by: Optional `sort_by` expression to apply to the query.
             **kwargs: Other keyword arguments to pass to the search function.
 
