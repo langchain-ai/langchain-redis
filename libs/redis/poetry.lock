@@ -856,17 +856,18 @@ pydantic = ">=2.11.2"
 
 [[package]]
 name = "langchain-core"
-version = "1.5.1"
+version = "1.6.4"
 description = "Building applications with LLMs through composability"
 optional = false
 python-versions = "<4.0.0,>=3.10.0"
 groups = ["main", "dev", "test", "test-integration", "typing"]
 files = [
-    {file = "langchain_core-1.5.1-py3-none-any.whl", hash = "sha256:c5ec8f51dd05124f950c9afd0fd8bb3f7be4e405eeb868d481b2f8ff652cb9d2"},
-    {file = "langchain_core-1.5.1.tar.gz", hash = "sha256:b0df382704c6403c1e0c9603415bce09290455d4aeeb38f350d15f78ca597483"},
+    {file = "langchain_core-1.6.4-py3-none-any.whl", hash = "sha256:2f940c83f787676ad4dc651d49d053c7ec34bda5a6afcd224da2863ff53a0b84"},
+    {file = "langchain_core-1.6.4.tar.gz", hash = "sha256:c1caae770d991bb6f2376bad791970bf77bb29abd1f15823fa9ea7dbac080fa0"},
 ]
 
 [package.dependencies]
+httpx = ">=0.23.0,<1.0.0"
 jsonpatch = ">=1.33.0,<2.0.0"
 langchain-protocol = ">=0.0.17"
 langsmith = ">=0.3.45,<1.0.0"
@@ -3697,4 +3698,4 @@ langcache = ["langcache"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "2dc8377d1b42395cc9a8597433ff7a3b8f4175dbddf2ed319abd6caa4f6bbe61"
+content-hash = "7fd5b39a9d39e7e52d43875f5a11945523ae6123a0097171523a972c9ecea9c6"
