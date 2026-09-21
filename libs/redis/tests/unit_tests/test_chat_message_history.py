@@ -1,8 +1,25 @@
 from unittest.mock import patch
 
 import pytest
+from langchain_core._api import LangChainDeprecationWarning
 
 from langchain_redis import RedisChatMessageHistory
+
+
+def test_chat_message_history_deprecated() -> None:
+    with (
+        patch("langchain_redis.chat_message_history.SearchIndex"),
+        patch("redis.Redis.from_url"),
+        pytest.warns(
+            LangChainDeprecationWarning,
+            match=r"RedisChatMessageHistory.*0\.2\.6.*1\.0\.0.*short-term-memory",
+        ),
+    ):
+        history = RedisChatMessageHistory(session_id="test_session")
+    assert history.id == "test_session"
+    assert "https://docs.langchain.com/oss/python/langchain/short-term-memory" in (
+        RedisChatMessageHistory.__doc__ or ""
+    )
 
 
 class TestRedisChatMessageHistoryMinimal:
