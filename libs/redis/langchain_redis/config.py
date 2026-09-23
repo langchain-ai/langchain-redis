@@ -492,7 +492,7 @@ class RedisConfig(BaseModel):
 
             config = RedisConfig.from_existing_index(
                 index_name="my_existing_index",
-                redis_client=redis_client
+                redis=redis_client
             )
 
             print(config.index_name)  # Output: my_existing_index
@@ -519,7 +519,7 @@ class RedisConfig(BaseModel):
             ConnectionError: If there's an issue connecting to Redis using the
                 provided client.
         """
-        return cls(index_name=index_name)
+        return cls(index_name=index_name, from_existing=True)
 
     def to_index_schema(self) -> IndexSchema:
         """Convert the `RedisConfig` to an `IndexSchema`.

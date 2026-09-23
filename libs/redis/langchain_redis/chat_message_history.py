@@ -3,6 +3,7 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from langchain_core._api import deprecated
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.messages import BaseMessage, ToolMessage, messages_from_dict
 from redis import Redis
@@ -36,6 +37,14 @@ def _noop_push_handler(response: Any) -> None:
     pass
 
 
+@deprecated(
+    since="0.2.6",
+    removal="1.0.0",
+    addendum=(
+        "See the short-term memory documentation for recommended alternatives: "
+        "https://docs.langchain.com/oss/python/langchain/short-term-memory"
+    ),
+)
 class RedisChatMessageHistory(BaseChatMessageHistory):
     """Redis-based implementation of chat message history using RedisVL.
 

@@ -312,6 +312,7 @@ The `RedisCache`, `RedisSemanticCache`, and `LangCacheSemanticCache` classes pro
 from langchain_redis import RedisCache, RedisSemanticCache, LangCacheSemanticCache
 from langchain_core.language_models import LLM
 from langchain_openai import OpenAIEmbeddings
+from langchain_core.outputs import Generation
 
 # Standard cache
 cache = RedisCache(redis_url="redis://localhost:6379", ttl=3600)
@@ -320,7 +321,7 @@ cache = RedisCache(redis_url="redis://localhost:6379", ttl=3600)
 embeddings = OpenAIEmbeddings()  # any LangChain Embeddings implementation works
 semantic_cache = RedisSemanticCache(
     redis_url="redis://localhost:6379",
-    embedding=embeddings,
+    embeddings=embeddings,
     distance_threshold=0.1
 )
 
