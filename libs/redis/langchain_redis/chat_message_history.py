@@ -76,7 +76,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
 
     Raises:
         ValueError: If `session_id` is empty or `None`.
-        ResponseError: If Redis connection fails or RedisVL operations fail.
+        RedisSearchError: If RedisVL index or search operations fail.
 
     Example:
         ```python
@@ -167,7 +167,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         """Create and configure the RedisVL SearchIndex.
 
         Raises:
-            ResponseError: If Redis connection fails or RedisVL operations fail.
+            RedisSearchError: If RedisVL index or search operations fail.
         """
         schema = {
             "index": {
@@ -231,7 +231,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
             A list of messages in chronological order.
 
         Raises:
-            ResponseError: If Redis connection fails or RedisVL operations fail.
+            RedisSearchError: If RedisVL index or search operations fail.
         """
         messages_query = FilterQuery(
             filter_expression=Tag("session_id") == self.session_id,
@@ -276,7 +276,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
                 as `HumanMessage`, `AIMessage`, or `SystemMessage`.
 
         Raises:
-            ResponseError: If Redis connection fails or RedisVL operations fail.
+            RedisSearchError: If RedisVL index or search operations fail.
             ValueError: If message is `None` or invalid.
 
         Example:
@@ -419,7 +419,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         the Redis store using RedisVL queries.
 
         Raises:
-            ResponseError: If Redis connection fails or RedisVL operations fail.
+            RedisSearchError: If RedisVL index or search operations fail.
 
         Example:
             ```python
@@ -473,7 +473,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         """Delete all sessions and the chat history index from Redis.
 
         Raises:
-            ResponseError: If Redis connection fails or RedisVL operations fail.
+            RedisSearchError: If RedisVL index or search operations fail.
         """
         self.index.delete(drop=True)
 
@@ -493,7 +493,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
                 Each dictionary contains the message content and metadata.
 
         Raises:
-            ResponseError: If Redis connection fails or RedisVL operations fail.
+            RedisSearchError: If RedisVL index or search operations fail.
 
         Example:
             ```python
@@ -567,7 +567,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
             int: The number of messages in the current session.
 
         Raises:
-            ResponseError: If Redis connection fails or RedisVL operations fail.
+            RedisSearchError: If RedisVL index or search operations fail.
         """
         return self.index.query(
             CountQuery(filter_expression=Tag("session_id") == self.session_id)

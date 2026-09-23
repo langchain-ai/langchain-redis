@@ -163,6 +163,11 @@ def test_redis_config_with_custom_schema(
                 "storage_type": "hash",
             },
             "fields": [
+                {
+                    "name": "_index_name",
+                    "type": "tag",
+                    "attrs": {"case_sensitive": True},
+                },
                 {"name": "text", "type": "text"},
                 {
                     "name": "embedding",
@@ -201,6 +206,10 @@ def test_redis_config_with_yaml_schema(
       name: test_index
       storage_type: hash
     fields:
+      - name: _index_name
+        type: tag
+        attrs:
+          case_sensitive: true
       - name: text
         type: text
       - name: embedding
