@@ -103,9 +103,9 @@ The `RedisVectorStore` class provides a vector database implementation using Red
 
 ```python
 from langchain_redis import RedisVectorStore, RedisConfig
-from langchain_core.embeddings import Embeddings
+from langchain_openai import OpenAIEmbeddings
 
-embeddings = Embeddings()  # Your preferred embedding model
+embeddings = OpenAIEmbeddings()  # Or your preferred embedding model
 
 config = RedisConfig(
     index_name="my_vectors",
@@ -157,17 +157,17 @@ The `RedisCache`, `RedisSemanticCache`, and `LangCacheSemanticCache` classes pro
 ```python
 from langchain_redis import RedisCache, RedisSemanticCache, LangCacheSemanticCache
 from langchain_core.language_models import LLM
-from langchain_core.embeddings import Embeddings
+from langchain_openai import OpenAIEmbeddings
 from langchain_core.outputs import Generation
 
 # Standard cache
 cache = RedisCache(redis_url="redis://localhost:6379", ttl=3600)
 
 # Semantic cache
-embeddings = Embeddings()  # Your preferred embedding model
+embeddings = OpenAIEmbeddings()  # Or your preferred embedding model
 semantic_cache = RedisSemanticCache(
     redis_url="redis://localhost:6379",
-    embedding=embeddings,
+    embeddings=embeddings,
     distance_threshold=0.1
 )
 
