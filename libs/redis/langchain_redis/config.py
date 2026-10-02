@@ -513,13 +513,8 @@ class RedisConfig(BaseModel):
                 access the specified index.
             - If the index doesn't exist, this method will still create a config, but
                 operations using this config may fail until the index is created.
-
-        Raises:
-            ValueError: If the `index_name` is empty or `None`.
-            ConnectionError: If there's an issue connecting to Redis using the
-                provided client.
         """
-        return cls(index_name=index_name, from_existing=True)
+        return cls(index_name=index_name, from_existing=True, redis_client=redis)
 
     def to_index_schema(self) -> IndexSchema:
         """Convert the `RedisConfig` to an `IndexSchema`.
