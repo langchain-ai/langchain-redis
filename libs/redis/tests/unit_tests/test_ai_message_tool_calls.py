@@ -11,6 +11,7 @@ import json
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+from langchain_core._api import suppress_langchain_deprecation_warning
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from langchain_redis import RedisChatMessageHistory
@@ -29,10 +30,11 @@ class TestAIMessageToolCalls:
         mock_index_instance = MagicMock()
         mock_search_index.from_dict.return_value = mock_index_instance
 
-        history = RedisChatMessageHistory(
-            session_id="test_session",
-            redis_client=mock_redis_client,
-        )
+        with suppress_langchain_deprecation_warning():
+            history = RedisChatMessageHistory(
+                session_id="test_session",
+                redis_client=mock_redis_client,
+            )
 
         tool_calls = [
             {
@@ -74,10 +76,11 @@ class TestAIMessageToolCalls:
 
         mock_index_instance.load.side_effect = capture_load
 
-        history = RedisChatMessageHistory(
-            session_id="test_session",
-            redis_client=mock_redis_client,
-        )
+        with suppress_langchain_deprecation_warning():
+            history = RedisChatMessageHistory(
+                session_id="test_session",
+                redis_client=mock_redis_client,
+            )
 
         tool_calls = [
             {
@@ -105,6 +108,54 @@ class TestAIMessageToolCalls:
         assert messages[0].tool_calls == tool_calls
 
     @patch("langchain_redis.chat_message_history.SearchIndex")
+    def test_round_trip_ai_message_preserves_invalid_tool_calls(
+        self, mock_search_index: MagicMock
+    ) -> None:
+        """invalid_tool_calls must survive storage and retrieval."""
+        mock_redis_client = MagicMock()
+        mock_redis_client.client_setinfo = MagicMock()
+        mock_index_instance = MagicMock()
+        mock_search_index.from_dict.return_value = mock_index_instance
+
+        stored_data = []
+
+        def capture_load(**kwargs: Any) -> None:
+            stored_data.append(kwargs["data"][0])
+
+        mock_index_instance.load.side_effect = capture_load
+
+        with suppress_langchain_deprecation_warning():
+            history = RedisChatMessageHistory(
+                session_id="test_session",
+                redis_client=mock_redis_client,
+            )
+
+        invalid_tool_calls = [
+            {
+                "name": "search",
+                "args": '{"query": "python',
+                "id": "call_bad",
+                "error": "Malformed args.",
+                "type": "invalid_tool_call",
+            }
+        ]
+        history.add_message(
+            AIMessage(content="", invalid_tool_calls=invalid_tool_calls)
+        )
+
+        stored = stored_data[0]
+        assert stored["data"]["invalid_tool_calls"] == invalid_tool_calls
+
+        mock_index_instance.query.return_value = [
+            {"type": stored["type"], "$.data": json.dumps(stored["data"])}
+        ]
+
+        messages = history.messages
+        assert isinstance(messages[0], AIMessage)
+        assert messages[0].invalid_tool_calls == invalid_tool_calls
+        assert messages[0].tool_calls == []
+
+    @patch("langchain_redis.chat_message_history.SearchIndex")
     def test_ai_message_without_tool_calls_round_trips_with_empty_list(
         self, mock_search_index: MagicMock
     ) -> None:
@@ -121,10 +172,11 @@ class TestAIMessageToolCalls:
 
         mock_index_instance.load.side_effect = capture_load
 
-        history = RedisChatMessageHistory(
-            session_id="test_session",
-            redis_client=mock_redis_client,
-        )
+        with suppress_langchain_deprecation_warning():
+            history = RedisChatMessageHistory(
+                session_id="test_session",
+                redis_client=mock_redis_client,
+            )
 
         history.add_message(AIMessage(content="Hi there"))
 
@@ -154,10 +206,11 @@ class TestAIMessageToolCalls:
 
         mock_index_instance.load.side_effect = capture_load
 
-        history = RedisChatMessageHistory(
-            session_id="test_session",
-            redis_client=mock_redis_client,
-        )
+        with suppress_langchain_deprecation_warning():
+            history = RedisChatMessageHistory(
+                session_id="test_session",
+                redis_client=mock_redis_client,
+            )
 
         tool_calls = [
             {
