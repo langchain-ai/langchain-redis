@@ -333,17 +333,22 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
             ttl=self.ttl,
         )
 
-    def _build_message_entry(self, message: BaseMessage) -> Tuple[Dict[str, Any], str]:
+    def _build_message_entry(
+        self, message: BaseMessage, timestamp: Optional[float] = None
+    ) -> Tuple[Dict[str, Any], str]:
         """Build the RedisVL document and key for a single message.
 
         Args:
             message (BaseMessage): The message to convert.
+            timestamp (Optional[float]): Timestamp to store with the message.
+                Defaults to the current time.
 
         Returns:
             A tuple of `(data, key)` suitable for passing to
             `self.index.load(data=[...], keys=[...])`.
         """
-        timestamp = datetime.now().timestamp()
+        if timestamp is None:
+            timestamp = datetime.now().timestamp()
         message_id = str(ULID())
         common_data_to_store: Dict[str, Any] = {
             "type": message.type,
@@ -402,7 +407,13 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         if any(message is None for message in messages):
             raise ValueError("Message cannot be None")
 
-        entries = [self._build_message_entry(message) for message in messages]
+        # Messages are sorted by timestamp on retrieval, so give each one a
+        # distinct timestamp even if the clock resolution is coarse.
+        base_timestamp = datetime.now().timestamp()
+        entries = [
+            self._build_message_entry(message, base_timestamp + i * 1e-6)
+            for i, message in enumerate(messages)
+        ]
         data = [entry[0] for entry in entries]
         keys = [entry[1] for entry in entries]
 
