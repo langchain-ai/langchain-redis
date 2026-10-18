@@ -612,6 +612,18 @@ class RedisConfig(BaseModel):
         )
 
     def redis(self) -> Redis:
+        """Return the Redis client for this configuration.
+
+        Returns `redis_client` if one was provided. Otherwise a new client is
+        created from `redis_url` and `connection_args`, using the RedisVL
+        connection factory for `redis+sentinel://` URLs.
+
+        Returns:
+            A Redis client.
+
+        Raises:
+            ValueError: If neither `redis_client` nor `redis_url` is set.
+        """
         if self.redis_client is not None:
             return self.redis_client
         elif self.redis_url is not None:
