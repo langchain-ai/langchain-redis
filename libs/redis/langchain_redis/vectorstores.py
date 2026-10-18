@@ -154,7 +154,20 @@ def _merge_locked_filter(
 
 
 def cosine_similarity(X: Matrix, Y: Matrix) -> np.ndarray:
-    """Row-wise cosine similarity between two equal-width matrices."""
+    """Row-wise cosine similarity between two equal-width matrices.
+
+    Args:
+        X: Matrix of shape `(n, d)`.
+        Y: Matrix of shape `(m, d)`.
+
+    Returns:
+        Array of shape `(n, m)` where entry `(i, j)` is the cosine similarity
+        between `X[i]` and `Y[j]`. If either input is empty, an empty array
+        is returned.
+
+    Raises:
+        ValueError: If `X` and `Y` do not have the same number of columns.
+    """
     if len(X) == 0 or len(Y) == 0:
         return np.array([])
 
