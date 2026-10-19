@@ -6,6 +6,7 @@ import pytest
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from redisvl.redis.utils import hashify  # type: ignore[import]
+from redisvl.schema.fields import VectorDistanceMetric  # type: ignore[import]
 
 from langchain_redis import RedisConfig, RedisVectorStore
 
@@ -216,6 +217,69 @@ class TestRedisVectorStore:
         assert len(results) == 1
         assert isinstance(results[0][0], Document)
         assert isinstance(results[0][1], float)
+
+    @pytest.mark.parametrize(
+        "metric, distance, expected",
+        [
+            (VectorDistanceMetric.COSINE, 0.4, 0.6),
+            # Redis returns 1 - dot for IP, so identical unit vectors must score 1.
+            # langchain-core's IP helper would score them 0.
+            (VectorDistanceMetric.IP, 0.0, 1.0),
+            (VectorDistanceMetric.IP, 0.4, 0.6),
+            # Redis returns the squared Euclidean distance for L2.
+            (VectorDistanceMetric.L2, 0.0, 1.0),
+            (VectorDistanceMetric.L2, 0.8, 0.6),
+            (VectorDistanceMetric.L2, 2.0, 0.0),
+        ],
+    )
+    def test_relevance_score_fn_matches_metric(
+        self,
+        vector_store: RedisVectorStore,
+        metric: VectorDistanceMetric,
+        distance: float,
+        expected: float,
+    ) -> None:
+        index = MockSearchIndex.last_instance
+        assert index is not None
+        index.schema.fields["embedding"].attrs = SimpleNamespace(distance_metric=metric)
+
+        score_fn = vector_store._select_relevance_score_fn()
+
+        assert score_fn(distance) == pytest.approx(expected)
+
+    def test_relevance_score_fn_uses_live_index_metric(
+        self, vector_store: RedisVectorStore
+    ) -> None:
+        """A reopened index only has the default metric in its config."""
+        index = MockSearchIndex.last_instance
+        assert index is not None
+        index.schema.fields["embedding"].attrs = SimpleNamespace(
+            distance_metric=VectorDistanceMetric.L2
+        )
+        vector_store.config.distance_metric = "COSINE"
+
+        assert vector_store._select_relevance_score_fn()(2.0) == pytest.approx(0.0)
+
+    def test_similarity_search_with_relevance_scores(
+        self, vector_store: RedisVectorStore
+    ) -> None:
+        index = MockSearchIndex.last_instance
+        assert index is not None
+        index.schema.fields["embedding"].attrs = SimpleNamespace(
+            distance_metric=VectorDistanceMetric.COSINE
+        )
+        vector_store.add_texts(["Hello, world!", "Test document"])
+
+        results = vector_store.similarity_search_with_relevance_scores("Hello", k=2)
+        assert [score for _, score in results] == pytest.approx([0.9, 0.9])
+
+        # The mock reports a distance of 0.1 (score 0.9) for every hit.
+        assert (
+            vector_store.similarity_search_with_relevance_scores(
+                "Hello", k=2, score_threshold=0.95
+            )
+            == []
+        )
 
     def test_max_marginal_relevance_search(
         self, vector_store: RedisVectorStore
