@@ -619,6 +619,7 @@ class RedisVectorStore(VectorStore):
         texts: Iterable[str],
         metadatas: Optional[List[Dict[str, Any]]] = None,
         keys: Optional[List[str]] = None,
+        batch_size: Optional[int] = None,
         **kwargs: Any,
     ) -> List[str]:
         """Add text documents to the vector store.
@@ -627,6 +628,8 @@ class RedisVectorStore(VectorStore):
             texts: Iterable of strings to add to the vector store.
             metadatas: Optional list of metadata dicts associated with the texts.
             keys: Optional list of keys to associate with the documents.
+            batch_size: Optional number of records to write in each Redis
+                pipeline execution. If omitted, RedisVL's default is used.
             **kwargs: Additional keyword arguments.
 
                 Common kwargs include:
@@ -638,9 +641,6 @@ class RedisVectorStore(VectorStore):
                 - `create_index_if_not_exists`: Whether to create the Redis
                 index if it doesn't already exist.
                     - Defaults to `True`.
-                - `batch_size`: Optional. Number of texts to add to the
-                index at a time.
-                    - Defaults to `1000`.
 
         Returns:
             List of ids from adding the texts into the vector store.
@@ -680,7 +680,7 @@ class RedisVectorStore(VectorStore):
             ids = vector_store.add_texts(
                 texts=texts,
                 metadatas=metadatas,
-                batch_size=2
+                batch_size=2,
             )
 
             print(f"Added documents with ids: {ids}")
@@ -689,9 +689,9 @@ class RedisVectorStore(VectorStore):
         Note:
             - If `metadatas` is provided, it must have the same length as `texts`.
             - If `keys` is provided, it must have the same length as `texts`.
-            - The `batch_size` parameter can be used to control the number of
-                documents added in each batch, which can be useful for managing
-                memory usage when adding a large number of documents.
+            - `batch_size` controls Redis pipeline writes performed by RedisVL.
+                Texts, embeddings, and records are still prepared in memory before
+                the load operation.
         """
 
         # Convert texts to a list if it's not already
@@ -776,11 +776,15 @@ class RedisVectorStore(VectorStore):
                 )
             records.append(record)
 
-        # Load records into the index
+        # Load records into the index. RedisVL handles pipeline batching.
+        load_kwargs: Dict[str, Any] = {"ttl": self.ttl}
+        if batch_size is not None:
+            load_kwargs["batch_size"] = batch_size
+
         if redis_keys:
-            result = self._index.load(records, keys=redis_keys, ttl=self.ttl)
+            result = self._index.load(records, keys=redis_keys, **load_kwargs)
         else:
-            result = self._index.load(records, ttl=self.ttl)
+            result = self._index.load(records, **load_kwargs)
 
         return self._ids_from_redis_keys(result or [])
 
@@ -793,6 +797,7 @@ class RedisVectorStore(VectorStore):
         config: Optional[RedisConfig] = None,
         keys: Optional[List[str]] = None,
         return_keys: bool = False,
+        batch_size: Optional[int] = None,
         **kwargs: Any,
     ) -> RedisVectorStore:
         """Create a `RedisVectorStore` from a list of texts.
@@ -805,6 +810,8 @@ class RedisVectorStore(VectorStore):
                 from kwargs.
             keys: Optional list of keys to associate with the documents.
             return_keys: Whether to return the keys of the added documents.
+            batch_size: Optional number of records to write in each Redis
+                pipeline execution. If omitted, RedisVL's default is used.
             **kwargs: Additional keyword arguments to pass to `RedisConfig` if config is
                 not provided.
 
@@ -868,7 +875,9 @@ class RedisVectorStore(VectorStore):
             metadatas = [{} for _ in range(len(texts))]
 
         vector_store = cls(embeddings=embedding, config=config, **kwargs)
-        out_keys = vector_store.add_texts(texts, metadatas, keys)  # type: ignore
+        out_keys = vector_store.add_texts(  # type: ignore
+            texts, metadatas, keys, batch_size=batch_size
+        )
 
         if return_keys:
             return cast(RedisVectorStore, (vector_store, out_keys))
@@ -882,6 +891,7 @@ class RedisVectorStore(VectorStore):
         embedding: Embeddings,
         config: Optional[RedisConfig] = None,
         return_keys: bool = False,
+        batch_size: Optional[int] = None,
         **kwargs: Any,
     ) -> RedisVectorStore:
         """Create a `RedisVectorStore` from a list of `Document` objects.
@@ -893,6 +903,8 @@ class RedisVectorStore(VectorStore):
 
                 If not provided, one will be created from kwargs.
             return_keys: Whether to return the keys of the added documents.
+            batch_size: Optional number of records to write in each Redis
+                pipeline execution. If omitted, RedisVL's default is used.
             **kwargs: Additional keyword arguments to pass to `RedisConfig` if config
                 is not provided.
 
@@ -961,6 +973,7 @@ class RedisVectorStore(VectorStore):
             metadatas=metadatas,
             config=config,
             return_keys=return_keys,
+            batch_size=batch_size,
             **kwargs,
         )
 

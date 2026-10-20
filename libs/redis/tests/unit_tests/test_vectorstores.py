@@ -70,6 +70,7 @@ class MockSearchIndex:
         self.client = self.redis_client
         self.name = "test_index"
         self._storage = MockStorage()
+        self.batch_size: Optional[int] = None
         type(self).last_instance = self
 
     def create(self, overwrite: bool = False) -> None:
@@ -80,7 +81,9 @@ class MockSearchIndex:
         documents: List[Dict[str, Any]],
         keys: Optional[List[str]] = None,
         ttl: Optional[int] = None,
+        batch_size: Optional[int] = None,
     ) -> List[str]:
+        self.batch_size = batch_size
         for i, doc in enumerate(documents):
             key = keys[i] if keys else f"key_{i}"
             self._storage.data[key] = doc
@@ -170,9 +173,12 @@ class TestRedisVectorStore:
     def test_add_texts(self, vector_store: RedisVectorStore) -> None:
         texts = ["Hello, world!", "Test document"]
         metadatas = [{"source": "greeting"}, {"source": "test"}]
-        keys = vector_store.add_texts(texts, metadatas)
+        keys = vector_store.add_texts(texts, metadatas, batch_size=2)
         assert len(keys) == 2
         assert all(key.startswith("key_") for key in keys)
+        index = MockSearchIndex.last_instance
+        assert index is not None
+        assert index.batch_size == 2
 
     def test_add_texts_uses_each_tag_field_separator(
         self, vector_store: RedisVectorStore
@@ -249,9 +255,15 @@ class TestRedisVectorStore:
             texts = ["Hello, world!", "Test document"]
             metadatas = [{"source": "greeting"}, {"source": "test"}]
             RedisVectorStore.from_texts(
-                texts, mock_embeddings, metadatas=metadatas, config=mock_config
+                texts,
+                mock_embeddings,
+                metadatas=metadatas,
+                config=mock_config,
+                batch_size=2,
             )
-            mock_add_texts.assert_called_once_with(texts, metadatas, None)
+            mock_add_texts.assert_called_once_with(
+                texts, metadatas, None, batch_size=2
+            )
 
     @patch("langchain_redis.vectorstores.RedisVectorStore.add_texts")
     def test_from_documents(
@@ -265,9 +277,12 @@ class TestRedisVectorStore:
                 Document(page_content="Hello, world!", metadata={"source": "greeting"}),
                 Document(page_content="Test document", metadata={"source": "test"}),
             ]
-            RedisVectorStore.from_documents(docs, mock_embeddings, config=mock_config)
+            RedisVectorStore.from_documents(
+                docs, mock_embeddings, config=mock_config, batch_size=2
+            )
             mock_add_texts.assert_called_once_with(
                 ["Hello, world!", "Test document"],
                 [{"source": "greeting"}, {"source": "test"}],
                 None,
+                batch_size=2,
             )
