@@ -164,6 +164,25 @@ class TestRedisChatMessageHistoryMinimal:
             )
             assert kwargs["ttl"] == history.ttl
 
+    def test_add_messages_assigns_strictly_increasing_timestamps(self) -> None:
+        """add_messages should give every message a distinct, ordered timestamp."""
+        from langchain_core.messages import HumanMessage
+
+        with (
+            patch("langchain_redis.chat_message_history.SearchIndex"),
+            patch("redis.Redis.from_url"),
+            patch("langchain_redis.chat_message_history.datetime") as mock_datetime,
+        ):
+            mock_datetime.now.return_value.timestamp.return_value = 1700000000.0
+            history = RedisChatMessageHistory(session_id="test_session")
+
+            history.add_messages([HumanMessage(content=str(i)) for i in range(5)])
+
+            _, kwargs = history.index.load.call_args
+            timestamps = [entry["timestamp"] for entry in kwargs["data"]]
+            assert timestamps == sorted(set(timestamps))
+            assert len(timestamps) == 5
+
     def test_add_messages_empty_list_does_not_call_index(self) -> None:
         """add_messages with an empty sequence should be a no-op."""
         with (
