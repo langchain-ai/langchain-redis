@@ -261,9 +261,7 @@ class TestRedisVectorStore:
                 config=mock_config,
                 batch_size=2,
             )
-            mock_add_texts.assert_called_once_with(
-                texts, metadatas, None, batch_size=2
-            )
+            mock_add_texts.assert_called_once_with(texts, metadatas, None, batch_size=2)
 
     @patch("langchain_redis.vectorstores.RedisVectorStore.add_texts")
     def test_from_documents(
