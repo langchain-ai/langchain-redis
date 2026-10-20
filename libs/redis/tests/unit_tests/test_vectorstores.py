@@ -70,6 +70,7 @@ class MockSearchIndex:
         self.client = self.redis_client
         self.name = "test_index"
         self._storage = MockStorage()
+        self.batch_size: Optional[int] = None
         type(self).last_instance = self
 
     def create(self, overwrite: bool = False) -> None:
@@ -80,7 +81,9 @@ class MockSearchIndex:
         documents: List[Dict[str, Any]],
         keys: Optional[List[str]] = None,
         ttl: Optional[int] = None,
+        batch_size: Optional[int] = None,
     ) -> List[str]:
+        self.batch_size = batch_size
         for i, doc in enumerate(documents):
             key = keys[i] if keys else f"key_{i}"
             self._storage.data[key] = doc
@@ -167,12 +170,46 @@ class TestRedisVectorStore:
         with patch("langchain_redis.vectorstores.SearchIndex", MockSearchIndex):
             return RedisVectorStore(embeddings=mock_embeddings, config=mock_config)
 
-    def test_add_texts(self, vector_store: RedisVectorStore) -> None:
+    @pytest.mark.parametrize(
+        ("batch_size", "keys"),
+        [
+            pytest.param(None, None, id="default-batch-size"),
+            pytest.param(1, None, id="minimum-batch-size"),
+            pytest.param(2, ["doc1", "doc2"], id="explicit-keys"),
+        ],
+    )
+    def test_add_texts(
+        self,
+        vector_store: RedisVectorStore,
+        batch_size: Optional[int],
+        keys: Optional[List[str]],
+    ) -> None:
         texts = ["Hello, world!", "Test document"]
         metadatas = [{"source": "greeting"}, {"source": "test"}]
-        keys = vector_store.add_texts(texts, metadatas)
-        assert len(keys) == 2
-        assert all(key.startswith("key_") for key in keys)
+        with patch.object(vector_store, "_validate_write_ownership"):
+            result = vector_store.add_texts(
+                texts, metadatas, keys=keys, batch_size=batch_size
+            )
+        assert len(result) == 2
+        if keys is None:
+            assert all(key.startswith("key_") for key in result)
+        else:
+            assert result == keys
+        index = MockSearchIndex.last_instance
+        assert index is not None
+        assert index.batch_size == batch_size
+
+    @pytest.mark.parametrize("batch_size", [0, -1])
+    def test_add_texts_rejects_invalid_batch_size(
+        self, vector_store: RedisVectorStore, batch_size: int
+    ) -> None:
+        with patch.object(
+            vector_store.embeddings, "embed_documents"
+        ) as embed_documents:
+            with pytest.raises(ValueError):
+                vector_store.add_texts(["document"], batch_size=batch_size)
+
+        embed_documents.assert_not_called()
 
     def test_add_texts_uses_each_tag_field_separator(
         self, vector_store: RedisVectorStore
@@ -249,9 +286,13 @@ class TestRedisVectorStore:
             texts = ["Hello, world!", "Test document"]
             metadatas = [{"source": "greeting"}, {"source": "test"}]
             RedisVectorStore.from_texts(
-                texts, mock_embeddings, metadatas=metadatas, config=mock_config
+                texts,
+                mock_embeddings,
+                metadatas=metadatas,
+                config=mock_config,
+                batch_size=2,
             )
-            mock_add_texts.assert_called_once_with(texts, metadatas, None)
+            mock_add_texts.assert_called_once_with(texts, metadatas, None, batch_size=2)
 
     @patch("langchain_redis.vectorstores.RedisVectorStore.add_texts")
     def test_from_documents(
@@ -265,9 +306,12 @@ class TestRedisVectorStore:
                 Document(page_content="Hello, world!", metadata={"source": "greeting"}),
                 Document(page_content="Test document", metadata={"source": "test"}),
             ]
-            RedisVectorStore.from_documents(docs, mock_embeddings, config=mock_config)
+            RedisVectorStore.from_documents(
+                docs, mock_embeddings, config=mock_config, batch_size=2
+            )
             mock_add_texts.assert_called_once_with(
                 ["Hello, world!", "Test document"],
                 [{"source": "greeting"}, {"source": "test"}],
                 None,
+                batch_size=2,
             )
