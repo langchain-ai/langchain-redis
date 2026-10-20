@@ -781,14 +781,19 @@ class RedisVectorStore(VectorStore):
             records.append(record)
 
         # Load records into the index. RedisVL handles pipeline batching.
-        load_kwargs: Dict[str, Any] = {"ttl": self.ttl}
-        if batch_size is not None:
-            load_kwargs["batch_size"] = batch_size
-
         if redis_keys:
-            result = self._index.load(records, keys=redis_keys, **load_kwargs)
+            result = self._index.load(
+                records,
+                keys=redis_keys,
+                ttl=self.ttl,
+                batch_size=batch_size,
+            )
         else:
-            result = self._index.load(records, **load_kwargs)
+            result = self._index.load(
+                records,
+                ttl=self.ttl,
+                batch_size=batch_size,
+            )
 
         return self._ids_from_redis_keys(result or [])
 

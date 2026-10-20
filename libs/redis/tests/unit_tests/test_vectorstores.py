@@ -170,15 +170,34 @@ class TestRedisVectorStore:
         with patch("langchain_redis.vectorstores.SearchIndex", MockSearchIndex):
             return RedisVectorStore(embeddings=mock_embeddings, config=mock_config)
 
-    def test_add_texts(self, vector_store: RedisVectorStore) -> None:
+    @pytest.mark.parametrize(
+        ("batch_size", "keys"),
+        [
+            pytest.param(None, None, id="default-batch-size"),
+            pytest.param(1, None, id="minimum-batch-size"),
+            pytest.param(2, ["doc1", "doc2"], id="explicit-keys"),
+        ],
+    )
+    def test_add_texts(
+        self,
+        vector_store: RedisVectorStore,
+        batch_size: Optional[int],
+        keys: Optional[List[str]],
+    ) -> None:
         texts = ["Hello, world!", "Test document"]
         metadatas = [{"source": "greeting"}, {"source": "test"}]
-        keys = vector_store.add_texts(texts, metadatas, batch_size=2)
-        assert len(keys) == 2
-        assert all(key.startswith("key_") for key in keys)
+        with patch.object(vector_store, "_validate_write_ownership"):
+            result = vector_store.add_texts(
+                texts, metadatas, keys=keys, batch_size=batch_size
+            )
+        assert len(result) == 2
+        if keys is None:
+            assert all(key.startswith("key_") for key in result)
+        else:
+            assert result == keys
         index = MockSearchIndex.last_instance
         assert index is not None
-        assert index.batch_size == 2
+        assert index.batch_size == batch_size
 
     @pytest.mark.parametrize("batch_size", [0, -1])
     def test_add_texts_rejects_invalid_batch_size(
