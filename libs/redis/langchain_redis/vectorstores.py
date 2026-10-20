@@ -646,6 +646,7 @@ class RedisVectorStore(VectorStore):
             List of ids from adding the texts into the vector store.
 
         Raises:
+            ValueError: If `batch_size` is less than 1.
             ValueError: If `metadatas` is provided and its length does not
                 match the number of `texts`.
             ValueError: If `keys` is provided and its length does not
@@ -693,6 +694,9 @@ class RedisVectorStore(VectorStore):
                 Texts, embeddings, and records are still prepared in memory before
                 the load operation.
         """
+
+        if batch_size is not None and batch_size < 1:
+            raise ValueError("'batch_size' must be a positive integer.")
 
         # Convert texts to a list if it's not already
         texts_list = list(texts)

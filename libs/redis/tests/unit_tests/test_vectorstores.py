@@ -180,6 +180,18 @@ class TestRedisVectorStore:
         assert index is not None
         assert index.batch_size == 2
 
+    @pytest.mark.parametrize("batch_size", [0, -1])
+    def test_add_texts_rejects_invalid_batch_size(
+        self, vector_store: RedisVectorStore, batch_size: int
+    ) -> None:
+        with patch.object(
+            vector_store.embeddings, "embed_documents"
+        ) as embed_documents:
+            with pytest.raises(ValueError):
+                vector_store.add_texts(["document"], batch_size=batch_size)
+
+        embed_documents.assert_not_called()
+
     def test_add_texts_uses_each_tag_field_separator(
         self, vector_store: RedisVectorStore
     ) -> None:
