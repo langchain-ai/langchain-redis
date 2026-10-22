@@ -3883,4 +3883,4 @@ langcache = ["langcache"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "a385476181c31140b47b2e98189376b8cc31e3ab92ea32b12a11b0de3bf2161c"
+content-hash = "e73d37060a3b64e39373e207d7bcf3e7d1b07bc899bacbafc4d9c162093f77e5"
