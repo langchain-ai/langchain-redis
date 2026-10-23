@@ -218,8 +218,8 @@ class RedisCache(BaseCache):
                 the cache key.
             - The cached value is stored as JSON and parsed back into a list of
                 `Generation` objects.
-            - If the key exists but the value is `None` or cannot be parsed,
-                `None` is returned.
+            - If the key is missing or the stored value is empty, `None` is
+                returned.
             - This method is typically called internally by LangChain, but can be used
                 directly for manual cache interactions.
         """
@@ -292,6 +292,8 @@ class RedisCache(BaseCache):
 
         Example:
             ```python
+            from langchain_core.outputs import Generation
+
             cache = RedisCache(
                 redis_url="redis://localhost:6379",
                 prefix="my_cache"
@@ -311,7 +313,8 @@ class RedisCache(BaseCache):
         Note:
             - This method uses Redis SCAN to iterate over keys, which is safe
                 for large datasets.
-            - It deletes keys in batches of 100 to optimize performance.
+            - It scans with a `COUNT` hint of 100 and deletes each batch of
+                matching keys.
             - Only keys that start with the specified prefix (default is `'redis:'`)
                 will be deleted.
             - This operation is irreversible. Make sure you want to clear all cached
@@ -357,7 +360,9 @@ class RedisSemanticCache(BaseCache):
             Defaults to `'llmcache'`.
         prefix (Optional[str]): Prefix for all keys stored in Redis.
 
-            Defaults to `'llmcache'`.
+            Defaults to `'llmcache'`. A non-default `prefix` becomes the cache's
+            index name and key prefix, combined as `'{name}:{prefix}'` when a
+            different non-default `name` is also given.
         redis_client (Optional[Redis]): An existing Redis client instance.
 
             If provided, `redis_url` is ignored.
@@ -576,6 +581,7 @@ class RedisSemanticCache(BaseCache):
 
         Example:
             ```python
+            from langchain_core.outputs import Generation
             from langchain_openai import OpenAIEmbeddings
 
             cache = RedisSemanticCache(
@@ -649,8 +655,9 @@ class RedisSemanticCache(BaseCache):
         Note:
             - The index name is set during the initialization of the
                 `RedisSemanticCache`.
-            - If no custom name was provided during initialization,
-                a default name is used.
+            - This is the `name` passed at initialization (default
+                `'llmcache'`), unless a non-default `prefix` was also given;
+                see the `prefix` argument.
             - This name is used internally to identify and manage the semantic cache
                 in Redis.
             - Knowing the index name can be useful for debugging or for direct
@@ -661,8 +668,8 @@ class RedisSemanticCache(BaseCache):
     async def alookup(self, prompt: str, llm_string: str) -> Optional[RETURN_VAL_TYPE]:
         """Async look up based on `prompt` and `llm_string`.
 
-        A cache implementation is expected to generate a key from the 2-tuple
-        of `prompt` and `llm_string` (e.g., by concatenating them with a delimiter).
+        Async version of `lookup`: checks for a cached result for a semantically
+        similar prompt and the same `llm_string`.
 
         Args:
             prompt: String representation of the prompt.
@@ -700,8 +707,8 @@ class RedisSemanticCache(BaseCache):
     ) -> None:
         """Async update cache based on `prompt` and `llm_string`.
 
-        The `prompt` and `llm_string` are used to generate a key for the cache.
-        The key should match that of the look up method.
+        Async version of `update`: embeds the `prompt` and stores it with the
+        result, using `llm_string` as metadata.
 
         Args:
             prompt: String representation of the prompt.
@@ -753,13 +760,14 @@ class LangCacheSemanticCache(BaseCache):
             Defaults to `'llmcache'`.
         server_url (Optional[str]): LangCache API endpoint.
 
-            If not set, a default managed endpoint is used; prefer the server URL
+            If not set, the `LANGCACHE_SERVER_URL` environment variable is used,
+            falling back to a default managed endpoint; prefer the server URL
             provided for your cache.
-        api_key (Optional[str]): API key for LangCache authentication.
+        api_key (Optional[str]): Required API key for LangCache authentication.
         cache_id (Optional[str]): Required LangCache instance identifier.
         use_exact_search (bool): Enable exact match search.
         use_semantic_search (bool): Enable semantic search.
-        distance_scale (Literal["normalized","redis"]): Distance scaling mode.
+        distance_scale (Literal["normalized", "redis"]): Distance scaling mode.
         **kwargs: Additional options forwarded to the LangCache wrapper.
 
     Example:
@@ -774,10 +782,14 @@ class LangCacheSemanticCache(BaseCache):
         )
         ```
 
-    Notes:
+    Note:
         - Embeddings are computed server-side in LangCache; client-side embeddings
             are not used.
         - Per-entry TTL is ignored; cache-level TTL applies if set.
+
+    Raises:
+        ValueError: If `cache_id` or `api_key` is not provided.
+        ImportError: If the `langcache` package is not installed.
     """
 
     # Hint for type checkers/IDEs; defined at class scope
@@ -839,7 +851,7 @@ class LangCacheSemanticCache(BaseCache):
         )
 
     def lookup(self, prompt: str, llm_string: str) -> Optional[RETURN_VAL_TYPE]:
-        """Lookup using LangCache's check API."""
+        """Look up using LangCache's check API."""
         results = self.cache.check(
             prompt=prompt,
             num_results=1,
@@ -886,7 +898,7 @@ class LangCacheSemanticCache(BaseCache):
         return self._cache_name
 
     async def alookup(self, prompt: str, llm_string: str) -> Optional[RETURN_VAL_TYPE]:
-        """Async lookup through LangCache's acheck API."""
+        """Async look up through LangCache's acheck API."""
         results = await self.cache.acheck(
             prompt=prompt,
             num_results=1,
