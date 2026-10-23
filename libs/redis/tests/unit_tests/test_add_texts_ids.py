@@ -1,6 +1,6 @@
 """Test that ids parameter in kwargs works correctly in add_texts."""
 
-from typing import List, Union
+from typing import Iterator, List, Tuple, Union
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -188,3 +188,81 @@ def test_add_texts_returns_ids_without_key_prefix(
         assert result == ["mykey"]
         validate.assert_called_once_with(["myprefix|mykey"])
         assert mock_index.load.call_args.kwargs["keys"] == ["myprefix|mykey"]
+
+
+MockedStore = Tuple[RedisVectorStore, MagicMock, MagicMock]
+
+
+@pytest.fixture
+def mocked_store() -> Iterator[MockedStore]:
+    """A RedisVectorStore over mocked RedisConfig, SearchIndex and embeddings."""
+    with (
+        patch("langchain_redis.vectorstores.RedisConfig") as mock_config,
+        patch("langchain_redis.vectorstores.SearchIndex") as mock_search_index_class,
+    ):
+        mock_embeddings = MagicMock(
+            **{
+                "embed_query.return_value": [0.1, 0.2, 0.3],
+                "embed_documents.return_value": [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]],
+            }
+        )
+        mock_index = MagicMock(
+            **{
+                "key.side_effect": lambda id_: f"key1:{id_}",
+                "schema.fields.values.return_value": [],
+            }
+        )
+        mock_search_index_class.configure_mock(
+            **{
+                "return_value": mock_index,
+                "from_dict.return_value": mock_index,
+                "from_existing.return_value": mock_index,
+            }
+        )
+        mock_config.return_value.configure_mock(
+            **{
+                "index_name": "test_index",
+                "key_prefix": "key1",
+                "primary_prefix": "key1",
+                "embedding_dimensions": 3,
+                "content_field": "text",
+                "embedding_field": "embedding",
+                "index_schema": None,
+                "schema_path": None,
+                "from_existing": False,
+                "storage_type": "JSON",
+                "metadata_schema": None,
+                "vector_datatype": "FLOAT32",
+                "default_tag_separator": ",",
+                "distance_metric": "COSINE",
+                "indexing_algorithm": "FLAT",
+            }
+        )
+        yield RedisVectorStore(embeddings=mock_embeddings), mock_index, mock_embeddings
+
+
+def test_add_texts_with_mismatched_ids_raises(mocked_store: MockedStore) -> None:
+    """A wrong-length `ids` is reported as an `ids` error, not a `keys` one."""
+    vector_store, mock_index, mock_embeddings = mocked_store
+
+    with pytest.raises(
+        ValueError, match="The length of 'ids' must match the number of 'texts'."
+    ):
+        vector_store.add_texts(texts=["text1", "text2"], ids=["id1"])
+
+    mock_embeddings.embed_documents.assert_not_called()
+    mock_index.load.assert_not_called()
+
+
+def test_add_texts_with_empty_ids_generates_ids(mocked_store: MockedStore) -> None:
+    """`ids=[]` is treated like no ids: no error, and RedisVL generates the keys."""
+    vector_store, mock_index, _ = mocked_store
+    mock_index.load.return_value = ["key1:gen1", "key1:gen2"]
+
+    with patch.object(vector_store, "_validate_write_ownership") as validate:
+        result = vector_store.add_texts(texts=["text1", "text2"], ids=[])
+
+    validate.assert_not_called()
+    mock_index.load.assert_called_once()
+    assert "keys" not in mock_index.load.call_args.kwargs
+    assert result == ["gen1", "gen2"]
