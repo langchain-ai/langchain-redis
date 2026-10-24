@@ -122,6 +122,15 @@ docs = vector_store.similarity_search(query, k=2)
 # Similarity search with score
 docs_and_scores = vector_store.similarity_search_with_score(query, k=2)
 
+# Relevance scores (higher is more relevant) and score-threshold retrieval
+docs_and_relevance = vector_store.similarity_search_with_relevance_scores(
+    query, k=2, score_threshold=0.5
+)
+retriever = vector_store.as_retriever(
+    search_type="similarity_score_threshold",
+    search_kwargs={"k": 4, "score_threshold": 0.5},
+)
+
 # Similarity search with filtering
 from redisvl.query.filter import Tag
 
@@ -140,6 +149,12 @@ docs = vector_store.max_marginal_relevance_search(query, k=2, fetch_k=10)
 Metadata is always stored and returned with documents, but only fields
 declared in `metadata_schema` are indexed and filterable. Filtering on an
 undeclared field raises an `Unknown field` error.
+
+`similarity_search_with_score` returns the raw Redis distance, where lower is
+closer. The relevance scores above convert it so that higher is better: for
+unit-normalized embeddings the score is the cosine similarity, whichever
+`distance_metric` the index uses. With `L2` or `IP` and embeddings that are not
+normalized, scores can fall outside `[0, 1]` and langchain-core will warn.
 
 #### Hybrid and full-text search
 

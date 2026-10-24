@@ -6,6 +6,7 @@ import ast
 import json
 from typing import (
     Any,
+    Callable,
     Dict,
     Iterable,
     List,
@@ -392,6 +393,23 @@ class RedisVectorStore(VectorStore):
         * [SIM=0.916] foo [{'baz': 'bar'}]
         ```
 
+    !!! example "Search with relevance score"
+
+        Unlike the distance above, a relevance score is higher for closer
+        matches. `score_threshold` drops everything below it.
+
+        ```python
+        results = vector_store.similarity_search_with_relevance_scores(
+            query="foo", k=1, score_threshold=0.5
+        )
+        for doc, score in results:
+            print(f"* [REL={score:.3f}] {doc.page_content} [{doc.metadata}]")
+        ```
+
+        ```python
+        * [REL=0.916] foo [{'baz': 'bar'}]
+        ```
+
     !!! example "Use as Retriever"
 
         ```python
@@ -404,6 +422,13 @@ class RedisVectorStore(VectorStore):
 
         ```python
         [Document(page_content='foo', metadata={'baz': 'bar'})]
+        ```
+
+        ```python
+        retriever = vector_store.as_retriever(
+            search_type="similarity_score_threshold",
+            search_kwargs={"k": 4, "score_threshold": 0.5},
+        )
         ```
     """
 
@@ -2164,6 +2189,23 @@ class RedisVectorStore(VectorStore):
             sort_by,
             **kwargs,
         )
+
+    def _select_relevance_score_fn(self) -> Callable[[float], float]:
+        """Return the function that turns a Redis distance into a relevance score.
+
+        Redis reports every metric as a distance where lower is closer: `COSINE`
+        gives `1 - cos`, `IP` gives `1 - dot` and `L2` gives the *squared*
+        Euclidean distance. For unit-normalized embeddings all three convert to
+        the cosine similarity, so a `score_threshold` means the same thing
+        whichever metric the index uses.
+
+        The metric comes from the live index, not `self.config`, because the
+        config only holds the default when an existing index is reopened.
+        """
+        vector_field = self._index.schema.fields[self.config.embedding_field]
+        if vector_field.attrs.distance_metric.value == "L2":
+            return lambda distance: 1.0 - distance / 2.0
+        return self._cosine_relevance_score_fn
 
     def max_marginal_relevance_search_by_vector(
         self,
