@@ -821,7 +821,7 @@ class LangCacheSemanticCache(BaseCache):
                 ) from e
             else:
                 raise ImportError(
-                    "LangCacheSemanticCache requires redisvl>=0.11.0. "
+                    "LangCacheSemanticCache requires redisvl>=0.27.1. "
                     "Update redisvl with: pip install --upgrade redisvl"
                 ) from e
 
