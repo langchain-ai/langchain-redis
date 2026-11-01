@@ -42,7 +42,9 @@ class SpyRedisVLSemanticCache:
         self.async_vectorize_calls += 1
         return [0.1, 0.2, 0.3]
 
-    async def acheck(self, vector: List[float]) -> List[Dict[str, Any]]:
+    async def acheck(
+        self, vector: List[float], filter_expression: Any = None
+    ) -> List[Dict[str, Any]]:
         return []
 
     def store(
@@ -51,6 +53,7 @@ class SpyRedisVLSemanticCache:
         response: str,
         vector: List[float],
         metadata: Optional[Dict[str, Any]] = None,
+        filters: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.data[tuple(vector)] = [{"response": response, "metadata": metadata}]
 
@@ -60,8 +63,9 @@ class SpyRedisVLSemanticCache:
         response: str,
         vector: List[float],
         metadata: Optional[Dict[str, Any]] = None,
+        filters: Optional[Dict[str, Any]] = None,
     ) -> None:
-        self.store(prompt, response, vector, metadata)
+        self.store(prompt, response, vector, metadata, filters)
 
 
 class TestSemanticCacheAsyncVectorize:

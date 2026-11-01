@@ -353,6 +353,19 @@ cached_result = await cache.alookup("prompt", "llm_string")
 - Semantic caching for similarity-based retrieval
 - Asynchronous cache operations
 
+#### Upgrading an existing semantic cache
+`RedisSemanticCache` scopes entries by LLM with a tag field in its index. An index created by an earlier version raises a `ValueError` until it is upgraded. Stop the applications using the cache, then run:
+
+```python
+RedisSemanticCache.migrate_index(
+    redis_url="redis://localhost:6379",
+    name="llmcache",
+    backfill=False,
+)
+```
+
+This keeps the existing keys, but entries cached before the upgrade are no longer returned. Set `backfill=True` to also migrate those entries and keep the cache warm; this scans the whole cache and is safe to rerun if it gets interrupted.
+
 #### What is Redis LangCache?
 - LangCache is a fully managed, cloud-based service that provides a semantic cache for LLM applications.
 - It manages embeddings and vector search for you, allowing you to focus on your application logic.
