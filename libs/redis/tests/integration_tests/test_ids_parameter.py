@@ -39,8 +39,8 @@ def test_add_texts_with_ids_in_kwargs(redis_url: str) -> None:
     # Add texts with ids parameter in kwargs
     returned_ids = vector_store.add_texts(texts=texts, ids=ids)  # type: ignore
 
-    # Verify returned IDs match expected format
-    assert len(returned_ids) == len(ids)
+    # Verify returned IDs are the ids passed in
+    assert returned_ids == ids
 
     # Check if keys in Redis have the expected format
     redis_client = Redis.from_url(redis_url)
@@ -85,8 +85,8 @@ def test_add_texts_with_both_keys_and_ids(redis_url: str) -> None:
         ids=ids_in_kwargs,  # type: ignore
     )
 
-    # Verify returned IDs match expected format from explicit keys
-    assert len(returned_ids) == len(explicit_keys)
+    # Verify returned IDs are the explicit keys
+    assert returned_ids == explicit_keys
 
     # Check if keys in Redis have the expected format from explicit keys
     redis_client = Redis.from_url(redis_url)

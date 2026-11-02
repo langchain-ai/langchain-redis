@@ -52,20 +52,16 @@ class FixedEmbeddings(Embeddings):
         if text in self.special_cases:
             return self.special_cases[text]
 
-        # For sentences that may contain our keywords, help tests that expect
-        # specific content like "The cat is on the mat" to match patterns
+        # Text containing a keyword (e.g. "I like apples") gets that keyword's
+        # vector; the first matching keyword in special_cases wins
         lower_text = text.lower()
         for key, vector in self.special_cases.items():
             if key in lower_text:
-                # Return a slightly perturbed version of the vector
-                # Use a more controlled perturbation that won't have integer issues
-                seed_val = abs(hash(text)) % (2**32 - 1)
-                np.random.seed(seed_val)
-                perturb = 0.9 + 0.2 * np.random.rand()
-                return self._normalized([x * perturb for x in vector])
+                return vector
 
-        # For all other cases, create a deterministic but unique vector
-        # This is a simple hash-based approach to create consistent vectors
+        # For all other cases, create a hash-seeded vector. hash() of a str is
+        # salted per process (unless PYTHONHASHSEED is set), so these vectors
+        # are only stable within one test run.
         # Use a positive seed value within numpy's required range
         seed_val = abs(hash(text)) % (2**32 - 1)
         np.random.seed(seed_val)
