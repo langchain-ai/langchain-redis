@@ -68,7 +68,7 @@ def redis_server_version(redis_url: str) -> tuple:
 @pytest.fixture(scope="session", autouse=True)
 def setup_openai_api_key() -> None:
     """Set up the OpenAI API key for tests if not already set."""
-    # If not already set in the environment, use a default value for testing
+    # If not already set, fall back to OPENAI_API_KEY_FOR_TESTS when available
     if "OPENAI_API_KEY" not in os.environ:
         # This would ideally come from a secrets store or CI/CD environment
         api_key = os.getenv("OPENAI_API_KEY_FOR_TESTS")

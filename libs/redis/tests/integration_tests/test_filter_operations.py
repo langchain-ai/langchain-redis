@@ -1,4 +1,5 @@
-"""Integration tests for filter-based deletion."""
+"""Integration tests for filter-based deletion and index-ownership isolation
+across shared prefixes."""
 
 from typing import Any, Callable, Dict, List, Optional, Set
 from uuid import uuid4
