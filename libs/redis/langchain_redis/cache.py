@@ -760,9 +760,11 @@ class LangCacheSemanticCache(BaseCache):
             Defaults to `'llmcache'`.
         server_url (Optional[str]): LangCache API endpoint.
 
-            If not set, the `LANGCACHE_SERVER_URL` environment variable is used,
-            falling back to a default managed endpoint; prefer the server URL
-            provided for your cache.
+            If not set, uses the `LANGCACHE_SERVER_URL` environment variable,
+            read when `langchain_redis.cache` is imported, or a default managed
+            endpoint if the variable is unset. Set the variable before importing
+            `langchain_redis`, or pass `server_url` explicitly. Prefer the server
+            URL provided for your cache.
         api_key (Optional[str]): Required API key for LangCache authentication.
         cache_id (Optional[str]): Required LangCache instance identifier.
         use_exact_search (bool): Enable exact match search.
