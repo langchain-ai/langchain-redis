@@ -12,8 +12,8 @@ class TestKeyPrefixIssue78:
     def test_double_colon_in_generated_keys(self, mock_search_index: MagicMock) -> None:
         """Reproduce issue #78: double colon in keys due to added trailing colon.
 
-        When SearchIndex.from_dict is called with prefix="myprefix:",
-        RedisVL will generate keys like "myprefix::doc_id" (double colon)
+        When SearchIndex.from_dict is called with prefix="test_prefix:",
+        RedisVL will generate keys like "test_prefix::doc_id" (double colon)
         because it adds its own key_separator.
         """
         mock_embeddings = MagicMock()

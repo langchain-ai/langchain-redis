@@ -124,8 +124,8 @@ def test_ttl(redis_url: str, redis_client: Redis) -> None:
 
 
 def test_multiple_sessions(redis_url: str) -> None:
-    session1 = f"ttl_test_{str(ULID())}"
-    session2 = f"ttl_test_{str(ULID())}"
+    session1 = f"multi_session_test_{str(ULID())}"
+    session2 = f"multi_session_test_{str(ULID())}"
     history1 = RedisChatMessageHistory(session_id=session1, redis_url=redis_url)
     history2 = RedisChatMessageHistory(session_id=session2, redis_url=redis_url)
 
@@ -313,7 +313,7 @@ def test_session_id_with_special_characters(redis_url: str) -> None:
 
 def test_timestamp_sorting(chat_history: RedisChatMessageHistory) -> None:
     """Test that messages are returned in correct timestamp order."""
-    # Add messages with small delays to ensure different timestamps
+    # Add messages in sequence; ordering relies on insertion timestamps
     chat_history.add_message(HumanMessage(content="First message"))
     chat_history.add_message(AIMessage(content="Second message"))
     chat_history.add_message(HumanMessage(content="Third message"))
@@ -718,9 +718,8 @@ def test_search_with_empty_query(chat_history: RedisChatMessageHistory) -> None:
     """Test search with empty query string."""
     chat_history.add_message(HumanMessage(content="Test message"))
 
-    # Empty query should return no results or all results depending on implementation
+    # An empty query returns no results
     results = chat_history.search_messages("")
-    # This behavior might vary - just ensure it doesn't crash
     assert isinstance(results, list)
     assert results == []
 

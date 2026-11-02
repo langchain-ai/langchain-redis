@@ -35,7 +35,7 @@ async def test_async_semantic_cache_update_and_lookup(redis_url: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_redis_cache(redis_url: str) -> None:
+async def test_async_semantic_cache_clear(redis_url: str) -> None:
     # Use a unique name for this test
     cache_name = f"test_cache_{os.urandom(8).hex()}"
     # Use patched embeddings
