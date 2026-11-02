@@ -66,7 +66,7 @@ Notes:
 ### Dependencies
 - `poetry install --with test` - Install unit test dependencies
 - `poetry install --with test,test_integration` - Install all test dependencies
-- `poetry install --with lint,typing,test,test_integration` - Install all development dependencies
+- `poetry install --with lint,typing,codespell,test,test_integration` - Install all development dependencies
 
 ## Architecture
 
@@ -75,8 +75,8 @@ Notes:
 The library provides three main integrations with Redis:
 
 1. **RedisVectorStore** (`vectorstores.py`) - Vector storage and similarity search
-2. **RedisCache/RedisSemanticCache** (`cache.py`) - LLM response caching
-3. **RedisChatMessageHistory** (`chat_message_history.py`) - Chat message persistence
+2. **RedisCache/RedisSemanticCache/LangCacheSemanticCache** (`cache.py`) - LLM response caching
+3. **RedisChatMessageHistory** (`chat_message_history.py`) - Chat message persistence (deprecated since 0.2.6, removal planned for 1.0.0)
 
 ### Configuration System
 
@@ -90,29 +90,38 @@ Key design patterns:
 - Config validates that only one of `index_schema`, `schema_path`, or `metadata_schema` is specified
 - `key_prefix` defaults to `index_name` if not provided
 - ULID-based default index names for uniqueness
+- `vector_attrs` passes algorithm-specific tuning (HNSW, SVS-VAMANA) into the vector field
+- `key_prefix` may be a list: searches span all prefixes, writes use the first (`primary_prefix`)
+- `stopwords` sets index-level stopwords (`None` = Redis default, `[]` = disabled)
 
 ### Vector Store Implementation
 
 `RedisVectorStore` uses RedisVL (Redis Vector Library) underneath:
-- Supports FLAT and HNSW indexing algorithms
+- Supports FLAT, HNSW, and SVS-VAMANA indexing algorithms
 - Multiple distance metrics (COSINE, L2, IP)
 - Metadata filtering via RedisVL FilterExpression
+- Hybrid (full-text + vector) search and full-text-only search
+- Filter-based deletion via `delete_by_filter` (supports `dry_run`); `delete()` is id-only
+- Reads and deletes are scoped to the index via an internal `_index_name` ownership marker
 - Custom cosine similarity implementation with optional simsimd acceleration
 - Document storage in either hash or JSON format
 
 ### Cache Implementation
 
-Two cache types:
+Three cache types:
 - `RedisCache` - Standard key-value caching with TTL
 - `RedisSemanticCache` - Uses embeddings for similarity-based cache hits
+- `LangCacheSemanticCache` - Uses the managed LangCache service; embeddings are computed server-side
 
-Both integrate with LangChain's caching interface and support async operations.
+All three integrate with LangChain's caching interface and support async operations.
 
 ### Chat History Implementation
 
+`RedisChatMessageHistory` is deprecated (since 0.2.6, removal in 1.0.0); LangChain recommends short-term memory instead. Maintain it, but don't extend it.
+
 `RedisChatMessageHistory` provides:
 - JSON-based message storage with Redis search indexing
-- Message type handling (Human, AI, System)
+- Message type handling (Human, AI, System, Tool)
 - TTL support for automatic expiration
 - Full-text search capabilities via Redis FT module
 

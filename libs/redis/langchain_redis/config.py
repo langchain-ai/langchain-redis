@@ -91,6 +91,11 @@ class RedisConfig(BaseModel):
             Defaults to `False`.
         custom_keys (Optional[List[str]]): Custom keys for documents.
         embedding_dimensions (Optional[int]): Dimensionality of embedding vectors.
+        legacy_key_format (bool): Whether to keep the historical double-colon key
+            format (`prefix::doc_id`) for backward compatibility.
+
+            Only applies with the default `":"` separator. Set to `False` for
+            `prefix:doc_id`. Defaults to `True`.
 
     Example:
         ```python
@@ -275,14 +280,13 @@ class RedisConfig(BaseModel):
         Args:
             schema (IndexSchema): An `IndexSchema` object defining the structure of
                 the Redis index.
-            **kwargs: Additional keyword arguments to override or supplement the
-                schema-derived settings.
+            **kwargs: Additional `RedisConfig` settings, such as connection
+                options.
 
                 Common kwargs include:
 
                 - `redis_url` (str): URL of the Redis instance.
-                - `distance_metric` (str): Distance metric for vector similarity.
-                - `embedding_dimensions` (int): Dimensionality of embedding vectors.
+                - `redis_client` (Redis): Pre-existing Redis client instance.
 
         Returns:
             RedisConfig: A new instance of `RedisConfig` configured based on the
@@ -317,9 +321,10 @@ class RedisConfig(BaseModel):
         Note:
             - The method extracts index name, key prefix, and storage type from the
                 schema.
-            - If the schema specifies a vector field, its attributes (like dimensions
-                and distance metric) are used.
-            - Additional kwargs can override settings derived from the schema.
+            - The schema, including its vector field definition, is used as-is to
+                build the index.
+            - `index_name`, `key_prefix`, and `storage_type` always come from the
+                schema and cannot be passed as kwargs.
             - This method is useful when you have a pre-defined index structure and want
                 to create a matching config.
             - The resulting config can be used to ensure that a `RedisVectorStore`
@@ -347,14 +352,13 @@ class RedisConfig(BaseModel):
         Args:
             schema_path (str): Path to the YAML file containing the index schema
                 definition.
-            **kwargs: Additional keyword arguments to override or supplement the
-                schema-derived settings.
+            **kwargs: Additional `RedisConfig` settings, such as connection
+                options.
 
                 Common kwargs include:
 
                 - `redis_url` (str): URL of the Redis instance.
-                - `distance_metric` (str): Distance metric for vector similarity.
-                - `embedding_dimensions` (int): Dimensionality of embedding vectors.
+                - `redis_client` (Redis): Pre-existing Redis client instance.
 
         Returns:
             RedisConfig: A new instance of `RedisConfig` configured based on the YAML
@@ -370,28 +374,21 @@ class RedisConfig(BaseModel):
                 redis_url="redis://localhost:6379"
             )
 
-            print(config.index_name)  # Output: Name defined in YAML
-            print(config.storage_type)  # Output: Storage type defined in YAML
+            # The YAML file is read when the schema is built
+            schema = config.to_index_schema()
+            print(schema.index.name)  # Output: Name defined in YAML
+            print(schema.index.storage_type)  # Output: Storage type defined in YAML
             ```
 
         Note:
             - The YAML file should contain a valid index schema definition
                 compatible with RedisVL.
-            - This method internally uses `IndexSchema.from_yaml()` to parse
-                the YAML file.
-            - Settings derived from the YAML schema can be overridden by
-                additional kwargs.
+            - The YAML file is loaded by `to_index_schema()` and used as-is to
+                build the index.
             - This method is particularly useful when index structures are defined
                 externally in YAML files.
             - Ensure that the YAML file is correctly formatted and accessible at
                 the given path.
-            - Any errors in reading or parsing the YAML file will be propagated
-                as exceptions.
-
-        Raises:
-            FileNotFoundError: If the specified YAML file does not exist.
-            YAMLError: If there are issues parsing the YAML file.
-            ValueError: If the YAML content is not a valid index schema.
         """
         return cls(schema_path=schema_path, **kwargs)
 
@@ -460,8 +457,7 @@ class RedisConfig(BaseModel):
                 should be provided via kwargs.
 
         Raises:
-            ValueError: If the `metadata_schema` is not a list of dictionaries or
-                if required keys are missing.
+            ValueError: If the `metadata_schema` is not a list of dictionaries.
         """
         return cls(metadata_schema=metadata_schema, **kwargs)
 
@@ -544,7 +540,7 @@ class RedisConfig(BaseModel):
             print(schema.index.name)
             # Output: my_index
             print(len(schema.fields))
-            # Output: 4 (id, content, embedding, author, year)
+            # Output: 5 (id, text, embedding, author, year)
             ```
 
         Note:
@@ -562,8 +558,10 @@ class RedisConfig(BaseModel):
                 an `IndexSchema`.
 
         Raises:
-            ValueError: If essential configuration elements (like
-                `embedding_dimensions`) are missing.
+            ValueError: If required settings (like `embedding_dimensions`) are
+                missing, or the `schema_path` file is not a valid index schema.
+            FileNotFoundError: If the `schema_path` file does not exist.
+            YAMLError: If the `schema_path` file cannot be parsed.
         """
         if self.index_schema:
             return self.index_schema
