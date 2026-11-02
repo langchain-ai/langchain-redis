@@ -51,6 +51,8 @@ print(docs[0].page_content)
 | Hybrid search — native method (`FT.HYBRID`) | ✗ | ✓ |
 | SVS-VAMANA vector indexing (with compression) | ✓ | ✓ |
 
+SVS-VAMANA indexing requires Redis 8.2 or newer.
+
 `hybrid_search()` uses LINEAR fusion by default and detects the server version
 automatically: it uses `FT.HYBRID` on Redis 8.4+ and falls back to the aggregate
 method on older servers. RRF fusion is available explicitly on Redis 8.4+.
