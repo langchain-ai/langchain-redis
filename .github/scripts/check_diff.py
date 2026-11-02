@@ -21,12 +21,11 @@ if __name__ == "__main__":
             file.startswith(dir_)
             for dir_ in (
                 ".github/workflows",
-                ".github/tools",
                 ".github/actions",
                 ".github/scripts/check_diff.py",
             )
         ):
-            # add all LANGCHAIN_DIRS for infra changes
+            # add all LIB_DIRS for infra changes
             dirs_to_run["test"].update(LIB_DIRS)
 
         if any(file.startswith(dir_) for dir_ in LIB_DIRS):

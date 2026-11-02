@@ -134,17 +134,14 @@ jobs:
 
           poetry run python -c "import $IMPORT_NAME; print(dir($IMPORT_NAME))"
 
-      - name: Import test dependencies
+      - name: Install test dependencies
         run: poetry install --with test,test_integration --no-root
         working-directory: ${{ inputs.working-directory }}
 
       # Overwrite the local version of the package with the built version
-      - name: Import published package (again)
+      - name: Reinstall built package
         working-directory: ${{ inputs.working-directory }}
         shell: bash
-        env:
-          PKG_NAME: ${{ needs.build.outputs.pkg-name }}
-          VERSION: ${{ needs.build.outputs.version }}
         run: |
           poetry run pip install dist/*.whl
 
@@ -229,7 +226,7 @@ jobs:
           packages-dir: ${{ inputs.working-directory }}/dist/
           verbose: true
           print-hash: true
-          # Temp workaround since attestations are on by default as of gh-action-pypi-publish v1\.11\.0
+          # Temp workaround since attestations are on by default as of gh-action-pypi-publish v1.11.0
           attestations: false
 
   mark-release:
