@@ -50,18 +50,6 @@ class MockRedis:
         pass
 
 
-# Helper functions (make sure these match the ones in your actual implementation)
-def _serialize_generations(generations: List[Generation]) -> str:
-    return json.dumps([gen.dict() for gen in generations])
-
-
-def _deserialize_generations(generations_str: str) -> Optional[List[Generation]]:
-    try:
-        return [Generation(**gen) for gen in json.loads(generations_str)]
-    except (json.JSONDecodeError, TypeError):
-        return None
-
-
 class MockRedisVLSemanticCache:
     def __init__(self) -> None:
         self.data: Dict[tuple, List[Dict[str, Any]]] = {}
@@ -104,7 +92,7 @@ class MockRedisVLSemanticCache:
                 hash(prompt) % 5 * 0.1,
             ]
 
-    def acheck(self, vector: List[float]) -> List[Dict[str, Any]]:
+    async def acheck(self, vector: List[float]) -> List[Dict[str, Any]]:
         # Async version with same behavior
         return self.check(vector)
 

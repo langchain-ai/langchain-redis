@@ -70,22 +70,6 @@ class TestRedisSemanticCachePrefix:
         assert cache._index.schema.index.prefix == "test_name"
         assert cache._index.schema.index.name == "test_name"
 
-    def test_expected_behavior_for_prefix(self) -> None:
-        """Document the expected behavior for the prefix parameter.
-
-        When a user provides:
-        - name="langgraph_agent"
-        - prefix="user_1"
-
-        They expect keys to be stored as: "user_1:..." or "langgraph_agent:user_1:..."
-        But currently, keys are stored as: "langgraph_agent:..."
-
-        The prefix parameter should allow for multi-tenant isolation or
-        user-specific namespacing within the same named cache.
-        """
-        # This is a documentation test - no assertions
-        pass
-
     @patch("langchain_redis.cache.EmbeddingsVectorizer")
     @patch("langchain_redis.cache.RedisVLSemanticCache")
     @patch("langchain_redis.cache.Redis")
