@@ -7,8 +7,8 @@ from contextlib import redirect_stdout
 
 
 def test_logging_reset() -> None:
-    """Test that demonstrates logs being reset to INFO level when importing
-    RedisChatMessageHistory."""
+    """Test that importing and using RedisChatMessageHistory does not reset
+    application loggers to INFO (issue #62)."""
     # Reset logging config
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
@@ -33,9 +33,6 @@ def test_logging_reset() -> None:
     # Log a debug message - this should work
     test_logger.debug("Debug message before import")
 
-    # Check if a push_response logger exists yet
-    [name for name in logging.root.manager.loggerDict.keys() if "push" in name.lower()]
-
     # Check the level
     before_level = root_logger.level
     test_logger_before_level = test_logger.level
@@ -44,15 +41,9 @@ def test_logging_reset() -> None:
     with redirect_stdout(io.StringIO()):  # Suppress any print statements during import
         import redis
 
-    # Check if a push_response logger exists after importing Redis
-    [name for name in logging.root.manager.loggerDict.keys() if "push" in name.lower()]
-
     # Now import RedisChatMessageHistory, which internally uses Redis
     with redirect_stdout(io.StringIO()):  # Suppress any print statements during import
         from langchain_redis import RedisChatMessageHistory
-
-    # Check if a push_response logger exists now
-    [name for name in logging.root.manager.loggerDict.keys() if "push" in name.lower()]
 
     # Let's actually create an instance and use it
     with redirect_stdout(io.StringIO()):  # Suppress any print statements during usage
@@ -80,25 +71,9 @@ def test_logging_reset() -> None:
         except Exception:
             pass
 
-    # Check if push_response was created after using RedisChatMessageHistory
-    has_push_response_after_use = "push_response" in logging.root.manager.loggerDict
-    [name for name in logging.root.manager.loggerDict.keys() if "push" in name.lower()]
-
-    # If push_response logger exists, check its level
-    push_response_level = None
-    if has_push_response_after_use:
-        push_response_logger = logging.getLogger("push_response")
-        push_response_level = push_response_logger.level
-
     # Check the level again
     after_level = root_logger.level
     test_logger_after_level = test_logger.level
-
-    # Examine all loggers and their levels
-    {
-        name: logging.getLogger(name).level
-        for name in logging.root.manager.loggerDict.keys()
-    }
 
     # Log another debug message
     test_logger.debug("Debug message after import")

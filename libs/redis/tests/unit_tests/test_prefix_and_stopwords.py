@@ -116,7 +116,7 @@ def test_custom_key_separator_reaches_generated_schema() -> None:
 
 
 def test_redisvl_schema_key_separator_is_authoritative() -> None:
-    """A complete RedisVL schema does not require duplicate configuration."""
+    """A RedisVL schema's key_separator overrides an explicitly passed key_separator."""
     schema = IndexSchema.from_dict(
         {
             "index": {
