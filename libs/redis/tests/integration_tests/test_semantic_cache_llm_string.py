@@ -8,7 +8,7 @@ written for the same `llm_string`.
 
 import hashlib
 import json
-from typing import Any, Dict, Generator, List
+from typing import Any, Dict, Generator, List, Optional
 from unittest.mock import patch
 
 import pytest
@@ -346,10 +346,21 @@ class TestSemanticCacheLegacyIndexMigration:
         hit = cache.lookup(PROMPT, "llm_a")
         assert hit is not None and hit[0].text == "new"
 
-    def test_backfill_preserves_expiration_deadline(
-        self, client: Redis, legacy: RedisVLSemanticCache, cache_name: str
+    @pytest.mark.parametrize(
+        "ttl",
+        [
+            pytest.param(None, id="no_expiration"),
+            pytest.param(1000, id="with_expiration"),
+        ],
+    )
+    def test_backfill_preserves_expiration(
+        self,
+        client: Redis,
+        legacy: RedisVLSemanticCache,
+        cache_name: str,
+        ttl: Optional[int],
     ) -> None:
-        key = self._store(legacy, ttl=1000)
+        key = self._store(legacy, ttl=ttl)
         expire_at = client.pexpiretime(key)
 
         RedisSemanticCache.migrate_index(
@@ -358,17 +369,6 @@ class TestSemanticCacheLegacyIndexMigration:
 
         new_key = _new_key(cache_name, PROMPT, "llm_a")
         assert client.pexpiretime(new_key) == expire_at
-
-    def test_backfill_keeps_entries_without_expiration(
-        self, client: Redis, legacy: RedisVLSemanticCache, cache_name: str
-    ) -> None:
-        self._store(legacy)
-
-        RedisSemanticCache.migrate_index(
-            redis_client=client, name=cache_name, backfill=True
-        )
-
-        assert client.pexpiretime(_new_key(cache_name, PROMPT, "llm_a")) == -1
 
     @pytest.mark.parametrize("protocol", [2, 3])
     def test_backfill_with_decoding_client_keeps_binary_vector(

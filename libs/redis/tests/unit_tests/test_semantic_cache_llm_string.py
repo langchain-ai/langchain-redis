@@ -35,6 +35,13 @@ def _schema(dims: int = 3, with_tag: bool = True) -> SemanticCacheIndexSchema:
     return schema
 
 
+def _existing_index(schema: SemanticCacheIndexSchema) -> Any:
+    return patch(
+        "langchain_redis.cache.SearchIndex.from_existing",
+        return_value=Mock(schema=schema),
+    )
+
+
 @pytest.fixture
 def mock_embeddings() -> Mock:
     embeddings = Mock(spec=Embeddings)
@@ -146,10 +153,7 @@ class TestSemanticCacheLegacyIndexDetection:
         index.name = "idx"
         index.exists.return_value = True
 
-        with patch(
-            "langchain_redis.cache.SearchIndex.from_existing",
-            return_value=Mock(schema=existing_schema),
-        ):
+        with _existing_index(existing_schema):
             assert cache._is_legacy_index(index) is expected
 
     def test_missing_index_is_not_legacy(self, cache: RedisSemanticCache) -> None:
@@ -159,13 +163,6 @@ class TestSemanticCacheLegacyIndexDetection:
         with patch("langchain_redis.cache.SearchIndex.from_existing") as from_existing:
             assert cache._is_legacy_index(index) is False
         from_existing.assert_not_called()
-
-
-def _existing_index(schema: SemanticCacheIndexSchema) -> Any:
-    return patch(
-        "langchain_redis.cache.SearchIndex.from_existing",
-        return_value=Mock(schema=schema),
-    )
 
 
 class TestSemanticCacheMigrateIndex:
