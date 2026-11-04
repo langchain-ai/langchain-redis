@@ -151,10 +151,13 @@ declared in `metadata_schema` are indexed and filterable. Filtering on an
 undeclared field raises an `Unknown field` error.
 
 `similarity_search_with_score` returns the raw Redis distance, where lower is
-closer. The relevance scores above convert it so that higher is better: for
-unit-normalized embeddings the score is the cosine similarity, whichever
-`distance_metric` the index uses. With `L2` or `IP` and embeddings that are not
-normalized, scores can fall outside `[0, 1]` and langchain-core will warn.
+closer. The relevance scores above use RedisVL's normalization instead, so they
+fall in `[0, 1]` and higher is closer: `(2 - d) / 2` for `COSINE` and
+`1 / (1 + d)` for `L2`. The two scale differently, so pick `score_threshold`
+per index (with `COSINE`, unrelated vectors score about 0.5). `IP` indexes
+raise a `ValueError`, since RedisVL has no normalization for them. Use `COSINE`,
+which is normalized inner product. `distance_threshold` stays a raw distance
+when you combine it with these methods.
 
 #### Hybrid and full-text search
 

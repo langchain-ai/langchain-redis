@@ -39,6 +39,7 @@ from redisvl.redis.utils import (  # type: ignore[import]
     hashify,
 )
 from redisvl.schema import FieldTypes, IndexSchema, StorageType  # type: ignore[import]
+from redisvl.schema.fields import VECTOR_NORM_MAP  # type: ignore[import]
 
 from langchain_redis.config import RedisConfig
 from langchain_redis.version import __lib_name__
@@ -395,8 +396,9 @@ class RedisVectorStore(VectorStore):
 
     !!! example "Search with relevance score"
 
-        Unlike the distance above, a relevance score is higher for closer
-        matches. `score_threshold` drops everything below it.
+        Unlike the distance above, a relevance score is in `[0, 1]` and higher
+        for closer matches. `score_threshold` drops everything below it.
+        Not available for `IP` indexes.
 
         ```python
         results = vector_store.similarity_search_with_relevance_scores(
@@ -2169,21 +2171,34 @@ class RedisVectorStore(VectorStore):
         )
 
     def _select_relevance_score_fn(self) -> Callable[[float], float]:
-        """Return the function that turns a Redis distance into a relevance score.
+        """Return RedisVL's normalization for the distance metric of this index.
 
-        Redis reports every metric as a distance where lower is closer: `COSINE`
-        gives `1 - cos`, `IP` gives `1 - dot` and `L2` gives the *squared*
-        Euclidean distance. For unit-normalized embeddings all three convert to
-        the cosine similarity, so a `score_threshold` means the same thing
-        whichever metric the index uses.
+        This is the function RedisVL applies for `normalize_vector_distance=True`:
+        it maps a distance to a score in `[0, 1]` where higher is closer.
+        It is applied to the raw distances here instead of passing the flag to
+        the query, because on a range query the flag also reads
+        `distance_threshold` as a similarity. That would change the meaning of
+        a kwarg that is a raw distance everywhere else in this class.
+
+        `IP` has no normalization in RedisVL and its raw distance is lower for
+        closer vectors, so it can't be returned as a relevance score.
 
         The metric comes from the live index, not `self.config`, because the
         config only holds the default when an existing index is reopened.
+
+        Raises:
+            ValueError: If the index uses a metric RedisVL can't normalize.
         """
         vector_field = self._index.schema.fields[self.config.embedding_field]
-        if vector_field.attrs.distance_metric.value == "L2":
-            return lambda distance: 1.0 - distance / 2.0
-        return self._cosine_relevance_score_fn
+        metric = vector_field.attrs.distance_metric.value
+        norm_fn = VECTOR_NORM_MAP[metric]
+        if norm_fn is None:
+            raise ValueError(
+                f"Relevance scores are not supported for the {metric} distance "
+                "metric. Use COSINE, which is normalized inner product, or "
+                "similarity_search_with_score() for raw distances."
+            )
+        return norm_fn
 
     def max_marginal_relevance_search_by_vector(
         self,
