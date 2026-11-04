@@ -9,7 +9,7 @@ from redisvl.index import SearchIndex  # type: ignore[import]
 from redisvl.redis.utils import convert_bytes, hashify  # type: ignore[import]
 from redisvl.schema import IndexSchema  # type: ignore[import]
 
-from langchain_redis import RedisVectorStore, migrate_index_ownership
+from langchain_redis import RedisConfig, RedisVectorStore, migrate_index_ownership
 
 DIMS = 4
 
@@ -375,6 +375,42 @@ def test_rebuild_preserves_hash_field_aliases(
             assert attribute in after_attributes
     assert [doc.id for doc in client.ft(name).search(query).docs] == [key]
     assert client.hgetall(key) == {**before, b"_index_name": hashify(name).encode()}
+
+
+def test_generated_config_schema_mismatch_is_rejected_before_rebuild(
+    client: Redis, embeddings: Embeddings
+) -> None:
+    name = f"ownership_generated_{uuid4().hex[:8]}"
+    config = RedisConfig(
+        index_name=name,
+        key_prefix=name,
+        redis_client=client,
+        embedding_dimensions=DIMS,
+        indexing_algorithm="HNSW",
+        legacy_key_format=False,
+    )
+    store = RedisVectorStore(embeddings, config=config)
+    try:
+        legacy = store.index.schema.model_copy(deep=True)
+        legacy.fields.pop("_index_name")
+        legacy.add_field({"name": "_index_name", "type": "text"})
+        SearchIndex(schema=legacy, redis_client=client).create(
+            overwrite=True, drop=False
+        )
+        attributes = convert_bytes(client.ft(name).info())["attributes"]
+
+        with pytest.raises(ValueError, match="source_schema does not match"):
+            migrate_index_ownership(
+                name,
+                redis_client=client,
+                source_schema=config.to_index_schema(),
+                dry_run=False,
+            )
+
+        assert convert_bytes(client.ft(name).info())["attributes"] == attributes
+    finally:
+        if store.index.exists():
+            store.index.delete(drop=True)
 
 
 @pytest.mark.parametrize("storage_type", ["hash", "json"])

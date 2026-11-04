@@ -7,6 +7,7 @@ from redisvl.schema import IndexSchema  # type: ignore[import]
 from langchain_redis.migrations import (
     _schema_action,
     _target_schema,
+    _validate_source_schema,
     migrate_index_ownership,
 )
 
@@ -29,6 +30,35 @@ def _schema(
             "fields": fields,
         }
     )
+
+
+def _attribute(
+    identifier: str,
+    field_type: str,
+    *options: Any,
+    alias: Optional[str] = None,
+) -> List[Any]:
+    return [
+        "identifier",
+        identifier,
+        "attribute",
+        alias or identifier,
+        "type",
+        field_type,
+        *options,
+    ]
+
+
+def _info(*attributes: List[Any]) -> Dict[str, Any]:
+    return {
+        "index_name": INDEX_NAME,
+        "index_definition": {"key_type": "HASH", "prefixes": ["migration:"]},
+        "attributes": [
+            _attribute("text", "TEXT", "WEIGHT", 1.0),
+            *attributes,
+            _attribute("_index_name", "TEXT", "WEIGHT", 1.0),
+        ],
+    }
 
 
 @pytest.mark.parametrize(
@@ -98,6 +128,53 @@ def test_target_schema_preserves_declared_hash_field_alias() -> None:
 
     assert target.fields["display"] == field
     assert target.fields["display"] is not field
+
+
+@pytest.mark.parametrize(
+    "mismatch",
+    ["missing", "extra", "alias", "type", "field-options", "stopwords"],
+)
+def test_source_schema_must_match_reliable_live_definition(mismatch: str) -> None:
+    source = _schema({"name": "_index_name", "type": "text"})
+    info = _info()
+    if mismatch == "missing":
+        source.fields.pop("text")
+    elif mismatch == "extra":
+        source.add_field({"name": "extra", "type": "text"})
+    elif mismatch == "alias":
+        field = source.fields.pop("text")
+        field.name, field.path = "display", "text"
+        source.fields["display"] = field
+    elif mismatch == "type":
+        source.fields.pop("text")
+        source.add_field({"name": "text", "type": "tag"})
+    elif mismatch == "field-options":
+        source.fields["text"].attrs.weight = 2
+    else:
+        source.index.stopwords = ["custom"]
+        info["stopwords_list"] = ["different"]
+
+    with pytest.raises(ValueError, match="source_schema does not match"):
+        _validate_source_schema(info, source)
+
+
+def test_source_schema_vector_tuning_remains_authoritative() -> None:
+    source = _schema({"name": "_index_name", "type": "text"})
+    source.add_field(
+        {
+            "name": "embedding",
+            "type": "vector",
+            "attrs": {
+                "algorithm": "hnsw",
+                "dims": 4,
+                "datatype": "float32",
+                "distance_metric": "cosine",
+                "ef_runtime": 75,
+                "epsilon": 0.2,
+            },
+        }
+    )
+    _validate_source_schema(_info(_attribute("embedding", "VECTOR")), source)
 
 
 def test_preflight_rejects_incomplete_cursor_before_mutation(

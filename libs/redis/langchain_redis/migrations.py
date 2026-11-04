@@ -15,6 +15,7 @@ from redisvl.redis.utils import convert_bytes, hashify  # type: ignore[import]
 from redisvl.schema import FieldTypes, IndexSchema, StorageType  # type: ignore[import]
 
 _FIELD = "_index_name"
+_SCHEMA_MISMATCH = "source_schema does not match the live index definition."
 
 
 @dataclass(frozen=True)
@@ -55,7 +56,8 @@ def migrate_index_ownership(
     It is authoritative: only its ownership field is replaced. The caller must
     include all fields, aliases and vector tuning; schemas inferred from FT.INFO
     or generated from an incomplete config are not sufficient. The index name,
-    storage type and prefixes are checked against the live index before mutation.
+    storage type, prefixes, fields and explicit stopwords are checked against the
+    live index before mutation. Vector tuning remains authoritative from the schema.
     Rebuilding an index with INDEXALL enabled requires manual migration.
 
     The operation is not transactional and has no automatic rollback. Re-run
@@ -103,6 +105,7 @@ def migrate_index_ownership(
                 "source_schema must match the live index name, "
                 "storage type and prefixes."
             )
+        _validate_source_schema(info, source_schema)
         # Use the operator's declaration directly; FT.INFO is not a schema export.
         target = _target_schema(source_schema)
 
@@ -219,16 +222,77 @@ def _schema_action(
     return "rebuild"
 
 
+def _attribute_identity(attribute: Any) -> tuple[str, str, str]:
+    """Read identifier, alias and type directly from a raw FT.INFO attribute."""
+    metadata = (
+        attribute
+        if isinstance(attribute, dict)
+        else dict(zip(attribute[:6:2], attribute[1:6:2]))
+    )
+    return (
+        str(metadata["identifier"]),
+        str(metadata["attribute"]),
+        str(metadata["type"]).upper(),
+    )
+
+
+def _schema_field_identity(field: Any) -> tuple[str, str, str]:
+    """Return a supplied field's identifier, alias and type."""
+    field_type = getattr(field.type, "value", field.type)
+    return field.path or field.name, field.name, str(field_type).upper()
+
+
+def _validate_source_schema(info: Dict[str, Any], source: IndexSchema) -> None:
+    """Compare reliable live field metadata without inferring vector tuning."""
+    live_stopwords = info.get("stopwords_list")
+    source_stopwords = source.index.stopwords
+    if ("stopwords_list" in info) != (source_stopwords is not None) or (
+        source_stopwords is not None
+        and sorted(live_stopwords or []) != sorted(source_stopwords)
+    ):
+        raise ValueError(_SCHEMA_MISMATCH)
+
+    live = []
+    for attribute in info["attributes"]:
+        identity = _attribute_identity(attribute)
+        if identity[1] != _FIELD:
+            live.append((identity, attribute))
+    supplied = {
+        field.name: (_schema_field_identity(field), field)
+        for field in source.fields.values()
+        if field.name != _FIELD
+    }
+    if sorted(identity for identity, _ in live) != sorted(
+        identity for identity, _ in supplied.values()
+    ):
+        raise ValueError(_SCHEMA_MISMATCH)
+
+    nonvector = [attribute for identity, attribute in live if identity[2] != "VECTOR"]
+    live_schema = IndexSchema.from_dict(
+        convert_index_info_to_schema({**info, "attributes": nonvector})
+    )
+    live_fields = {
+        field.path or field.name: field for field in live_schema.fields.values()
+    }
+    for (identifier, alias, field_type), _ in live:
+        if field_type == "VECTOR":
+            continue
+        live_attrs = live_fields[identifier].attrs.model_dump()
+        expected_attrs = supplied[alias][1].attrs.model_dump()
+        # Redis adds UNF automatically to SORTABLE JSON text fields.
+        if source.index.storage_type == StorageType.JSON and field_type == "TEXT":
+            live_attrs.pop("unf", None)
+            expected_attrs.pop("unf", None)
+        if live_attrs != expected_attrs:
+            raise ValueError(_SCHEMA_MISMATCH)
+
+
 def _ownership_schema(info: Dict[str, Any]) -> IndexSchema:
     """Inspect only the live ownership field, without reconstructing vector settings."""
     path = "$._index_name" if info["index_definition"]["key_type"] == "JSON" else _FIELD
     attributes = []
     for attribute in info["attributes"]:
-        identifier, alias = (
-            (attribute["identifier"], attribute["attribute"])
-            if isinstance(attribute, dict)
-            else (attribute[1], attribute[3])
-        )
+        identifier, alias, _ = _attribute_identity(attribute)
         if identifier == path or alias == _FIELD:
             if identifier != path or alias != _FIELD:
                 raise ValueError(
