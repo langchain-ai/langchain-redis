@@ -125,8 +125,11 @@ def test_migration_preserves_documents_and_is_rerunnable(
     schema_before = SearchIndex.from_existing(
         store.index.name, redis_client=client
     ).schema.to_dict()
+    source = store.config.to_index_schema()
 
-    preview = migrate_index_ownership(store.index.name, redis_client=client)
+    preview = migrate_index_ownership(
+        store.index.name, redis_client=client, source_schema=source
+    )
     assert preview.dry_run
     assert (preview.schema_action, preview.would_update, preview.updated) == (
         action,
@@ -144,6 +147,7 @@ def test_migration_preserves_documents_and_is_rerunnable(
     result = migrate_index_ownership(
         store.index.name,
         redis_client=client,
+        source_schema=source,
         dry_run=False,
         batch_size=1,
     )
@@ -221,10 +225,13 @@ def test_json_backfill_handles_null_and_skips_already_migrated_documents(
     client.json().set(null_key, "$._index_name", None)
     client.json().set(migrated_key, "$._index_name", marker)
 
-    preview = migrate_index_ownership(store.index.name, redis_client=client)
+    source = store.config.to_index_schema()
+    preview = migrate_index_ownership(
+        store.index.name, redis_client=client, source_schema=source
+    )
     assert preview.would_update == 1
     result = migrate_index_ownership(
-        store.index.name, redis_client=client, dry_run=False
+        store.index.name, redis_client=client, source_schema=source, dry_run=False
     )
     assert (result.updated, result.completed) == (1, True)
     assert client.json().get(null_key, "$._index_name") == [marker]
@@ -241,7 +248,12 @@ def test_migration_rejects_conflicting_ownership_before_mutation(
     attributes = convert_bytes(client.ft(store.index.name).info())["attributes"]
 
     with pytest.raises(ValueError, match="another index's marker"):
-        migrate_index_ownership(store.index.name, redis_client=client, dry_run=False)
+        migrate_index_ownership(
+            store.index.name,
+            redis_client=client,
+            source_schema=store.config.to_index_schema(),
+            dry_run=False,
+        )
     assert client.hgetall(key) == before
     assert convert_bytes(client.ft(store.index.name).info())["attributes"] == attributes
 
@@ -257,7 +269,11 @@ def test_rejects_index_name_as_alias_before_mutation(
 
     with pytest.raises(ValueError, match="cannot be supplied as its own alias"):
         migrate_index_ownership(
-            name, redis_client=client, aliases=[name], dry_run=dry_run
+            name,
+            redis_client=client,
+            source_schema=store.config.to_index_schema(),
+            aliases=[name],
+            dry_run=dry_run,
         )
 
     assert convert_bytes(client.ft(name).info())["attributes"] == attributes
@@ -272,7 +288,11 @@ def test_rebuild_restores_supplied_alias(
     client.ft(store.index.name).aliasadd(alias)
 
     result = migrate_index_ownership(
-        store.index.name, redis_client=client, aliases=[alias], dry_run=False
+        store.index.name,
+        redis_client=client,
+        source_schema=store.config.to_index_schema(),
+        aliases=[alias],
+        dry_run=False,
     )
     assert result.completed
     assert convert_bytes(client.ft(alias).info())["index_name"] == store.index.name
@@ -298,17 +318,28 @@ def test_rebuild_preserves_hash_field_aliases(
         "SORTABLE",
     )
     client.hset(key, "title", "hello")
+    source = store.config.to_index_schema().model_copy(deep=True)
+    source.add_field(
+        {
+            "name": "display",
+            "type": "text",
+            "attrs": {"weight": 2, "no_stem": True, "sortable": True},
+        }
+    )
+    source.fields["display"].path = "title"
     before = client.hgetall(key)
     attributes = convert_bytes(client.ft(name).info())["attributes"]
     query = Query("@display:hello").no_content().dialect(2)
     assert [doc.id for doc in client.ft(name).search(query).docs] == [key]
 
-    preview = migrate_index_ownership(name, redis_client=client)
+    preview = migrate_index_ownership(name, redis_client=client, source_schema=source)
     assert preview.schema_action == "rebuild"
     assert convert_bytes(client.ft(name).info())["attributes"] == attributes
     assert client.hgetall(key) == before
 
-    result = migrate_index_ownership(name, redis_client=client, dry_run=False)
+    result = migrate_index_ownership(
+        name, redis_client=client, source_schema=source, dry_run=False
+    )
     assert (result.updated, result.completed) == (1, True)
     after_attributes = convert_bytes(client.ft(name).info())["attributes"]
     for attribute in attributes:
@@ -322,17 +353,39 @@ def test_rebuild_preserves_hash_field_aliases(
 
 
 @pytest.mark.parametrize("storage_type", ["hash", "json"])
-def test_hnsw_rebuild_requires_original_schema_and_preserves_tuning(
+@pytest.mark.parametrize(
+    ("algorithm", "tuning"),
+    [
+        pytest.param("flat", {}, id="flat"),
+        pytest.param("hnsw", {"ef_runtime": 75, "epsilon": 0.2}, id="hnsw"),
+        pytest.param(
+            "svs-vamana",
+            {
+                "compression": "LVQ8",
+                "training_threshold": 2048,
+                "search_window_size": 35,
+                "epsilon": 0.2,
+            },
+            id="svs",
+        ),
+    ],
+)
+def test_vector_rebuild_requires_original_schema_and_preserves_tuning(
     client: Redis,
     make_legacy_store: Callable[..., RedisVectorStore],
     monkeypatch: pytest.MonkeyPatch,
+    redis_server_version: tuple,
     storage_type: str,
+    algorithm: str,
+    tuning: Dict[str, Any],
 ) -> None:
+    if algorithm == "svs-vamana" and redis_server_version < (8, 2):
+        pytest.skip("SVS-VAMANA requires Redis >= 8.2")
     store = make_legacy_store(
         storage_type=storage_type,
         marker_type="text",
         ids=("one",),
-        vector_attrs={"algorithm": "hnsw", "ef_runtime": 75, "epsilon": 0.2},
+        vector_attrs={"algorithm": algorithm, **tuning},
     )
     name, key = store.index.name, store.index.key("one")
     source = store.config.to_index_schema().model_copy(deep=True)
@@ -340,18 +393,18 @@ def test_hnsw_rebuild_requires_original_schema_and_preserves_tuning(
     before = _read_record(client, store, key)
     attributes = convert_bytes(client.ft(name).info())["attributes"]
 
-    with pytest.raises(ValueError, match="require the original source_schema"):
+    with pytest.raises(ValueError, match="require the complete original source_schema"):
         migrate_index_ownership(name, redis_client=client, dry_run=False)
     mismatched = source.model_copy(deep=True)
     mismatched.index.prefix = "wrong:"
-    with pytest.raises(ValueError, match="source_schema does not match"):
+    with pytest.raises(ValueError, match="source_schema must match"):
         migrate_index_ownership(
             name, redis_client=client, source_schema=mismatched, dry_run=False
         )
     assert convert_bytes(client.ft(name).info())["attributes"] == attributes
     assert _read_record(client, store, key) == before
 
-    # FT.INFO omits runtime tuning; inspect the actual replacement command.
+    # FT.INFO/RedisVL cannot round-trip all tuning; inspect the replacement command.
     creates = []
     execute = client.execute_command
 
@@ -366,8 +419,8 @@ def test_hnsw_rebuild_requires_original_schema_and_preserves_tuning(
     )
     assert (result.updated, result.completed) == (1, True)
     assert len(creates) == 1
-    assert creates[0][creates[0].index("EF_RUNTIME") + 1] == 75
-    assert creates[0][creates[0].index("EPSILON") + 1] == 0.2
+    for option, expected in tuning.items():
+        assert creates[0][creates[0].index(option.upper()) + 1] == expected
     assert source.to_dict() == source_before
     assert _read_record(client, store, key) == {**before, "_index_name": hashify(name)}
 

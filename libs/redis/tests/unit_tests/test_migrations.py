@@ -7,7 +7,6 @@ from redisvl.schema import IndexSchema  # type: ignore[import]
 from langchain_redis.migrations import (
     _schema_action,
     _target_schema,
-    _validate_source_schema,
     migrate_index_ownership,
 )
 
@@ -89,70 +88,38 @@ def test_target_schema_replaces_legacy_marker_without_changing_other_fields() ->
     assert marker.attrs.case_sensitive is True
 
 
-@pytest.mark.parametrize(
-    "attribute",
-    [
-        ["identifier", "text", "attribute", "display", "type", "TEXT"],
-        {"identifier": "text", "attribute": "display", "type": "TEXT"},
-    ],
-    ids=["list-response", "mapping-response"],
-)
-def test_target_schema_preserves_hash_field_alias(attribute: Any) -> None:
+def test_target_schema_preserves_declared_hash_field_alias() -> None:
     source = _schema({"name": "_index_name", "type": "text"})
+    field = source.fields.pop("text")
+    field.name, field.path = "display", "text"
+    source.fields["display"] = field
 
-    target = _target_schema(source, [attribute])
+    target = _target_schema(source)
 
-    field = target.fields["display"]
-    assert (field.path, field.name) == ("text", "display")
-    assert field.attrs == source.fields["text"].attrs
-
-
-@pytest.mark.parametrize(
-    ("section", "changes"),
-    [
-        pytest.param("index", {"name": "other"}, id="name"),
-        pytest.param("index", {"prefix": "other:"}, id="prefix"),
-        pytest.param("index", {"storage_type": "json"}, id="storage"),
-        pytest.param("index", {"stopwords": ["custom"]}, id="stopwords"),
-        pytest.param("field", {"name": "other", "type": "text"}, id="fields"),
-        pytest.param(
-            "field",
-            {"name": "text", "type": "text", "attrs": {"weight": 2}},
-            id="field-options",
-        ),
-    ],
-)
-def test_source_schema_must_match_live_definition(
-    section: str, changes: Dict[str, Any]
-) -> None:
-    live = _target_schema(_schema({"name": "_index_name", "type": "text"}))
-    definition = live.to_dict()
-    if section == "index":
-        definition["index"].update(changes)
-    else:
-        definition["fields"][0] = changes
-
-    with pytest.raises(ValueError, match="source_schema does not match"):
-        _validate_source_schema(live, IndexSchema.from_dict(definition))
+    assert target.fields["display"] == field
+    assert target.fields["display"] is not field
 
 
 @pytest.mark.parametrize("becomes_ready", [True, False], ids=["ready", "timeout"])
 def test_backfill_waits_for_index_readiness(
     monkeypatch: pytest.MonkeyPatch, becomes_ready: bool
 ) -> None:
-    index = Mock(schema=_schema(None))
+    index = Mock()
     building = {"indexing": 1, "percent_indexed": 0.5}
     ready = {"indexing": 0, "percent_indexed": 1}
-    index.info.side_effect = [
-        {"index_name": INDEX_NAME, "percent_indexed": 1, "attributes": []},
-        *([building, ready] if becomes_ready else [building] * 60),
-    ]
+    index.info.side_effect = [building, ready] if becomes_ready else [building] * 60
     index.update_by_filter.return_value.processed = 1
     client = Mock()
+    client.ft.return_value.info.return_value = {
+        "index_name": INDEX_NAME,
+        "percent_indexed": 1,
+        "index_definition": {"key_type": "HASH", "prefixes": ["migration:"]},
+        "attributes": [],
+    }
     client.pipeline.return_value.execute.return_value = [None]
     sleep = Mock()
     monkeypatch.setattr(
-        "langchain_redis.migrations.SearchIndex.from_existing", lambda **kwargs: index
+        "langchain_redis.migrations.SearchIndex", lambda **kwargs: index
     )
     monkeypatch.setattr(
         "langchain_redis.migrations._index_keys", lambda *args: ["migration:one"]

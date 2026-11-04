@@ -2,13 +2,14 @@
 
 from dataclasses import dataclass
 from time import sleep
-from typing import Any, Iterable, List, Literal, Optional, cast
+from typing import Any, Dict, Iterable, List, Literal, Optional, cast
 
 import redis.exceptions
 from redis import Redis
 from redis.commands.search.aggregation import AggregateRequest, Cursor
 from redisvl.index import SearchIndex  # type: ignore[import]
 from redisvl.query.filter import Tag  # type: ignore[import]
+from redisvl.redis.connection import convert_index_info_to_schema  # type: ignore[import]
 from redisvl.redis.utils import convert_bytes, hashify  # type: ignore[import]
 from redisvl.schema import FieldTypes, IndexSchema, StorageType  # type: ignore[import]
 
@@ -49,9 +50,11 @@ def migrate_index_ownership(
     in ``aliases`` so it can be restored after a rebuild. Custom FT.CREATE options
     and nonstandard ownership paths require manual migration.
 
-    HNSW rebuilds require ``source_schema`` from the original deployment config:
-    FT.INFO does not report EF_RUNTIME or EPSILON. Recoverable settings are checked
-    against the live index; unreported tuning values are trusted from that schema.
+    Every rebuild requires the complete, current deployment ``source_schema``.
+    It is authoritative: only its ownership field is replaced. The caller must
+    include all fields, aliases and vector tuning; schemas inferred from FT.INFO
+    or generated from an incomplete config are not sufficient. The index name,
+    storage type and prefixes are checked against the live index before mutation.
     Rebuilding an index with INDEXALL enabled requires manual migration.
 
     The operation is not transactional and has no automatic rollback. Re-run
@@ -64,38 +67,43 @@ def migrate_index_ownership(
 
     # Inspect the live definition before planning either schema or data changes.
     client = cast(Any, redis_client)
-    index = SearchIndex.from_existing(name=index_name, redis_client=client)
-    info = convert_bytes(index.info())
+    info = convert_bytes(client.ft(index_name).info())
     if info["index_name"] != index_name:
         raise ValueError("Use the concrete index name, not an alias.")
     if float(info.get("percent_indexed", 1)) < 1:
         raise ValueError("Wait for the source index to finish indexing first.")
-    schema = index.schema
+    schema = _ownership_schema(info)
+    index = SearchIndex(schema=schema, redis_client=client)
     action = _schema_action(schema, index_name)
-    target = _target_schema(schema, info["attributes"])
+    target = _target_schema(schema)
     if action == "rebuild":
-        # Do not drop a definition whose fields/options RedisVL cannot reconstruct.
-        definition = info.get("index_definition", {})
-        if str(definition.get("indexes_all", "false")).lower() == "true":
+        # IndexSchema cannot represent these FT.CREATE options.
+        index_definition = info.get("index_definition", {})
+        if str(index_definition.get("indexes_all", "false")).lower() == "true":
             raise ValueError("Indexes with INDEXALL enabled require manual migration.")
         supported = {"key_type", "prefixes", "default_score", "indexes_all"}
         if (
-            len(info["attributes"]) != len(schema.fields)
-            or info.get("index_options")
-            or set(definition) - supported
-            or float(definition.get("default_score", 1)) != 1
+            info.get("index_options")
+            or set(index_definition) - supported
+            or float(index_definition.get("default_score", 1)) != 1
         ):
             raise ValueError("Custom index options require manual schema migration.")
-        if source_schema is None and any(
-            getattr(field.attrs, "algorithm", None) == "HNSW"
-            for field in schema.fields.values()
+        if source_schema is None:
+            raise ValueError("Rebuilds require the complete original source_schema.")
+        prefixes = source_schema.index.prefix
+        if isinstance(prefixes, str):
+            prefixes = [prefixes]
+        if (
+            source_schema.index.name != index_name
+            or source_schema.index.storage_type != schema.index.storage_type
+            or prefixes != index_definition["prefixes"]
         ):
-            raise ValueError("HNSW rebuilds require the original source_schema.")
-
-    if source_schema is not None:
-        supplied_target = _target_schema(source_schema, info["attributes"])
-        _validate_source_schema(target, supplied_target)
-        target = supplied_target
+            raise ValueError(
+                "source_schema must match the live index name, "
+                "storage type and prefixes."
+            )
+        # Use the operator's declaration directly; FT.INFO is not a schema export.
+        target = _target_schema(source_schema)
 
     # Preflight every marker before any writes. With application writers paused,
     # this establishes that the bulk backfill will not claim another index's data.
@@ -204,51 +212,32 @@ def _schema_action(
     return "rebuild"
 
 
-def _validate_source_schema(live: IndexSchema, supplied: IndexSchema) -> None:
-    """Compare recoverable settings without guessing unreported vector options."""
-    definitions = []
-    for schema in (live, supplied):
-        definition = schema.to_dict()
-        # Separators affect client-generated keys, not the live index definition.
-        definition["index"].pop("key_separator", None)
-        prefix = definition["index"]["prefix"]
-        definition["index"]["prefix"] = [prefix] if isinstance(prefix, str) else prefix
-        for field in definition["fields"]:
-            if field["type"] == "vector":
-                for option in ("ef_runtime", "epsilon", "initial_cap"):
-                    field["attrs"].pop(option, None)
-        definition["fields"] = {field["name"]: field for field in definition["fields"]}
-        definitions.append(definition)
-    if definitions[0] != definitions[1]:
-        raise ValueError("source_schema does not match the live index definition.")
+def _ownership_schema(info: Dict[str, Any]) -> IndexSchema:
+    """Inspect only the live ownership field, without reconstructing vector settings."""
+    path = "$._index_name" if info["index_definition"]["key_type"] == "JSON" else _FIELD
+    attributes = []
+    for attribute in info["attributes"]:
+        identifier, alias = (
+            (attribute["identifier"], attribute["attribute"])
+            if isinstance(attribute, dict)
+            else (attribute[1], attribute[3])
+        )
+        if identifier == path or alias == _FIELD:
+            if identifier != path or alias != _FIELD:
+                raise ValueError(
+                    "Nonstandard ownership fields require manual migration."
+                )
+            attributes.append(attribute)
+    return IndexSchema.from_dict(
+        convert_index_info_to_schema({**info, "attributes": attributes})
+    )
 
 
-def _target_schema(source: IndexSchema, attributes: Iterable[Any] = ()) -> IndexSchema:
+def _target_schema(source: IndexSchema) -> IndexSchema:
     """Replace the ownership definition while retaining unrelated fields and options."""
     target = source.model_copy(deep=True)
     target.fields.pop(_FIELD, None)
     target.add_field({"name": _FIELD, "type": "tag", "attrs": {"case_sensitive": True}})
-    if source.index.storage_type == StorageType.HASH:
-        # RedisVL recovers HASH fields by identifier and drops their AS aliases.
-        # Field objects support path AS name; retain any already-known mapping.
-        by_identifier = {
-            field.path or field.name: field for field in target.fields.values()
-        }
-        for attribute in attributes:
-            metadata = (
-                attribute
-                if isinstance(attribute, dict)
-                else dict(zip(attribute[::2], attribute[1::2]))
-            )
-            identifier, alias = metadata["identifier"], metadata["attribute"]
-            if identifier != _FIELD and identifier != alias:
-                if alias == _FIELD:
-                    raise ValueError("The ownership field aliases another HASH field.")
-                field = by_identifier.get(identifier)
-                if field is None:
-                    raise ValueError("Schema fields do not match the live index.")
-                field.name, field.path = alias, identifier
-        target.fields = {field.name: field for field in target.fields.values()}
     return target
 
 
