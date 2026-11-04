@@ -5,6 +5,8 @@ EXPECTED_ALL = [
     "__lib_name__",
     "RedisVectorStore",
     "RedisConfig",
+    "IndexOwnershipMigrationResult",
+    "migrate_index_ownership",
     "RedisCache",
     "RedisSemanticCache",
     "LangCacheSemanticCache",
