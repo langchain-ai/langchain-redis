@@ -284,8 +284,8 @@ schemas must define `_index_name` as TAG before they can be searched; missing,
 legacy TEXT, and unsupported marker fields are refused instead of running
 without exact index isolation. Build metadata filters with RedisVL
 `FilterExpression` helpers such as `Tag` and `Num` when values come from user
-input. Trusted raw Redis query strings are also accepted and automatically
-intersected with the index ownership filter.
+input. Non-empty raw Redis query strings are rejected because they cannot be
+safely combined with the index ownership filter.
 
 #### Features
 - Efficient vector storage and retrieval
