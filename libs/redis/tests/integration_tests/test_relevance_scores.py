@@ -169,6 +169,41 @@ async def test_distance_threshold_stays_a_raw_distance_async(
         assert set(_by_content(results)) == DISTANCE_THRESHOLD_HITS[distance_metric]
 
 
+@pytest.mark.parametrize(
+    "distance_metric, distance_threshold, score_threshold, expected_hits",
+    [
+        # The raw-distance cutoff is the stricter one: on its own it drops
+        # FAR_DOC, while a score_threshold this low would keep every document.
+        pytest.param("COSINE", 0.6, 0.4, {CLOSE_DOC, MID_DOC}, id="cosine-distance"),
+        pytest.param("L2", 1.0, 0.2, {CLOSE_DOC, MID_DOC}, id="l2-distance"),
+        # The relevance cutoff is the stricter one: on its own the distance
+        # cutoff would keep MID_DOC, but its score is under the threshold.
+        pytest.param("COSINE", 0.6, 0.9, {CLOSE_DOC}, id="cosine-score"),
+        pytest.param("L2", 1.0, 0.7, {CLOSE_DOC}, id="l2-score"),
+    ],
+)
+def test_distance_and_score_thresholds_combine(
+    redis_url: str,
+    distance_metric: str,
+    distance_threshold: float,
+    score_threshold: float,
+    expected_hits: set,
+) -> None:
+    """Each cutoff is applied: distance as a raw distance, score as a relevance."""
+    for store in _store(redis_url, distance_metric):
+        results = store.similarity_search_with_relevance_scores(
+            QUERY,
+            k=3,
+            distance_threshold=distance_threshold,
+            score_threshold=score_threshold,
+        )
+
+        assert set(_by_content(results)) == expected_hits
+        assert _by_content(results) == pytest.approx(
+            {doc: RELEVANCE[distance_metric][doc] for doc in expected_hits}
+        )
+
+
 def test_score_threshold_respects_metadata_filter(redis_url: str) -> None:
     store = RedisVectorStore(
         KeywordEmbeddings(),
@@ -216,6 +251,13 @@ async def test_ip_index_rejects_relevance_scores_async(redis_url: str) -> None:
     for store in _store(redis_url, "IP"):
         with pytest.raises(ValueError, match="IP"):
             await store.asimilarity_search_with_relevance_scores(QUERY, k=3)
+
+        retriever = store.as_retriever(
+            search_type="similarity_score_threshold",
+            search_kwargs={"score_threshold": 0.5},
+        )
+        with pytest.raises(ValueError, match="IP"):
+            await retriever.ainvoke(QUERY)
 
 
 def test_reopened_index_uses_live_distance_metric(redis_url: str) -> None:
