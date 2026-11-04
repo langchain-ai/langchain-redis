@@ -258,6 +258,31 @@ def test_migration_rejects_conflicting_ownership_before_mutation(
     assert convert_bytes(client.ft(store.index.name).info())["attributes"] == attributes
 
 
+def test_incomplete_preflight_cursor_is_rejected_before_mutation(
+    client: Redis,
+    make_legacy_store: Callable[..., RedisVectorStore],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = make_legacy_store(ids=("one", "two"))
+    keys = [store.index.key(doc_id) for doc_id in ("one", "two")]
+    client.hset(keys[1], "_index_name", hashify("another-index"))
+    before = [client.hgetall(key) for key in keys]
+    attributes = convert_bytes(client.ft(store.index.name).info())["attributes"]
+    monkeypatch.setattr(
+        "langchain_redis.migrations._index_keys", lambda *args: [keys[0]]
+    )
+
+    with pytest.raises(RuntimeError, match="different number of documents"):
+        migrate_index_ownership(
+            store.index.name,
+            redis_client=client,
+            dry_run=False,
+        )
+
+    assert convert_bytes(client.ft(store.index.name).info())["attributes"] == attributes
+    assert [client.hgetall(key) for key in keys] == before
+
+
 @pytest.mark.parametrize("dry_run", [True, False], ids=["preview", "apply"])
 def test_rejects_index_name_as_alias_before_mutation(
     client: Redis, make_legacy_store: Callable[..., RedisVectorStore], dry_run: bool

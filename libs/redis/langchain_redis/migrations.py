@@ -8,6 +8,7 @@ import redis.exceptions
 from redis import Redis
 from redis.commands.search.aggregation import AggregateRequest, Cursor
 from redisvl.index import SearchIndex  # type: ignore[import]
+from redisvl.query import CountQuery  # type: ignore[import]
 from redisvl.query.filter import Tag  # type: ignore[import]
 from redisvl.redis.connection import convert_index_info_to_schema  # type: ignore[import]
 from redisvl.redis.utils import convert_bytes, hashify  # type: ignore[import]
@@ -107,7 +108,13 @@ def migrate_index_ownership(
 
     # Preflight every marker before any writes. With application writers paused,
     # this establishes that the bulk backfill will not claim another index's data.
+    expected = cast(int, index.query(CountQuery("*")))
     keys = _index_keys(index, batch_size)
+    if len(keys) != expected:
+        raise RuntimeError(
+            "Preflight returned a different number of documents than expected; "
+            "retry migration."
+        )
     storage = schema.index.storage_type.value
     marker = hashify(index_name)
     would_update = 0

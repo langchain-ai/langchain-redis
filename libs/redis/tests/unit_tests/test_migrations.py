@@ -100,11 +100,39 @@ def test_target_schema_preserves_declared_hash_field_alias() -> None:
     assert target.fields["display"] is not field
 
 
+def test_preflight_rejects_incomplete_cursor_before_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    index = Mock()
+    index.query.return_value = 2
+    client = Mock()
+    client.ft.return_value.info.return_value = {
+        "index_name": INDEX_NAME,
+        "percent_indexed": 1,
+        "index_definition": {"key_type": "HASH", "prefixes": ["migration:"]},
+        "attributes": [],
+    }
+    monkeypatch.setattr(
+        "langchain_redis.migrations.SearchIndex", lambda **kwargs: index
+    )
+    monkeypatch.setattr(
+        "langchain_redis.migrations._index_keys", lambda *args: ["migration:one"]
+    )
+
+    with pytest.raises(RuntimeError, match="different number of documents"):
+        migrate_index_ownership(INDEX_NAME, redis_client=client, dry_run=False)
+
+    client.pipeline.assert_not_called()
+    client.ft.return_value.alter_schema_add.assert_not_called()
+    index.update_by_filter.assert_not_called()
+
+
 @pytest.mark.parametrize("becomes_ready", [True, False], ids=["ready", "timeout"])
 def test_backfill_waits_for_index_readiness(
     monkeypatch: pytest.MonkeyPatch, becomes_ready: bool
 ) -> None:
     index = Mock()
+    index.query.return_value = 1
     building = {"indexing": 1, "percent_indexed": 0.5}
     ready = {"indexing": 0, "percent_indexed": 1}
     index.info.side_effect = [building, ready] if becomes_ready else [building] * 60
