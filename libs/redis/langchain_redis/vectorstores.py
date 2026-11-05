@@ -1083,7 +1083,8 @@ class RedisVectorStore(VectorStore):
             - Generated schemas use an exact `_index_name` TAG marker to keep
                 indexes sharing a `key_prefix` from deleting each other's data.
                 Existing or custom schemas without that TAG marker are refused;
-                recreate or migrate the index before using filter deletion.
+                recreate the index or run `migrate_index_ownership()` before
+                using filter deletion.
                 Custom TAG markers containing raw index names must also be
                 reindexed with the current hashed marker values; changing only
                 the field type is not sufficient. Legacy TEXT markers remain
@@ -1173,8 +1174,8 @@ class RedisVectorStore(VectorStore):
         if marker is None:
             raise ValueError(
                 f"{operation} requires an '_index_name' TAG or legacy TEXT "
-                "ownership marker. Recreate or migrate this index before using "
-                "direct-ID operations."
+                "ownership marker. Recreate this index or run "
+                "migrate_index_ownership() before using direct-ID operations."
             )
         return marker
 
@@ -1288,14 +1289,15 @@ class RedisVectorStore(VectorStore):
         if field is None or field.type != FieldTypes.TAG:
             raise ValueError(
                 "delete_by_filter() requires an '_index_name' TAG field. "
-                "Recreate or migrate this index before using filter deletion."
+                "Recreate this index or run migrate_index_ownership() before "
+                "using filter deletion."
             )
 
         if field.attrs.no_index:
             raise ValueError(
                 "delete_by_filter() requires the '_index_name' TAG field to be "
-                "indexed. Recreate or migrate this index before using filter "
-                "deletion."
+                "indexed. Recreate this index or run migrate_index_ownership() "
+                "before using filter deletion."
             )
 
         marker = hashify(self._index.name)
@@ -1303,7 +1305,8 @@ class RedisVectorStore(VectorStore):
             raise ValueError(
                 "delete_by_filter() cannot safely use the '_index_name' TAG "
                 "separator because it splits the index ownership marker. "
-                "Recreate or migrate this index with a compatible separator."
+                "Recreate this index or run migrate_index_ownership() with a "
+                "compatible separator."
             )
 
         return Tag(_INDEX_NAME_FIELD) == marker
@@ -1327,8 +1330,8 @@ class RedisVectorStore(VectorStore):
 
         if index_filter is None:
             raise ValueError(
-                "Search requires an exact '_index_name' TAG field. Recreate or "
-                "migrate this index before searching."
+                "Search requires an exact '_index_name' TAG field. Recreate this "
+                "index or run migrate_index_ownership() before searching."
             )
         if filter is None:
             return index_filter

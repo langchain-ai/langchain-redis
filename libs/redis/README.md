@@ -233,6 +233,9 @@ is not sufficient. Until migration, direct-ID operations remain available for
 legacy TEXT markers, but searches and filter deletion are refused because TEXT
 tokenization cannot provide exact index isolation.
 
+Use `migrate_index_ownership()` to upgrade legacy indexes. See the release
+notes for the full preview-and-apply procedure.
+
 #### Vector index tuning
 
 `vector_attrs` exposes algorithm-specific index attributes without writing a
