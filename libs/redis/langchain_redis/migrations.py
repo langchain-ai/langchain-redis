@@ -17,6 +17,8 @@ from redisvl.redis.connection import (  # type: ignore[import]
 from redisvl.redis.utils import convert_bytes, hashify  # type: ignore[import]
 from redisvl.schema import FieldTypes, IndexSchema, StorageType  # type: ignore[import]
 
+from langchain_redis.config import RedisConfig
+
 _FIELD = "_index_name"
 _SCHEMA_MISMATCH = "source_schema does not match the live index definition."
 
@@ -37,6 +39,7 @@ def migrate_index_ownership(
     *,
     redis_client: Redis,
     source_schema: Optional[IndexSchema] = None,
+    source_config: Optional[RedisConfig] = None,
     dry_run: bool = True,
     aliases: Iterable[str] = (),
     batch_size: int = 500,
@@ -56,13 +59,12 @@ def migrate_index_ownership(
     and nonstandard ownership paths require manual migration. Indexes with
     overlapping prefixes of the same storage type are refused.
 
-    Every rebuild requires the complete, current deployment ``source_schema``.
-    It is authoritative: only its ownership field is replaced. The caller must
-    include all fields, aliases and vector tuning; schemas inferred from FT.INFO
-    or generated from an incomplete config are not sufficient. The index name,
-    storage type, prefixes, fields and explicit stopwords are checked against the
-    live index before mutation. Vector tuning remains authoritative from the schema.
-    Rebuilding an index with INDEXALL enabled requires manual migration.
+    Every rebuild requires either the complete deployment ``source_schema`` or the
+    original ``source_config`` used for a generated schema. It is authoritative:
+    only its ownership field is replaced. The index name, storage type, prefixes,
+    fields and explicit stopwords are checked against the live index before mutation.
+    Vector tuning remains authoritative from the supplied source. Rebuilding an
+    index with INDEXALL enabled requires manual migration.
 
     The operation is not transactional and has no automatic rollback. Re-run
     marker backfills after interruption. ``completed`` reports marker writes,
@@ -97,23 +99,23 @@ def migrate_index_ownership(
             or float(index_definition.get("default_score", 1)) != 1
         ):
             raise ValueError("Custom index options require manual schema migration.")
-        if source_schema is None:
-            raise ValueError("Rebuilds require the complete original source_schema.")
-        prefixes = source_schema.index.prefix
+        source = _resolve_source_schema(action, source_schema, source_config)
+        assert source is not None
+        prefixes = source.index.prefix
         if isinstance(prefixes, str):
             prefixes = [prefixes]
         if (
-            source_schema.index.name != index_name
-            or source_schema.index.storage_type != schema.index.storage_type
+            source.index.name != index_name
+            or source.index.storage_type != schema.index.storage_type
             or prefixes != index_definition["prefixes"]
         ):
             raise ValueError(
-                "source_schema must match the live index name, "
+                "The migration source must match the live index name, "
                 "storage type and prefixes."
             )
-        _validate_source_schema(info, source_schema)
+        _validate_source_schema(info, source)
         # Use the operator's declaration directly; FT.INFO is not a schema export.
-        target = _target_schema(source_schema)
+        target = _target_schema(source)
 
     # Preflight every marker before any writes. With application writers paused,
     # this establishes that the bulk backfill will not claim another index's data.
@@ -226,6 +228,23 @@ def _schema_action(
     ):
         return "none"
     return "rebuild"
+
+
+def _resolve_source_schema(
+    action: Literal["none", "alter", "rebuild"],
+    source_schema: Optional[IndexSchema],
+    source_config: Optional[RedisConfig],
+) -> Optional[IndexSchema]:
+    """Resolve rebuild input to one authoritative schema."""
+    if source_schema is not None and source_config is not None:
+        raise ValueError("Provide source_schema or source_config, not both.")
+    if action != "rebuild":
+        return None
+    if source_schema is not None:
+        return source_schema
+    if source_config is not None:
+        return source_config.to_index_schema()
+    raise ValueError("Rebuilds require the original source_schema or source_config.")
 
 
 def _assert_no_overlapping_prefixes(index: SearchIndex) -> None:

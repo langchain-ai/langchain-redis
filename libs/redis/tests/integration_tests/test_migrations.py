@@ -440,7 +440,7 @@ def test_rebuild_preserves_hash_field_aliases(
     assert client.hgetall(key) == {**before, b"_index_name": hashify(name).encode()}
 
 
-def test_generated_config_schema_mismatch_is_rejected_before_rebuild(
+def test_generated_config_supplies_rebuild_schema(
     client: Redis, embeddings: Embeddings
 ) -> None:
     name = f"ownership_generated_{uuid4().hex[:8]}"
@@ -450,27 +450,31 @@ def test_generated_config_schema_mismatch_is_rejected_before_rebuild(
         redis_client=client,
         embedding_dimensions=DIMS,
         indexing_algorithm="HNSW",
+        vector_attrs={"ef_runtime": 75, "epsilon": 0.2},
         legacy_key_format=False,
     )
     store = RedisVectorStore(embeddings, config=config)
     try:
-        legacy = store.index.schema.model_copy(deep=True)
+        store.add_texts(["document one"], keys=["one"])
+        key = store.index.key("one")
+        legacy = config.to_index_schema().model_copy(deep=True)
         legacy.fields.pop("_index_name")
         legacy.add_field({"name": "_index_name", "type": "text"})
         SearchIndex(schema=legacy, redis_client=client).create(
             overwrite=True, drop=False
         )
-        attributes = convert_bytes(client.ft(name).info())["attributes"]
+        client.hset(key, "_index_name", name)
 
-        with pytest.raises(ValueError, match="source_schema does not match"):
-            migrate_index_ownership(
-                name,
-                redis_client=client,
-                source_schema=config.to_index_schema(),
-                dry_run=False,
-            )
+        preview = migrate_index_ownership(
+            name, redis_client=client, source_config=config
+        )
+        result = migrate_index_ownership(
+            name, redis_client=client, source_config=config, dry_run=False
+        )
 
-        assert convert_bytes(client.ft(name).info())["attributes"] == attributes
+        assert (preview.schema_action, preview.would_update) == ("rebuild", 1)
+        assert (result.updated, result.completed) == (1, True)
+        assert client.hget(key, "_index_name") == hashify(name).encode()
     finally:
         if store.index.exists():
             store.index.delete(drop=True)
@@ -517,11 +521,11 @@ def test_vector_rebuild_requires_original_schema_and_preserves_tuning(
     before = _read_record(client, store, key)
     attributes = convert_bytes(client.ft(name).info())["attributes"]
 
-    with pytest.raises(ValueError, match="require the complete original source_schema"):
+    with pytest.raises(ValueError, match="source_schema or source_config"):
         migrate_index_ownership(name, redis_client=client, dry_run=False)
     mismatched = source.model_copy(deep=True)
     mismatched.index.prefix = "wrong:"
-    with pytest.raises(ValueError, match="source_schema must match"):
+    with pytest.raises(ValueError, match="migration source must match"):
         migrate_index_ownership(
             name, redis_client=client, source_schema=mismatched, dry_run=False
         )

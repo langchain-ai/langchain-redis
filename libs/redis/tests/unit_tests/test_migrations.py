@@ -6,6 +6,7 @@ from redisvl.schema import IndexSchema  # type: ignore[import]
 
 from langchain_redis.migrations import (
     _assert_no_overlapping_prefixes,
+    _resolve_source_schema,
     _schema_action,
     _target_schema,
     _validate_source_schema,
@@ -129,6 +130,34 @@ def test_target_schema_preserves_declared_hash_field_alias() -> None:
 
     assert target.fields["display"] == field
     assert target.fields["display"] is not field
+
+
+def test_rebuild_source_can_come_from_schema_or_config() -> None:
+    source = _schema({"name": "_index_name", "type": "text"})
+    config = Mock()
+    config.to_index_schema.return_value = source
+
+    assert _resolve_source_schema("rebuild", source, None) is source
+    assert _resolve_source_schema("rebuild", None, config) is source
+    config.to_index_schema.assert_called_once_with()
+
+
+@pytest.mark.parametrize("action", ["none", "alter"])
+def test_non_rebuild_does_not_require_a_source(action: str) -> None:
+    assert _resolve_source_schema(action, None, None) is None  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("supplies_both", [False, True], ids=["missing", "both"])
+def test_rebuild_requires_exactly_one_source(supplies_both: bool) -> None:
+    source = _schema({"name": "_index_name", "type": "text"})
+    config = Mock()
+
+    with pytest.raises(ValueError, match="source_schema or source_config"):
+        _resolve_source_schema(
+            "rebuild",
+            source if supplies_both else None,
+            config if supplies_both else None,
+        )
 
 
 @pytest.mark.parametrize(

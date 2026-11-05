@@ -75,11 +75,15 @@ def test_redis_config_to_index_schema(embeddings: Embeddings) -> None:
     assert isinstance(schema, IndexSchema)
     assert schema.index.name == "test_index"
     assert schema.index.storage_type == StorageType.HASH
-    assert len(schema.fields) == 3  # id_field, content, embedding
+    assert len(schema.fields) == 4
     field_names = [field.name for field in schema.fields.values()]
-    assert config.id_field in field_names
-    assert config.content_field in field_names
-    assert config.embedding_field in field_names
+    assert field_names == [
+        config.content_field,
+        config.embedding_field,
+        "_index_name",
+        "_metadata_json",
+    ]
+    assert schema.fields["_index_name"].attrs.case_sensitive is True
 
 
 def test_redis_config_from_existing_index(redis_url: str) -> None:

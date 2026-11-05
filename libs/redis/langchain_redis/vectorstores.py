@@ -470,67 +470,10 @@ class RedisVectorStore(VectorStore):
             )
             self._index.create(overwrite=False)
         else:
-            # Build a default schema if no schema or path is provided
-            modified_metadata_schema = []
-            if self.config.metadata_schema is not None:
-                for field in self.config.metadata_schema:
-                    if field["type"] == "tag":
-                        # Ensure a default separator is present
-                        if "attrs" not in field or "separator" not in field.get(
-                            "attrs", {}
-                        ):
-                            updated_field = field.copy()
-                            updated_field.setdefault("attrs", {})["separator"] = (
-                                self.config.default_tag_separator
-                            )
-                            modified_metadata_schema.append(updated_field)
-                        else:
-                            modified_metadata_schema.append(field)
-                    else:
-                        modified_metadata_schema.append(field)
-
-            # Handle key prefix format
-            # Issue #78: The trailing ":" was added historically, creating double
-            # colons in keys (e.g., "prefix::doc_id"). For backward compatibility,
-            # this behavior is maintained by default via legacy_key_format flag.
-            # Set legacy_key_format=False for correct single-colon format.
-            # Note: key_prefix is always set by validator, so it's never None here
-            prefix = self._schema_key_prefix()
-
-            index_info: Dict[str, Any] = {
-                "name": self.config.index_name,
-                "prefix": prefix,
-                "key_separator": key_separator,
-                "storage_type": self.config.storage_type,
-            }
-            if self.config.stopwords is not None:
-                index_info["stopwords"] = self.config.stopwords
-
+            # RedisConfig is the source of truth for generated schemas, including
+            # internal fields and the historical key-prefix format.
             self._index = SearchIndex.from_dict(
-                {
-                    "index": index_info,
-                    "fields": [
-                        {"name": self.config.content_field, "type": "text"},
-                        {
-                            "name": self.config.embedding_field,
-                            "type": "vector",
-                            "attrs": {
-                                "dims": self.config.embedding_dimensions,
-                                "distance_metric": self.config.distance_metric,
-                                "algorithm": self.config.indexing_algorithm,
-                                "datatype": self.config.vector_datatype,
-                                **(self.config.vector_attrs or {}),
-                            },
-                        },
-                        {
-                            "name": _INDEX_NAME_FIELD,
-                            "type": "tag",
-                            "attrs": {"case_sensitive": True},
-                        },
-                        {"name": "_metadata_json", "type": "text"},
-                        *modified_metadata_schema,
-                    ],
-                },
+                self.config.to_index_schema().to_dict(),
                 redis_client=redis_client,
                 lib_name=__lib_name__,
             )
@@ -556,23 +499,6 @@ class RedisVectorStore(VectorStore):
         self.config.key_separator = key_separator
         self._sync_config_with_live_index()
 
-    def _schema_key_prefix(self) -> Union[str, List[str]]:
-        """Return the key prefix to store in the RedisVL schema."""
-        key_prefix = self.config.key_prefix or self.config.index_name
-        legacy_suffix = self._legacy_prefix_suffix()
-
-        if isinstance(key_prefix, list):
-            return [f"{prefix}{legacy_suffix}" for prefix in key_prefix]
-        return f"{key_prefix}{legacy_suffix}"
-
-    def _legacy_prefix_suffix(self) -> str:
-        """Return the suffix used by the historical colon key format."""
-        return (
-            ":"
-            if self.config.legacy_key_format and self.config.key_separator == ":"
-            else ""
-        )
-
     def _sync_config_with_live_index(self) -> None:
         """Synchronize schema-owned runtime settings with the live index."""
         schema = getattr(self._index, "schema", None)
@@ -591,7 +517,7 @@ class RedisVectorStore(VectorStore):
             # Generated legacy schemas include the key separator in the index
             # prefix. Keep RedisConfig's logical prefix separator-free so IDs
             # that already include the legacy leading colon still round-trip.
-            legacy_suffix = self._legacy_prefix_suffix()
+            legacy_suffix = self.config._legacy_prefix_suffix()
             if legacy_suffix and prefix.endswith(legacy_suffix):
                 return prefix.removesuffix(legacy_suffix)
             return prefix
