@@ -161,7 +161,7 @@ class RedisConfig(BaseModel):
         if schema is None:
             schema = values.get("index_schema")
         options = [
-            values.get("index_schema"),
+            schema,
             values.get("schema_path"),
             values.get("metadata_schema"),
         ]
