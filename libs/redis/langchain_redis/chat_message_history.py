@@ -230,7 +230,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
 
     @property
     def messages(self) -> List[BaseMessage]:  # type: ignore
-        """Retrieve all messages for the current session, sorted by timestamp.
+        """Retrieve up to 10,000 messages for the current session, sorted by timestamp.
 
         Returns:
             A list of messages in chronological order.
@@ -278,11 +278,11 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
             message (BaseMessage): The message to add to the history.
 
                 This should be an instance of a class derived from `BaseMessage`, such
-                as `HumanMessage`, `AIMessage`, or `SystemMessage`.
+                as `HumanMessage`, `AIMessage`, `SystemMessage`, or `ToolMessage`.
 
         Raises:
-            RedisSearchError: If RedisVL index or search operations fail.
-            ValueError: If message is `None` or invalid.
+            RedisVLError: If RedisVL fails to load the message into Redis.
+            ValueError: If message is `None`.
 
         Example:
             ```python
@@ -389,7 +389,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
                 history, in order.
 
         Raises:
-            ResponseError: If Redis connection fails or RedisVL operations fail.
+            RedisVLError: If RedisVL fails to load the messages into Redis.
             ValueError: If `messages` contains a `None` entry.
 
         Example:
@@ -455,9 +455,8 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
 
         Note:
             - This method only clears messages for the current `session_id`.
-            - It uses RedisVL's FilterQuery to find all relevant messages and then
-                deletes them individually using the Redis client.
-            - The operation removes all messages for the current session only.
+            - It collects the session's message keys with a paginated `FilterQuery`
+                and deletes them in one `drop_keys` call.
             - After clearing, the Redis search index is still maintained, allowing
                 for immediate use of the same `session_id` for new messages if needed.
             - This operation is irreversible. Make sure you want to remove all messages
@@ -504,7 +503,11 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         Returns:
             A list of dictionaries, each representing a matching message.
 
-                Each dictionary contains the message content and metadata.
+                Each dictionary has these keys:
+
+                - `content`, `type`, and `additional_kwargs` (all messages)
+                - `tool_calls` and `invalid_tool_calls` (AI messages only)
+                - `tool_call_id` and `status` (tool messages only)
 
         Raises:
             RedisSearchError: If RedisVL index or search operations fail.
@@ -528,7 +531,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
             )
             history.add_message(
                 AIMessage(
-                content="Neural networks are a key component of deep learning..."
+                    content="Neural networks are a key component of deep learning..."
                 )
             )
 
@@ -543,14 +546,11 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
 
         Note:
             - The search is performed using RedisVL's TextQuery capabilities, which
-                allows for efficient full-text search.
+                allow for efficient full-text search.
             - The search is case-insensitive and uses Redis' default tokenization
                 and stemming.
             - Only messages from the current session (as defined by `session_id`)
                 are searched.
-            - The returned dictionaries include all stored fields, which typically
-                include `'content'`, `'type'`, and any additional metadata stored
-                with the message.
             - This method is useful for quickly finding relevant parts of a
                 conversation without having to iterate through all messages.
         """

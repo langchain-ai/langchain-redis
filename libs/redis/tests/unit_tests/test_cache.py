@@ -69,7 +69,9 @@ class MockRedisVLSemanticCache:
         self.index = Mock()
         self.index.name = "test_index"
 
-    def check(self, vector: List[float]) -> List[Dict[str, Any]]:
+    def check(
+        self, vector: List[float], filter_expression: Any = None
+    ) -> List[Dict[str, Any]]:
         for stored_vector, stored_data in self.data.items():
             distance = np.linalg.norm(np.array(vector) - np.array(stored_vector))
             # Important: The distance check is now more explicit about threshold
@@ -84,6 +86,7 @@ class MockRedisVLSemanticCache:
         response: str,
         vector: List[float],
         metadata: Optional[Dict[str, Any]] = None,
+        filters: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.data[tuple(vector)] = [{"response": response, "metadata": metadata}]
 
@@ -104,9 +107,11 @@ class MockRedisVLSemanticCache:
                 hash(prompt) % 5 * 0.1,
             ]
 
-    def acheck(self, vector: List[float]) -> List[Dict[str, Any]]:
+    def acheck(
+        self, vector: List[float], filter_expression: Any = None
+    ) -> List[Dict[str, Any]]:
         # Async version with same behavior
-        return self.check(vector)
+        return self.check(vector, filter_expression)
 
     async def astore(
         self,
@@ -114,9 +119,10 @@ class MockRedisVLSemanticCache:
         response: str,
         vector: List[float],
         metadata: Optional[Dict[str, Any]] = None,
+        filters: Optional[Dict[str, Any]] = None,
     ) -> None:
         # Async version with same behavior
-        self.store(prompt, response, vector, metadata)
+        self.store(prompt, response, vector, metadata, filters)
 
     async def aclear(self) -> None:
         # Async version with same behavior

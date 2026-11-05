@@ -8,7 +8,13 @@ This package contains the LangChain integration with Redis, providing powerful t
 pip install -U langchain-redis
 ```
 
-This will install the package along with its dependencies, including `redis`, `redisvl`, and `ulid`.
+This will install the package along with its dependencies, including `redis`, `redisvl`, and `python-ulid`.
+
+To use `LangCacheSemanticCache`, install the optional `langcache` extra:
+
+```bash
+pip install -U "langchain-redis[langcache]"
+```
 
 ## Quickstart
 
@@ -37,13 +43,15 @@ print(docs[0].page_content)
 
 `langchain-redis` is tested against Redis 8.2 and newer. Most functionality works on any Redis with the Query Engine, with a few features gated by server version:
 
-| Feature | Redis 8.0 | Redis 8.2 | Redis 8.4+ |
-|---|:---:|:---:|:---:|
-| Vector search (KNN / range / MMR) | ✓ | ✓ | ✓ |
-| Full-text search | ✓ | ✓ | ✓ |
-| Hybrid search — aggregate method (`FT.AGGREGATE`) | ✓ | ✓ | ✓ |
-| Hybrid search — native method (`FT.HYBRID`) | ✗ | ✗ | ✓ |
-| SVS-VAMANA vector indexing (with compression) | ✗ | ✓ | ✓ |
+| Feature | Redis 8.2 | Redis 8.4+ |
+|---|:---:|:---:|
+| Vector search (KNN / range / MMR) | ✓ | ✓ |
+| Full-text search | ✓ | ✓ |
+| Hybrid search — aggregate method (`FT.AGGREGATE`) | ✓ | ✓ |
+| Hybrid search — native method (`FT.HYBRID`) | ✗ | ✓ |
+| SVS-VAMANA vector indexing (with compression) | ✓ | ✓ |
+
+SVS-VAMANA indexing requires Redis 8.2 or newer.
 
 `hybrid_search()` uses LINEAR fusion by default and detects the server version
 automatically: it uses `FT.HYBRID` on Redis 8.4+ and falls back to the aggregate
@@ -122,6 +130,15 @@ docs = vector_store.similarity_search(query, k=2)
 # Similarity search with score
 docs_and_scores = vector_store.similarity_search_with_score(query, k=2)
 
+# Relevance scores (higher is more relevant) and score-threshold retrieval
+docs_and_relevance = vector_store.similarity_search_with_relevance_scores(
+    query, k=2, score_threshold=0.5
+)
+retriever = vector_store.as_retriever(
+    search_type="similarity_score_threshold",
+    search_kwargs={"k": 4, "score_threshold": 0.5},
+)
+
 # Similarity search with filtering
 from redisvl.query.filter import Tag
 
@@ -140,6 +157,15 @@ docs = vector_store.max_marginal_relevance_search(query, k=2, fetch_k=10)
 Metadata is always stored and returned with documents, but only fields
 declared in `metadata_schema` are indexed and filterable. Filtering on an
 undeclared field raises an `Unknown field` error.
+
+`similarity_search_with_score` returns the raw Redis distance, where lower is
+closer. The relevance scores above use RedisVL's normalization instead, so they
+fall in `[0, 1]` and higher is closer: `(2 - d) / 2` for `COSINE` and
+`1 / (1 + d)` for `L2`. The two scale differently, so pick `score_threshold`
+per index (with `COSINE`, unrelated vectors score about 0.5). `IP` indexes
+raise a `ValueError`, since RedisVL has no normalization for them. Use `COSINE`,
+which is normalized inner product. `distance_threshold` stays a raw distance
+when you combine it with these methods.
 
 #### Hybrid and full-text search
 
@@ -313,8 +339,7 @@ The `RedisCache`, `RedisSemanticCache`, and `LangCacheSemanticCache` classes pro
 
 ```python
 from langchain_redis import RedisCache, RedisSemanticCache, LangCacheSemanticCache
-from langchain_core.language_models import LLM
-from langchain_openai import OpenAIEmbeddings
+from langchain_openai import OpenAI, OpenAIEmbeddings
 from langchain_core.outputs import Generation
 
 # Standard cache
@@ -328,15 +353,15 @@ semantic_cache = RedisSemanticCache(
     distance_threshold=0.1
 )
 
-# LangChain cache - manages embeddings for you
-langchain_cache = LangCacheSemanticCache(
+# LangCache semantic cache - manages embeddings for you
+langcache_cache = LangCacheSemanticCache(
     cache_id="your-cache-id",
     api_key="your-api-key",
     distance_threshold=0.1
 )
 
 # Using cache with an LLM
-llm = LLM(cache=cache)  # or LLM(cache=semantic_cache) or LLM(cache=langchain_cache)
+llm = OpenAI(cache=cache)  # or semantic_cache / langcache_cache
 
 # Async cache operations
 await cache.aupdate("prompt", "llm_string", [Generation(text="cached_response")])
@@ -349,10 +374,23 @@ cached_result = await cache.alookup("prompt", "llm_string")
 - Semantic caching for similarity-based retrieval
 - Asynchronous cache operations
 
+#### Upgrading an existing semantic cache
+`RedisSemanticCache` scopes entries by LLM with a tag field in its index. An index created by an earlier version raises a `ValueError` until it is upgraded. Stop the applications using the cache, then run:
+
+```python
+RedisSemanticCache.migrate_index(
+    redis_url="redis://localhost:6379",
+    name="llmcache",
+    backfill=False,
+)
+```
+
+This keeps the existing keys, but entries cached before the upgrade are no longer returned. Set `backfill=True` to also migrate those entries and keep the cache warm; this scans the whole cache and is safe to rerun if it gets interrupted.
+
 #### What is Redis LangCache?
 - LangCache is a fully managed, cloud-based service that provides a semantic cache for LLM applications.
 - It manages embeddings and vector search for you, allowing you to focus on your application logic.
-- See [our docs](https://redis.io/docs/latest/develop/ai/langcache/) to learn more, or [try LangCache on Redis Cloud today](https://redis.io/docs/latest/operate/rc/langcache/#get-started-with-langcache-on-redis-cloud).
+- See [our docs](https://redis.io/docs/latest/develop/ai/context-engine/langcache/) to learn more, or [try LangCache on Redis Cloud today](https://redis.io/docs/latest/operate/iris/langcache/#get-started-with-langcache-on-redis-cloud).
 
 ### 3. Chat History
 
@@ -445,13 +483,13 @@ import logging
 logging.basicConfig(level=logging.INFO)
 ```
 
-Error handling is done through custom exceptions. Make sure to handle these exceptions in your application code.
+The package doesn’t define custom exceptions. It raises standard Python exceptions (mainly `ValueError` for invalid input) and lets Redis and RedisVL errors propagate.
 
 ## Performance Considerations
 
-- For large datasets, consider using batched operations when adding documents to the vector store.
+- When loading large datasets, tune `batch_size` on `add_texts`, `add_documents`, `from_texts` or `from_documents`: larger batches mean fewer round trips to Redis and faster writes; smaller batches keep each write lighter.
 - Adjust the `k` and `fetch_k` parameters in similarity searches to balance between accuracy and performance.
-- Use appropriate indexing algorithms (FLAT, HNSW) based on your dataset size and query requirements.
+- Use appropriate indexing algorithms (FLAT, HNSW, SVS-VAMANA) based on your dataset size and query requirements.
 
 ## Examples
 
@@ -459,7 +497,7 @@ For more detailed examples and use cases, please refer to the `docs/` directory 
 
 ## Contributing / Development
 
-The library is rooted at `libs/redis`, for all the commands below, CD to `libs/redis`:
+The library is rooted at `libs/redis`. For all the commands below, `cd` to `libs/redis`:
 
 ### Unit Tests
 
@@ -481,7 +519,7 @@ To run a specific test:
 TEST_FILE=tests/unit_tests/test_imports.py make test
 ```
 
-## Integration Tests
+### Integration Tests
 
 You would need an OpenAI API Key to run the integration tests:
 
@@ -501,12 +539,12 @@ To run integration tests:
 make integration_tests
 ```
 
-## Local Development
+### Local Development
 
-Install langchain-redis development requirements (for running langchain, running examples, linting, formatting, tests, and coverage):
+Install langchain-redis development requirements (for running langchain, running examples, linting, formatting, spell checking, tests, and coverage):
 
 ```bash
-poetry install --with lint,typing,test,test_integration
+poetry install --with lint,typing,test,test_integration,codespell
 ```
 
 Then verify dependency installation:

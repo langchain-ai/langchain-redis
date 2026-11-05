@@ -7,7 +7,7 @@ import hashlib
 import json
 import logging
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 from urllib.parse import quote
 
 import numpy as np
@@ -17,11 +17,16 @@ from langchain_core.load.dump import dumps
 from langchain_core.load.load import loads
 from pydantic import ConfigDict, Field
 from redis import Redis
+from redis.client import NEVER_DECODE
 from redis.commands.json.path import Path
 from redis.exceptions import ResponseError
+from redis.utils import str_if_bytes
 from redisvl.extensions.cache.llm import (  # type: ignore[import]
     SemanticCache as RedisVLSemanticCache,
 )
+from redisvl.index import SearchIndex  # type: ignore[import]
+from redisvl.query.filter import Tag  # type: ignore[import]
+from redisvl.redis.utils import hashify  # type: ignore[import]
 from redisvl.schema.fields import VectorDataType  # type: ignore[import]
 from redisvl.utils.vectorize import BaseVectorizer  # type: ignore[import]
 
@@ -32,6 +37,19 @@ _DEFAULT_CACHE_NAME = "llmcache"
 
 # Default cache prefix used across semantic caches
 _DEFAULT_CACHE_PREFIX = "llmcache"
+
+# Tag field that scopes semantic cache entries to the LLM that produced them
+_LLM_STRING_HASH_FIELD_NAME = "llm_string_hash"
+_LLM_STRING_HASH_FIELD = {"name": _LLM_STRING_HASH_FIELD_NAME, "type": "tag"}
+
+# Fields of a semantic cache index created before entries were scoped by LLM
+_LEGACY_INDEX_FIELD_NAMES = {
+    "prompt",
+    "response",
+    "inserted_at",
+    "updated_at",
+    "prompt_vector",
+}
 
 # Default LangCache server URL; prefer the URL provided for your cache.
 # Can be overridden via the LANGCACHE_SERVER_URL environment variable.
@@ -48,6 +66,15 @@ else:
 
 
 logger = logging.getLogger(__name__)
+
+
+def _hash_llm_string(llm_string: str) -> str:
+    """Hash an `llm_string` into a value that is safe to use as a tag.
+
+    Raw `llm_string` values are long and contain characters that tag fields
+    treat as separators or require escaping, so the hex digest is used instead.
+    """
+    return hashlib.md5(llm_string.encode()).hexdigest()
 
 
 class EmbeddingsVectorizer(BaseVectorizer):
@@ -218,8 +245,8 @@ class RedisCache(BaseCache):
                 the cache key.
             - The cached value is stored as JSON and parsed back into a list of
                 `Generation` objects.
-            - If the key exists but the value is `None` or cannot be parsed,
-                `None` is returned.
+            - If the key is missing or the stored value is empty, `None` is
+                returned.
             - This method is typically called internally by LangChain, but can be used
                 directly for manual cache interactions.
         """
@@ -292,6 +319,8 @@ class RedisCache(BaseCache):
 
         Example:
             ```python
+            from langchain_core.outputs import Generation
+
             cache = RedisCache(
                 redis_url="redis://localhost:6379",
                 prefix="my_cache"
@@ -311,7 +340,8 @@ class RedisCache(BaseCache):
         Note:
             - This method uses Redis SCAN to iterate over keys, which is safe
                 for large datasets.
-            - It deletes keys in batches of 100 to optimize performance.
+            - It scans with a `COUNT` hint of 100 and deletes each batch of
+                matching keys.
             - Only keys that start with the specified prefix (default is `'redis:'`)
                 will be deleted.
             - This operation is irreversible. Make sure you want to clear all cached
@@ -357,7 +387,9 @@ class RedisSemanticCache(BaseCache):
             Defaults to `'llmcache'`.
         prefix (Optional[str]): Prefix for all keys stored in Redis.
 
-            Defaults to `'llmcache'`.
+            Defaults to `'llmcache'`. A non-default `prefix` becomes the cache's
+            index name and key prefix, combined as `'{name}:{prefix}'` when a
+            different non-default `name` is also given.
         redis_client (Optional[Redis]): An existing Redis client instance.
 
             If provided, `redis_url` is ignored.
@@ -388,6 +420,10 @@ class RedisSemanticCache(BaseCache):
         - The cache uses the RedisVL library for efficient vector storage and retrieval.
         - Semantic caching can be more flexible than exact matching, allowing cache hits
             for prompts that are semantically similar but not identical.
+        - Entries are scoped by `llm_string`, so different models (or the same
+            model with different parameters) never share or overwrite entries.
+        - An existing index created by an earlier version raises a `ValueError`
+            until it is upgraded with `migrate_index()`.
     """
 
     def __init__(
@@ -400,46 +436,230 @@ class RedisSemanticCache(BaseCache):
         prefix: Optional[str] = _DEFAULT_CACHE_PREFIX,
         redis_client: Optional[Redis] = None,
     ):
+        self.redis = self._get_redis_client(redis_url, redis_client)
+        self.embeddings = embeddings
+        self.prefix = prefix
+        vectorizer = EmbeddingsVectorizer(embeddings=self.embeddings)
+
+        cache_kwargs: Dict[str, Any] = {
+            "vectorizer": vectorizer,
+            "redis_client": self.redis,
+            "distance_threshold": distance_threshold,
+            "ttl": ttl,
+            "name": self._get_cache_name(name, prefix),
+            "filterable_fields": [_LLM_STRING_HASH_FIELD],
+        }
+        try:
+            self.cache = RedisVLSemanticCache(**cache_kwargs)
+        except ValueError as e:
+            # Built only to read the expected schema; it issues no index commands.
+            index = RedisVLSemanticCache(create_index=False, **cache_kwargs).index
+            if not self._is_legacy_index(index):
+                raise
+            raise ValueError(
+                f"Semantic cache index '{index.name}' was created by an earlier "
+                "version of langchain-redis and cannot scope entries by llm_string. "
+                "Upgrade it by calling RedisSemanticCache.migrate_index() with the "
+                "same connection, name and prefix."
+            ) from e
+
+    @staticmethod
+    def _get_redis_client(redis_url: str, redis_client: Optional[Redis]) -> Redis:
+        """Return `redis_client` if provided, otherwise connect to `redis_url`."""
         if redis_client is not None:
-            self.redis = redis_client
-        elif redis_url.startswith("redis+sentinel://"):
+            return redis_client
+        if redis_url.startswith("redis+sentinel://"):
             # For Sentinel URLs, use RedisVL's connection factory
             from redisvl.redis.connection import (  # type: ignore[import-untyped]
                 RedisConnectionFactory,
             )
 
-            self.redis = RedisConnectionFactory.get_redis_connection(
-                redis_url=redis_url
-            )
-        else:
-            self.redis = Redis.from_url(redis_url)
+            return RedisConnectionFactory.get_redis_connection(redis_url=redis_url)
+        return Redis.from_url(redis_url)
 
-        self.embeddings = embeddings
-        self.prefix = prefix
-        vectorizer = EmbeddingsVectorizer(embeddings=self.embeddings)
-
+    @staticmethod
+    def _get_cache_name(name: Optional[str], prefix: Optional[str]) -> Optional[str]:
+        """Map `name` and `prefix` to the name of the RedisVL cache."""
         # RedisVL's SemanticCache uses 'name' as the prefix for keys.
         # To support the 'prefix' parameter for multi-tenant isolation,
         # we need to map it appropriately:
         # - If both name and prefix are provided and different, combine them
         # - If only prefix is provided (and differs from default), use it
         # - Otherwise use name (maintains backward compatibility)
-        cache_name = name
         if prefix and prefix != _DEFAULT_CACHE_PREFIX:
             if name and name != _DEFAULT_CACHE_NAME and name != prefix:
                 # Both are provided and different: combine them
-                cache_name = f"{name}:{prefix}"
-            else:
-                # Only prefix is meaningfully set: use it
-                cache_name = prefix
+                return f"{name}:{prefix}"
+            # Only prefix is meaningfully set: use it
+            return prefix
+        return name
 
-        self.cache = RedisVLSemanticCache(
-            vectorizer=vectorizer,
-            redis_client=self.redis,
-            distance_threshold=distance_threshold,
-            ttl=ttl,
-            name=cache_name,
-        )
+    def _is_legacy_index(self, index: SearchIndex) -> bool:
+        """Check whether `index` exists with the schema used before entries were
+        scoped by `llm_string`, i.e. the current schema minus the tag field."""
+        if not index.exists():
+            return False
+
+        existing = SearchIndex.from_existing(index.name, redis_client=self.redis)
+        if _LLM_STRING_HASH_FIELD_NAME in existing.schema.field_names:
+            return False
+
+        existing.schema.add_field(_LLM_STRING_HASH_FIELD)
+        return existing.schema.to_dict() == index.schema.to_dict()
+
+    @classmethod
+    def migrate_index(
+        cls,
+        redis_url: str = "redis://localhost:6379",
+        name: Optional[str] = _DEFAULT_CACHE_NAME,
+        prefix: Optional[str] = _DEFAULT_CACHE_PREFIX,
+        redis_client: Optional[Redis] = None,
+        backfill: bool = False,
+    ) -> Dict[str, int]:
+        """Upgrade a semantic cache index created by an earlier version.
+
+        This method adds the `llm_string` tag field to the existing index and keeps
+        its keys. By default the entries themselves are not touched, so the cache
+        starts cold: entries cached before the upgrade are no longer returned, but
+        still expire via TTL and are removed by `clear()`.
+
+        With `backfill=True`, each of those entries is also moved to the key the
+        current version would write it to, which keeps the cache warm.
+
+        Args:
+            redis_url (str): The URL of the Redis instance to connect to.
+            name (Optional[str]): Name of the cache index, as passed to
+                `RedisSemanticCache`.
+            prefix (Optional[str]): Prefix for the keys, as passed to
+                `RedisSemanticCache`.
+            redis_client (Optional[Redis]): An existing Redis client instance.
+
+                If provided, `redis_url` is ignored.
+            backfill (bool): Whether to also migrate the existing entries.
+
+                This scans the whole cache.
+
+        Returns:
+            The number of entries that were `'backfilled'`, and of entries `'skipped'`
+                because their stored prompt or `llm_string` could not be read.
+
+                Both are `0` unless `backfill` is `True`.
+
+        Raises:
+            ValueError: If the index is not a semantic cache index.
+            RedisSearchError: If the index does not exist.
+
+        Example:
+            ```python
+            RedisSemanticCache.migrate_index(
+                redis_url="redis://localhost:6379",
+                name="my_semantic_cache",
+                backfill=True,
+            )
+            ```
+
+        Note:
+            - Stop every application using the cache first: versions before and after
+                the upgrade cannot share a migrated index.
+            - It is safe to run this method again, including after an interruption or
+                to backfill an index that was already upgraded.
+            - Backfilling keeps all the fields of an entry, except for the new tag and
+                `entry_id`, and its original expiration deadline.
+            - An entry is only removed after its replacement is written. If the
+                replacement already exists, it is kept and the entry is removed.
+            - Skipped entries are left in place.
+            - Entries that an earlier version already overwrote cannot be recovered.
+        """
+        client = cls._get_redis_client(redis_url, redis_client)
+        cache_name = cls._get_cache_name(name, prefix)
+        index = SearchIndex.from_existing(cache_name, redis_client=client)
+
+        field_names = set(index.schema.field_names)
+        if field_names - {_LLM_STRING_HASH_FIELD_NAME} != _LEGACY_INDEX_FIELD_NAMES:
+            raise ValueError(f"Index '{cache_name}' is not a semantic cache index.")
+
+        # Legacy entries don't have the field, so skip the scan that would make
+        # Redis re-index all of them, vectors included.
+        if _LLM_STRING_HASH_FIELD_NAME not in field_names:
+            client.execute_command(
+                "FT.ALTER",
+                cache_name,
+                "SKIPINITIALSCAN",
+                "SCHEMA",
+                "ADD",
+                _LLM_STRING_HASH_FIELD_NAME,
+                "TAG",
+            )
+
+        if not backfill:
+            return {"backfilled": 0, "skipped": 0}
+        return cls._backfill_entries(index, client)
+
+    @classmethod
+    def _backfill_entries(cls, index: SearchIndex, client: Redis) -> Dict[str, int]:
+        """Move the entries without the `llm_string` tag to their current keys."""
+        result = {"backfilled": 0, "skipped": 0}
+        for key in client.scan_iter(match=index.key("*"), _type="HASH", count=100):
+            # prompt_vector is binary, which a decode_responses client can't read.
+            raw_fields = client.execute_command("HGETALL", key, **{NEVER_DECODE: True})
+            fields = {str_if_bytes(field): val for field, val in raw_fields.items()}
+
+            # Another cache whose name extends this one shares the key pattern.
+            entry_id = fields.get("entry_id", b"").decode(errors="replace")
+            if str_if_bytes(key) != index.key(entry_id):
+                continue
+            if _LLM_STRING_HASH_FIELD_NAME in fields:
+                continue
+
+            parsed = cls._parse_legacy_entry(fields)
+            if parsed is None:
+                result["skipped"] += 1
+                continue
+
+            expire_at = client.pexpiretime(key)
+            if expire_at == -2:  # Expired since it was read
+                continue
+
+            prompt, llm_string = parsed
+            filters = {_LLM_STRING_HASH_FIELD_NAME: _hash_llm_string(llm_string)}
+            new_entry_id = hashify(prompt, filters)
+            new_key = index.key(new_entry_id)
+
+            # A replacement is either complete or absent, thanks to the transaction:
+            # one that exists comes from an interrupted run or a newer write.
+            if not client.exists(new_key):
+                new_fields: Dict[Any, Any] = {
+                    **fields,
+                    **filters,
+                    "entry_id": new_entry_id,
+                }
+                pipe = client.pipeline(transaction=True)
+                pipe.hset(new_key, mapping=new_fields)
+                if expire_at != -1:  # -1 means the entry never expires
+                    pipe.pexpireat(new_key, expire_at)
+                pipe.execute()
+            client.delete(key)
+            result["backfilled"] += 1
+
+        if result["skipped"]:
+            logger.warning(
+                "Skipped %d entries of semantic cache index '%s' without a readable "
+                "prompt or llm_string. They are no longer returned; call clear() to "
+                "remove them.",
+                result["skipped"],
+                index.name,
+            )
+        return result
+
+    @staticmethod
+    def _parse_legacy_entry(fields: Dict[str, bytes]) -> Optional[Tuple[str, str]]:
+        """Read the prompt and `llm_string` of an entry, or `None` if unreadable."""
+        try:
+            prompt = fields["prompt"].decode()
+            llm_string = json.loads(fields["metadata"])["llm_string"]
+        except (KeyError, TypeError, ValueError):
+            return None
+        return (prompt, llm_string) if isinstance(llm_string, str) else None
 
     def lookup(self, prompt: str, llm_string: str) -> Optional[RETURN_VAL_TYPE]:
         """Look up the result of a previous language model call in the Redis semantic
@@ -484,15 +704,21 @@ class RedisSemanticCache(BaseCache):
                 threshold specified during cache initialization.
             - If multiple results are within the threshold, the most similar
                 one is returned.
-            - The `llm_string` is used to ensure the cached result is from the
-                same language model.
+            - Only entries stored for the same `llm_string` are considered, so
+                a closer match cached for a different language model never hides
+                a valid one.
             - This method is typically called internally by LangChain, but can
                 be used directly for manual cache interactions.
             - Unlike exact matching, this may return results for prompts that
                 are semantically similar but not identical to the input.
         """
         vector = self.cache._vectorize_prompt(prompt)
-        results = self.cache.check(vector=vector)
+        results = self.cache.check(
+            vector=vector,
+            filter_expression=(
+                Tag(_LLM_STRING_HASH_FIELD_NAME) == _hash_llm_string(llm_string)
+            ),
+        )
 
         if results:
             for result in results:
@@ -549,6 +775,9 @@ class RedisSemanticCache(BaseCache):
                 cache updates.
             - Unlike exact matching caches, this allows for semantic similarity
                 lookups later.
+            - Entries are keyed by `prompt` and `llm_string`: updating the same
+                pair overwrites its entry, while the same prompt for a different
+                `llm_string` is stored as a separate entry.
             - If the cache already contains very similar entries, this will add a
                 new entry rather than overwriting.
             - The effectiveness of the cache depends on the quality of the embedding
@@ -562,6 +791,7 @@ class RedisSemanticCache(BaseCache):
             response=serialized_response,
             vector=vector,
             metadata={"llm_string": llm_string},
+            filters={_LLM_STRING_HASH_FIELD_NAME: _hash_llm_string(llm_string)},
         )
 
     def clear(self, **kwargs: Any) -> None:
@@ -576,6 +806,7 @@ class RedisSemanticCache(BaseCache):
 
         Example:
             ```python
+            from langchain_core.outputs import Generation
             from langchain_openai import OpenAIEmbeddings
 
             cache = RedisSemanticCache(
@@ -649,8 +880,9 @@ class RedisSemanticCache(BaseCache):
         Note:
             - The index name is set during the initialization of the
                 `RedisSemanticCache`.
-            - If no custom name was provided during initialization,
-                a default name is used.
+            - This is the `name` passed at initialization (default
+                `'llmcache'`), unless a non-default `prefix` was also given;
+                see the `prefix` argument.
             - This name is used internally to identify and manage the semantic cache
                 in Redis.
             - Knowing the index name can be useful for debugging or for direct
@@ -661,8 +893,8 @@ class RedisSemanticCache(BaseCache):
     async def alookup(self, prompt: str, llm_string: str) -> Optional[RETURN_VAL_TYPE]:
         """Async look up based on `prompt` and `llm_string`.
 
-        A cache implementation is expected to generate a key from the 2-tuple
-        of `prompt` and `llm_string` (e.g., by concatenating them with a delimiter).
+        Async version of `lookup`: checks for a cached result for a semantically
+        similar prompt and the same `llm_string`.
 
         Args:
             prompt: String representation of the prompt.
@@ -681,7 +913,12 @@ class RedisSemanticCache(BaseCache):
                 The cached value is a list of `Generation` objects (or subclasses).
         """
         vector = await self.cache._avectorize_prompt(prompt)
-        results = await self.cache.acheck(vector=vector)
+        results = await self.cache.acheck(
+            vector=vector,
+            filter_expression=(
+                Tag(_LLM_STRING_HASH_FIELD_NAME) == _hash_llm_string(llm_string)
+            ),
+        )
 
         if results:
             for result in results:
@@ -700,8 +937,8 @@ class RedisSemanticCache(BaseCache):
     ) -> None:
         """Async update cache based on `prompt` and `llm_string`.
 
-        The `prompt` and `llm_string` are used to generate a key for the cache.
-        The key should match that of the look up method.
+        Async version of `update`: embeds the `prompt` and stores it with the
+        result, using `llm_string` as metadata.
 
         Args:
             prompt: String representation of the prompt.
@@ -726,6 +963,7 @@ class RedisSemanticCache(BaseCache):
             response=serialized_response,
             vector=vector,
             metadata={"llm_string": llm_string},
+            filters={_LLM_STRING_HASH_FIELD_NAME: _hash_llm_string(llm_string)},
         )
 
     async def aclear(self, **kwargs: Any) -> None:
@@ -753,13 +991,16 @@ class LangCacheSemanticCache(BaseCache):
             Defaults to `'llmcache'`.
         server_url (Optional[str]): LangCache API endpoint.
 
-            If not set, a default managed endpoint is used; prefer the server URL
-            provided for your cache.
-        api_key (Optional[str]): API key for LangCache authentication.
+            If not set, uses the `LANGCACHE_SERVER_URL` environment variable,
+            read when `langchain_redis.cache` is imported, or a default managed
+            endpoint if the variable is unset. Set the variable before importing
+            `langchain_redis`, or pass `server_url` explicitly. Prefer the server
+            URL provided for your cache.
+        api_key (Optional[str]): Required API key for LangCache authentication.
         cache_id (Optional[str]): Required LangCache instance identifier.
         use_exact_search (bool): Enable exact match search.
         use_semantic_search (bool): Enable semantic search.
-        distance_scale (Literal["normalized","redis"]): Distance scaling mode.
+        distance_scale (Literal["normalized", "redis"]): Distance scaling mode.
         **kwargs: Additional options forwarded to the LangCache wrapper.
 
     Example:
@@ -774,10 +1015,14 @@ class LangCacheSemanticCache(BaseCache):
         )
         ```
 
-    Notes:
+    Note:
         - Embeddings are computed server-side in LangCache; client-side embeddings
             are not used.
         - Per-entry TTL is ignored; cache-level TTL applies if set.
+
+    Raises:
+        ValueError: If `cache_id` or `api_key` is not provided.
+        ImportError: If the `langcache` package is not installed.
     """
 
     # Hint for type checkers/IDEs; defined at class scope
@@ -839,7 +1084,7 @@ class LangCacheSemanticCache(BaseCache):
         )
 
     def lookup(self, prompt: str, llm_string: str) -> Optional[RETURN_VAL_TYPE]:
-        """Lookup using LangCache's check API."""
+        """Look up using LangCache's check API."""
         results = self.cache.check(
             prompt=prompt,
             num_results=1,
@@ -886,7 +1131,7 @@ class LangCacheSemanticCache(BaseCache):
         return self._cache_name
 
     async def alookup(self, prompt: str, llm_string: str) -> Optional[RETURN_VAL_TYPE]:
-        """Async lookup through LangCache's acheck API."""
+        """Async look up through LangCache's acheck API."""
         results = await self.cache.acheck(
             prompt=prompt,
             num_results=1,

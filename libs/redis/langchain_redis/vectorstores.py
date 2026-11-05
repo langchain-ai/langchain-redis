@@ -6,6 +6,7 @@ import ast
 import json
 from typing import (
     Any,
+    Callable,
     Dict,
     Iterable,
     List,
@@ -38,6 +39,7 @@ from redisvl.redis.utils import (  # type: ignore[import]
     hashify,
 )
 from redisvl.schema import FieldTypes, IndexSchema, StorageType  # type: ignore[import]
+from redisvl.schema.fields import VECTOR_NORM_MAP  # type: ignore[import]
 
 from langchain_redis.config import RedisConfig
 from langchain_redis.version import __lib_name__
@@ -208,24 +210,23 @@ def maximal_marginal_relevance(
 
     Example:
         ```python
-        from langchain_redis import RedisVectorStore
+        from langchain_redis.vectorstores import maximal_marginal_relevance
         from langchain_openai import OpenAIEmbeddings
         import numpy as np
 
         embeddings = OpenAIEmbeddings()
-        vector_store = RedisVectorStore(
-            embeddings=embeddings,
-            index_name="langchain-demo",
-            redis_url="redis://localhost:6379",
-        )
 
         query = "What is the capital of France?"
         query_embedding = embeddings.embed_query(query)
 
-        # Assuming you have a list of document embeddings
-        doc_embeddings = [embeddings.embed_query(doc) for doc in documents]
+        documents = [
+            "Paris is the capital of France.",
+            "France's capital city is Paris.",
+            "Berlin is the capital of Germany.",
+        ]
+        doc_embeddings = embeddings.embed_documents(documents)
 
-        selected_indices = vector_store.maximal_marginal_relevance(
+        selected_indices = maximal_marginal_relevance(
             query_embedding=np.array(query_embedding),
             embedding_list=[np.array(emb) for emb in doc_embeddings],
             lambda_mult=0.5,
@@ -267,7 +268,7 @@ class RedisVectorStore(VectorStore):
     """Redis vector store integration.
 
     Setup:
-        Install `langchain-redis` and running the Redis docker container.
+        Install `langchain-redis` and run the Redis Docker container.
 
         ```bash
         pip install -qU langchain-redis
@@ -277,7 +278,7 @@ class RedisVectorStore(VectorStore):
     Key init args — indexing params:
         index_name: str
             Name of the index to create.
-        embedding: Embeddings
+        embeddings: Embeddings
             Embedding function to use.
         distance_metric: str
             Distance metric to use for similarity search. Default is `'COSINE'`.
@@ -344,7 +345,7 @@ class RedisVectorStore(VectorStore):
         vector_store.add_documents(documents=documents, ids=ids)
         ```
 
-    !!! example Delete Documents
+    !!! example "Delete Documents"
 
         ```python
         vector_store.delete(ids=["3"])
@@ -385,11 +386,29 @@ class RedisVectorStore(VectorStore):
         ```python
         results = vector_store.similarity_search_with_score(query="foo", k=1)
         for doc, score in results:
-            print(f"* [SIM={score:.3f}] {doc.page_content} [{doc.metadata}]")
+            print(f"* [DIST={score:.3f}] {doc.page_content} [{doc.metadata}]")
         ```
 
         ```python
-        * [SIM=0.916] foo [{'baz': 'bar'}]
+        * [DIST=0.000] foo [{'baz': 'bar'}]
+        ```
+
+    !!! example "Search with relevance score"
+
+        Unlike the distance above, a relevance score is in `[0, 1]` and higher
+        for closer matches. `score_threshold` drops everything below it.
+        Not available for `IP` indexes.
+
+        ```python
+        results = vector_store.similarity_search_with_relevance_scores(
+            query="foo", k=1, score_threshold=0.5
+        )
+        for doc, score in results:
+            print(f"* [REL={score:.3f}] {doc.page_content} [{doc.metadata}]")
+        ```
+
+        ```python
+        * [REL=0.916] foo [{'baz': 'bar'}]
         ```
 
     !!! example "Use as Retriever"
@@ -399,11 +418,18 @@ class RedisVectorStore(VectorStore):
             search_type="mmr",
             search_kwargs={"k": 1, "fetch_k": 2, "lambda_mult": 0.5},
         )
-        retriever.get_relevant_documents("foo")
+        retriever.invoke("foo")
         ```
 
         ```python
         [Document(page_content='foo', metadata={'baz': 'bar'})]
+        ```
+
+        ```python
+        retriever = vector_store.as_retriever(
+            search_type="similarity_score_threshold",
+            search_kwargs={"k": 4, "score_threshold": 0.5},
+        )
         ```
     """
 
@@ -561,12 +587,6 @@ class RedisVectorStore(VectorStore):
                 Common kwargs include:
 
                 - `ids`: Optional list of ids to associate with the documents.
-                - `refresh_indices`: Whether to refresh the Redis indices
-                    after adding the texts.
-                    - Defaults to `True`.
-                - `create_index_if_not_exists`: Whether to create the Redis
-                index if it doesn't already exist.
-                    - Defaults to `True`.
 
         Returns:
             List of ids from adding the texts into the vector store.
@@ -849,7 +869,7 @@ class RedisVectorStore(VectorStore):
                 - `redis_url`: URL of the Redis instance to connect to.
                 - `distance_metric`: Distance metric to use for similarity search.
                     - Default is `'COSINE'`.
-                - indexing_algorithm: Indexing algorithm to use.
+                - `indexing_algorithm`: Indexing algorithm to use.
                     - Default is `'FLAT'`.
 
         Returns:
@@ -937,7 +957,7 @@ class RedisVectorStore(VectorStore):
                 - `key_separator`: Separator used between the index prefix and
                     document IDs. Required when reopening an index created with
                     a non-default separator.
-                - `vector_query_field`: Name of the field containing the vector
+                - `embedding_field`: Name of the field containing the vector
                     representations.
                 - `content_field`: Name of the field containing the document content.
 
@@ -958,7 +978,7 @@ class RedisVectorStore(VectorStore):
                 index_name="my-existing-index",
                 embedding=embeddings,
                 redis_url="redis://localhost:6379",
-                vector_query_field="embedding",
+                embedding_field="embedding",
                 content_field="text"
             )
 
@@ -972,7 +992,7 @@ class RedisVectorStore(VectorStore):
             - The embedding function provided should be compatible with the embeddings
                 stored in the existing index.
             - If you're using custom field names for vectors or content in your
-                existing index, make sure to specify them using `vector_query_field` and
+                existing index, make sure to specify them using `embedding_field` and
                 `content_field` respectively.
             - This method is useful for scenarios where you want to reuse an
                 existing index, such as when the index was created by another process
@@ -1090,7 +1110,7 @@ class RedisVectorStore(VectorStore):
                 the field type is not sufficient. Legacy TEXT markers remain
                 readable, but cannot be used for filter deletion.
             - Use RedisVL filter builders such as `Tag`, `Num`, or `Text`
-                instead of raw RediSearch filter strings.
+                instead of raw Redis Query Engine filter strings.
             - Filters that render to Redis's global match-all expression are
                 refused; use `index.clear()` for an intentional full-index
                 operation.
@@ -1390,7 +1410,8 @@ class RedisVectorStore(VectorStore):
                 - `distance_threshold`: Optional distance threshold for filtering
                     results.
                 - `return_all`: Whether to return all data in the Hash/JSON including
-                    non-indexed fields
+                    non-indexed fields.
+                    - Defaults to `False`.
 
         Returns:
             List of `Document` objects most similar to the query vector.
@@ -1615,7 +1636,7 @@ class RedisVectorStore(VectorStore):
             List of `(Document, score)` tuples, best first. Higher scores
             are better. Scores are combined hybrid scores — rank-based for
             `'RRF'`, weighted sums for linear combination — and are not
-            comparable with the cosine distances returned by
+            comparable with the vector distances returned by
             `similarity_search_with_score`.
 
         Example:
@@ -1933,6 +1954,9 @@ class RedisVectorStore(VectorStore):
                     - Defaults to `True`.
                 - `distance_threshold`: Optional distance threshold for filtering
                     results.
+                - `return_all`: Whether to return all data in the Hash/JSON including
+                    non-indexed fields.
+                    - Defaults to `False`.
 
         Returns:
             List of tuples of `Document` objects most similar to the query vector,
@@ -2037,9 +2061,6 @@ class RedisVectorStore(VectorStore):
 
                 Common kwargs include:
 
-                - `custom_query`: Optional callable that can be used
-                    to customize the query.
-                - `doc_builder`: Optional callable to customize `Document` creation.
                 - `return_metadata`: Whether to return metadata.
                     - Defaults to `True`.
                 - `distance_threshold`: Optional distance threshold for filtering
@@ -2093,6 +2114,36 @@ class RedisVectorStore(VectorStore):
             sort_by,
             **kwargs,
         )
+
+    def _select_relevance_score_fn(self) -> Callable[[float], float]:
+        """Return RedisVL's normalization for the distance metric of this index.
+
+        This is the function RedisVL applies for `normalize_vector_distance=True`:
+        it maps a distance to a score in `[0, 1]` where higher is closer.
+        It is applied to the raw distances here instead of passing the flag to
+        the query, because on a range query the flag also reads
+        `distance_threshold` as a similarity. That would change the meaning of
+        a kwarg that is a raw distance everywhere else in this class.
+
+        `IP` has no normalization in RedisVL and its raw distance is lower for
+        closer vectors, so it can't be returned as a relevance score.
+
+        The metric comes from the live index, not `self.config`, because the
+        config only holds the default when an existing index is reopened.
+
+        Raises:
+            ValueError: If the index uses a metric RedisVL can't normalize.
+        """
+        vector_field = self._index.schema.fields[self.config.embedding_field]
+        metric = vector_field.attrs.distance_metric.value
+        norm_fn = VECTOR_NORM_MAP[metric]
+        if norm_fn is None:
+            raise ValueError(
+                f"Relevance scores are not supported for the {metric} distance "
+                "metric. Use COSINE, which is normalized inner product, or "
+                "similarity_search_with_score() for raw distances."
+            )
+        return norm_fn
 
     def max_marginal_relevance_search_by_vector(
         self,
