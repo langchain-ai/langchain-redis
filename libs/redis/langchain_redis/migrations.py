@@ -53,7 +53,8 @@ def migrate_index_ownership(
     recreating the index definition, causing query downtime during reindexing.
     Document keys, embeddings and TTLs are retained. Supply every existing alias
     in ``aliases`` so it can be restored after a rebuild. Custom FT.CREATE options
-    and nonstandard ownership paths require manual migration.
+    and nonstandard ownership paths require manual migration. Indexes with
+    overlapping prefixes of the same storage type are refused.
 
     Every rebuild requires the complete, current deployment ``source_schema``.
     It is authoritative: only its ownership field is replaced. The caller must
@@ -81,6 +82,7 @@ def migrate_index_ownership(
         raise ValueError("Wait for the source index to finish indexing first.")
     schema = _ownership_schema(info)
     index = SearchIndex(schema=schema, redis_client=client)
+    _assert_no_overlapping_prefixes(index)
     action = _schema_action(schema, index_name)
     target = _target_schema(schema)
     if action == "rebuild":
@@ -224,6 +226,33 @@ def _schema_action(
     ):
         return "none"
     return "rebuild"
+
+
+def _assert_no_overlapping_prefixes(index: SearchIndex) -> None:
+    """Refuse namespaces that another index of the same storage type can match."""
+    target = index.schema.index
+    target_prefixes = (
+        target.prefix if isinstance(target.prefix, list) else [target.prefix]
+    )
+    client = cast(Any, index.client)
+
+    for other_name in index.listall():
+        if other_name == index.name:
+            continue
+        other_info = convert_bytes(client.ft(other_name).info())
+        other = normalize_index_definition(other_info)
+        if other["key_type"].lower() != target.storage_type.value:
+            continue
+        for target_prefix in target_prefixes:
+            for other_prefix in other["prefixes"]:
+                if target_prefix.startswith(other_prefix) or other_prefix.startswith(
+                    target_prefix
+                ):
+                    raise ValueError(
+                        f"Index prefix {target_prefix!r} overlaps index "
+                        f"{other_name!r} prefix {other_prefix!r}; automatic "
+                        "migration requires disjoint prefixes."
+                    )
 
 
 def _attribute_identity(attribute: Any) -> tuple[str, str, str]:

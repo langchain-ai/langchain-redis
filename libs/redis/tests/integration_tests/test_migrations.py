@@ -118,6 +118,51 @@ def test_migration_supports_resp2(
         assert client.hget(key, "_index_name") == hashify(store.index.name).encode()
 
 
+@pytest.mark.parametrize("dry_run", [True, False], ids=["preview", "apply"])
+def test_overlapping_prefixes_are_rejected_before_mutation(
+    client: Redis, dry_run: bool
+) -> None:
+    run_id = uuid4().hex[:8]
+    prefix = f"ownership_overlap_{run_id}:"
+    schemas = [
+        IndexSchema.from_dict(
+            {
+                "index": {"name": f"overlap_{run_id}_{suffix}", "prefix": key_prefix},
+                "fields": [{"name": "text", "type": "text"}],
+            }
+        )
+        for suffix, key_prefix in (("broad", prefix), ("nested", f"{prefix}b:"))
+    ]
+    indexes = [SearchIndex(schema=schema, redis_client=client) for schema in schemas]
+    keys = [f"{prefix}a:one", f"{prefix}b:one"]
+    try:
+        for index in indexes:
+            index.create()
+        client.hset(keys[0], mapping={"text": "broad"})
+        client.hset(keys[1], mapping={"text": "nested"})
+        before_attributes = [
+            convert_bytes(client.ft(index.name).info())["attributes"]
+            for index in indexes
+        ]
+        before_documents = [client.hgetall(key) for key in keys]
+
+        with pytest.raises(ValueError, match="overlaps"):
+            migrate_index_ownership(
+                indexes[0].name, redis_client=client, dry_run=dry_run
+            )
+
+        assert [
+            convert_bytes(client.ft(index.name).info())["attributes"]
+            for index in indexes
+        ] == before_attributes
+        assert [client.hgetall(key) for key in keys] == before_documents
+    finally:
+        for index in indexes:
+            if index.exists():
+                index.delete(drop=False)
+        client.delete(*keys)
+
+
 @pytest.mark.parametrize(
     ("storage_type", "marker_type", "action"),
     [

@@ -5,6 +5,7 @@ import pytest
 from redisvl.schema import IndexSchema  # type: ignore[import]
 
 from langchain_redis.migrations import (
+    _assert_no_overlapping_prefixes,
     _schema_action,
     _target_schema,
     _validate_source_schema,
@@ -177,6 +178,38 @@ def test_source_schema_vector_tuning_remains_authoritative() -> None:
     _validate_source_schema(_info(_attribute("embedding", "VECTOR")), source)
 
 
+@pytest.mark.parametrize(
+    ("target_prefix", "other_prefix", "key_type", "rejects"),
+    [
+        pytest.param("app:", "app:b:", "HASH", True, id="target-is-broader"),
+        pytest.param("app:b:", "app:", "HASH", True, id="target-is-narrower"),
+        pytest.param("app:", "app:", "HASH", True, id="identical"),
+        pytest.param("app:a:", "app:b:", "HASH", False, id="disjoint"),
+        pytest.param("app:", "app:b:", "JSON", False, id="different-storage"),
+    ],
+)
+def test_overlapping_index_prefixes_are_rejected(
+    target_prefix: str,
+    other_prefix: str,
+    key_type: str,
+    rejects: bool,
+) -> None:
+    index = Mock()
+    index.name = INDEX_NAME
+    index.schema = _schema(None)
+    index.schema.index.prefix = target_prefix
+    index.listall.return_value = [INDEX_NAME, "other-index"]
+    index.client.ft.return_value.info.return_value = {
+        "index_definition": {"key_type": key_type, "prefixes": [other_prefix]}
+    }
+
+    if rejects:
+        with pytest.raises(ValueError, match="overlaps"):
+            _assert_no_overlapping_prefixes(index)
+    else:
+        _assert_no_overlapping_prefixes(index)
+
+
 def test_resp2_index_definition_is_normalized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -188,7 +221,9 @@ def test_resp2_index_definition_is_normalized(
         ["migration:"],
     ]
     index = Mock()
+    index.name = INDEX_NAME
     index.query.return_value = 0
+    index.listall.return_value = [INDEX_NAME]
     client = Mock()
     client.ft.return_value.info.return_value = info
     monkeypatch.setattr(
@@ -209,7 +244,9 @@ def test_preflight_rejects_incomplete_cursor_before_mutation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     index = Mock()
+    index.name = INDEX_NAME
     index.query.return_value = 2
+    index.listall.return_value = [INDEX_NAME]
     client = Mock()
     client.ft.return_value.info.return_value = {
         "index_name": INDEX_NAME,
@@ -237,7 +274,9 @@ def test_backfill_waits_for_index_readiness(
     monkeypatch: pytest.MonkeyPatch, becomes_ready: bool
 ) -> None:
     index = Mock()
+    index.name = INDEX_NAME
     index.query.return_value = 1
+    index.listall.return_value = [INDEX_NAME]
     building = {"indexing": 1, "percent_indexed": 0.5}
     ready = {"indexing": 0, "percent_indexed": 1}
     index.info.side_effect = [building, ready] if becomes_ready else [building] * 60
