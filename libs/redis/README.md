@@ -130,6 +130,15 @@ docs = vector_store.similarity_search(query, k=2)
 # Similarity search with score
 docs_and_scores = vector_store.similarity_search_with_score(query, k=2)
 
+# Relevance scores (higher is more relevant) and score-threshold retrieval
+docs_and_relevance = vector_store.similarity_search_with_relevance_scores(
+    query, k=2, score_threshold=0.5
+)
+retriever = vector_store.as_retriever(
+    search_type="similarity_score_threshold",
+    search_kwargs={"k": 4, "score_threshold": 0.5},
+)
+
 # Similarity search with filtering
 from redisvl.query.filter import Tag
 
@@ -148,6 +157,15 @@ docs = vector_store.max_marginal_relevance_search(query, k=2, fetch_k=10)
 Metadata is always stored and returned with documents, but only fields
 declared in `metadata_schema` are indexed and filterable. Filtering on an
 undeclared field raises an `Unknown field` error.
+
+`similarity_search_with_score` returns the raw Redis distance, where lower is
+closer. The relevance scores above use RedisVL's normalization instead, so they
+fall in `[0, 1]` and higher is closer: `(2 - d) / 2` for `COSINE` and
+`1 / (1 + d)` for `L2`. The two scale differently, so pick `score_threshold`
+per index (with `COSINE`, unrelated vectors score about 0.5). `IP` indexes
+raise a `ValueError`, since RedisVL has no normalization for them. Use `COSINE`,
+which is normalized inner product. `distance_threshold` stays a raw distance
+when you combine it with these methods.
 
 #### Hybrid and full-text search
 

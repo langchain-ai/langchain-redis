@@ -6,6 +6,7 @@ import pytest
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from redisvl.redis.utils import hashify  # type: ignore[import]
+from redisvl.schema.fields import VectorDistanceMetric  # type: ignore[import]
 
 from langchain_redis import RedisConfig, RedisVectorStore
 
@@ -253,6 +254,147 @@ class TestRedisVectorStore:
         assert len(results) == 1
         assert isinstance(results[0][0], Document)
         assert isinstance(results[0][1], float)
+
+    @staticmethod
+    def _use_metric(metric: VectorDistanceMetric, field: str = "embedding") -> None:
+        index = MockSearchIndex.last_instance
+        assert index is not None
+        index.schema.fields[field] = MockField(
+            field, "vector", SimpleNamespace(distance_metric=metric)
+        )
+
+    @pytest.mark.parametrize(
+        "metric, distance, expected",
+        [
+            # RedisVL normalizes COSINE as (2 - d) / 2 and L2 as 1 / (1 + d).
+            (VectorDistanceMetric.COSINE, 0.0, 1.0),
+            (VectorDistanceMetric.COSINE, 0.4, 0.8),
+            (VectorDistanceMetric.COSINE, 2.0, 0.0),
+            (VectorDistanceMetric.L2, 0.0, 1.0),
+            (VectorDistanceMetric.L2, 0.8, 1 / 1.8),
+            (VectorDistanceMetric.L2, 3.0, 0.25),
+        ],
+    )
+    def test_relevance_score_fn_uses_redisvl_normalization(
+        self,
+        vector_store: RedisVectorStore,
+        metric: VectorDistanceMetric,
+        distance: float,
+        expected: float,
+    ) -> None:
+        self._use_metric(metric)
+
+        score_fn = vector_store._select_relevance_score_fn()
+
+        assert score_fn(distance) == pytest.approx(expected)
+
+    def test_relevance_score_fn_rejects_ip(
+        self, vector_store: RedisVectorStore
+    ) -> None:
+        self._use_metric(VectorDistanceMetric.IP)
+
+        with pytest.raises(ValueError, match="IP.*COSINE"):
+            vector_store._select_relevance_score_fn()
+
+    def test_relevance_score_fn_uses_live_index_metric(
+        self, vector_store: RedisVectorStore
+    ) -> None:
+        """A reopened index only has the default metric in its config."""
+        vector_store.config.distance_metric = "COSINE"
+
+        self._use_metric(VectorDistanceMetric.L2)
+        assert vector_store._select_relevance_score_fn()(0.8) == pytest.approx(1 / 1.8)
+
+        self._use_metric(VectorDistanceMetric.IP)
+        with pytest.raises(ValueError, match="IP"):
+            vector_store._select_relevance_score_fn()
+
+    @pytest.mark.parametrize(
+        "default_field_metric, custom_field_metric",
+        [
+            (VectorDistanceMetric.COSINE, VectorDistanceMetric.L2),
+            (VectorDistanceMetric.L2, VectorDistanceMetric.IP),
+        ],
+    )
+    def test_relevance_score_fn_uses_configured_embedding_field(
+        self,
+        vector_store: RedisVectorStore,
+        default_field_metric: VectorDistanceMetric,
+        custom_field_metric: VectorDistanceMetric,
+    ) -> None:
+        """The metric comes from `config.embedding_field`, not from "embedding"."""
+        vector_store.config.embedding_field = "custom_vector"
+        vector_store.config.distance_metric = "COSINE"
+        # The default field and the config both point at a different metric, so
+        # a hardcoded "embedding" lookup or a read of the config would be wrong.
+        self._use_metric(default_field_metric)
+        self._use_metric(custom_field_metric, field="custom_vector")
+
+        if custom_field_metric == VectorDistanceMetric.IP:
+            with pytest.raises(ValueError, match="IP"):
+                vector_store._select_relevance_score_fn()
+        else:
+            score_fn = vector_store._select_relevance_score_fn()
+            # 1 / (1 + d) for L2. COSINE would give (2 - d) / 2 = 0.6.
+            assert score_fn(0.8) == pytest.approx(1 / 1.8)
+
+    def test_similarity_search_with_relevance_scores(
+        self, vector_store: RedisVectorStore
+    ) -> None:
+        self._use_metric(VectorDistanceMetric.COSINE)
+        vector_store.add_texts(["Hello, world!", "Test document"])
+
+        results = vector_store.similarity_search_with_relevance_scores("Hello", k=2)
+        assert [score for _, score in results] == pytest.approx([0.95, 0.95])
+
+        # similarity_search_with_score keeps returning the raw distance.
+        raw = vector_store.similarity_search_with_score("Hello", k=2)
+        assert [distance for _, distance in raw] == pytest.approx([0.1, 0.1])
+
+    @pytest.mark.parametrize(
+        "score_threshold, expected_hits",
+        [
+            # The mock reports a raw distance of 0.1, which scores exactly 0.95.
+            # score_threshold is inclusive, so a hit on the boundary is kept.
+            (0.95, 2),
+            (0.96, 0),
+        ],
+    )
+    def test_score_threshold_is_inclusive(
+        self,
+        vector_store: RedisVectorStore,
+        score_threshold: float,
+        expected_hits: int,
+    ) -> None:
+        self._use_metric(VectorDistanceMetric.COSINE)
+        vector_store.add_texts(["Hello, world!", "Test document"])
+
+        results = vector_store.similarity_search_with_relevance_scores(
+            "Hello", k=2, score_threshold=score_threshold
+        )
+
+        assert len(results) == expected_hits
+
+    async def test_asimilarity_search_with_relevance_scores(
+        self, vector_store: RedisVectorStore
+    ) -> None:
+        self._use_metric(VectorDistanceMetric.COSINE)
+        vector_store.add_texts(["Hello, world!", "Test document"])
+
+        results = await vector_store.asimilarity_search_with_relevance_scores(
+            "Hello", k=2
+        )
+
+        assert [score for _, score in results] == pytest.approx([0.95, 0.95])
+
+    async def test_asimilarity_search_with_relevance_scores_rejects_ip(
+        self, vector_store: RedisVectorStore
+    ) -> None:
+        self._use_metric(VectorDistanceMetric.IP)
+        vector_store.add_texts(["Hello, world!"])
+
+        with pytest.raises(ValueError, match="IP"):
+            await vector_store.asimilarity_search_with_relevance_scores("Hello", k=1)
 
     def test_max_marginal_relevance_search(
         self, vector_store: RedisVectorStore

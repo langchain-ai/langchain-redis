@@ -6,6 +6,7 @@ import ast
 import json
 from typing import (
     Any,
+    Callable,
     Dict,
     Iterable,
     List,
@@ -38,6 +39,7 @@ from redisvl.redis.utils import (  # type: ignore[import]
     hashify,
 )
 from redisvl.schema import FieldTypes, IndexSchema, StorageType  # type: ignore[import]
+from redisvl.schema.fields import VECTOR_NORM_MAP  # type: ignore[import]
 
 from langchain_redis.config import RedisConfig
 from langchain_redis.version import __lib_name__
@@ -391,6 +393,24 @@ class RedisVectorStore(VectorStore):
         * [DIST=0.000] foo [{'baz': 'bar'}]
         ```
 
+    !!! example "Search with relevance score"
+
+        Unlike the distance above, a relevance score is in `[0, 1]` and higher
+        for closer matches. `score_threshold` drops everything below it.
+        Not available for `IP` indexes.
+
+        ```python
+        results = vector_store.similarity_search_with_relevance_scores(
+            query="foo", k=1, score_threshold=0.5
+        )
+        for doc, score in results:
+            print(f"* [REL={score:.3f}] {doc.page_content} [{doc.metadata}]")
+        ```
+
+        ```python
+        * [REL=0.916] foo [{'baz': 'bar'}]
+        ```
+
     !!! example "Use as Retriever"
 
         ```python
@@ -403,6 +423,13 @@ class RedisVectorStore(VectorStore):
 
         ```python
         [Document(page_content='foo', metadata={'baz': 'bar'})]
+        ```
+
+        ```python
+        retriever = vector_store.as_retriever(
+            search_type="similarity_score_threshold",
+            search_kwargs={"k": 4, "score_threshold": 0.5},
+        )
         ```
     """
 
@@ -2158,6 +2185,36 @@ class RedisVectorStore(VectorStore):
             sort_by,
             **kwargs,
         )
+
+    def _select_relevance_score_fn(self) -> Callable[[float], float]:
+        """Return RedisVL's normalization for the distance metric of this index.
+
+        This is the function RedisVL applies for `normalize_vector_distance=True`:
+        it maps a distance to a score in `[0, 1]` where higher is closer.
+        It is applied to the raw distances here instead of passing the flag to
+        the query, because on a range query the flag also reads
+        `distance_threshold` as a similarity. That would change the meaning of
+        a kwarg that is a raw distance everywhere else in this class.
+
+        `IP` has no normalization in RedisVL and its raw distance is lower for
+        closer vectors, so it can't be returned as a relevance score.
+
+        The metric comes from the live index, not `self.config`, because the
+        config only holds the default when an existing index is reopened.
+
+        Raises:
+            ValueError: If the index uses a metric RedisVL can't normalize.
+        """
+        vector_field = self._index.schema.fields[self.config.embedding_field]
+        metric = vector_field.attrs.distance_metric.value
+        norm_fn = VECTOR_NORM_MAP[metric]
+        if norm_fn is None:
+            raise ValueError(
+                f"Relevance scores are not supported for the {metric} distance "
+                "metric. Use COSINE, which is normalized inner product, or "
+                "similarity_search_with_score() for raw distances."
+            )
+        return norm_fn
 
     def max_marginal_relevance_search_by_vector(
         self,
