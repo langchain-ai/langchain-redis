@@ -51,7 +51,9 @@ def migrate_index_ownership(
     Missing, null and raw index-name markers are backfilled; already-hashed
     markers are left alone. Conflicting markers are refused before mutation.
 
-    Pause all application/background writers and back up the schema before applying.
+    Stop all application/background writers and back up the schema before applying.
+    After applying, restart the writers or recreate every RedisVectorStore instance
+    so no process continues writing markers using its cached legacy schema.
     Missing fields use FT.ALTER; legacy TEXT or incompatible TAG fields require
     recreating the index definition, causing query downtime during reindexing.
     Document keys, embeddings and TTLs are retained. Supply every existing alias
