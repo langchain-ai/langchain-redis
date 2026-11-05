@@ -177,6 +177,34 @@ def test_source_schema_vector_tuning_remains_authoritative() -> None:
     _validate_source_schema(_info(_attribute("embedding", "VECTOR")), source)
 
 
+def test_resp2_index_definition_is_normalized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    info = _info()
+    info["index_definition"] = [
+        "key_type",
+        "HASH",
+        "prefixes",
+        ["migration:"],
+    ]
+    index = Mock()
+    index.query.return_value = 0
+    client = Mock()
+    client.ft.return_value.info.return_value = info
+    monkeypatch.setattr(
+        "langchain_redis.migrations.SearchIndex", lambda **kwargs: index
+    )
+    monkeypatch.setattr("langchain_redis.migrations._index_keys", lambda *args: [])
+
+    result = migrate_index_ownership(
+        INDEX_NAME,
+        redis_client=client,
+        source_schema=_schema({"name": "_index_name", "type": "text"}),
+    )
+
+    assert result.schema_action == "rebuild"
+
+
 def test_preflight_rejects_incomplete_cursor_before_mutation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

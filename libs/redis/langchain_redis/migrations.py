@@ -10,7 +10,10 @@ from redis.commands.search.aggregation import AggregateRequest, Cursor
 from redisvl.index import SearchIndex  # type: ignore[import]
 from redisvl.query import CountQuery  # type: ignore[import]
 from redisvl.query.filter import Tag  # type: ignore[import]
-from redisvl.redis.connection import convert_index_info_to_schema  # type: ignore[import]
+from redisvl.redis.connection import (  # type: ignore[import]
+    convert_index_info_to_schema,
+    normalize_index_definition,
+)
 from redisvl.redis.utils import convert_bytes, hashify  # type: ignore[import]
 from redisvl.schema import FieldTypes, IndexSchema, StorageType  # type: ignore[import]
 
@@ -71,6 +74,7 @@ def migrate_index_ownership(
     # Inspect the live definition before planning either schema or data changes.
     client = cast(Any, redis_client)
     info = convert_bytes(client.ft(index_name).info())
+    info["index_definition"] = normalize_index_definition(info)
     if info["index_name"] != index_name:
         raise ValueError("Use the concrete index name, not an alias.")
     if float(info.get("percent_indexed", 1)) < 1:

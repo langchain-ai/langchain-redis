@@ -100,6 +100,24 @@ def _read_record(client: Redis, store: RedisVectorStore, key: str) -> Dict[str, 
     return convert_bytes(record)
 
 
+def test_migration_supports_resp2(
+    redis_url: str,
+    make_legacy_store: Callable[..., RedisVectorStore],
+) -> None:
+    store = make_legacy_store(ids=("one",))
+    key = store.index.key("one")
+
+    with Redis.from_url(redis_url, protocol=2) as client:
+        preview = migrate_index_ownership(store.index.name, redis_client=client)
+        result = migrate_index_ownership(
+            store.index.name, redis_client=client, dry_run=False
+        )
+
+        assert (preview.schema_action, preview.would_update) == ("alter", 1)
+        assert (result.updated, result.completed) == (1, True)
+        assert client.hget(key, "_index_name") == hashify(store.index.name).encode()
+
+
 @pytest.mark.parametrize(
     ("storage_type", "marker_type", "action"),
     [
