@@ -40,6 +40,7 @@ from redisvl.redis.utils import (  # type: ignore[import]
 )
 from redisvl.schema import FieldTypes, IndexSchema, StorageType  # type: ignore[import]
 from redisvl.schema.fields import VECTOR_NORM_MAP  # type: ignore[import]
+from redisvl.utils.utils import create_ulid  # type: ignore[import]
 
 from langchain_redis.config import RedisConfig
 from langchain_redis.version import __lib_name__
@@ -742,6 +743,15 @@ class RedisVectorStore(VectorStore):
                 )
             keys = ids
 
+        # `VectorStore.add_documents` sends an id of None for each document that
+        # carries none, provided at least one in the batch does, so a mixed batch
+        # reaches here with holes. Fill them the way RedisVL fills a load with no
+        # keys at all; passing None down keys every such document as
+        # "<prefix>:None", so they overwrite one another and only the last
+        # survives.
+        if keys is not None and any(key is None for key in keys):
+            keys = [key if key is not None else create_ulid() for key in keys]
+
         redis_keys = self._redis_keys(keys) if keys else None
         if redis_keys:
             self._validate_write_ownership(redis_keys)
@@ -903,9 +913,16 @@ class RedisVectorStore(VectorStore):
         if metadatas is None:
             metadatas = [{} for _ in range(len(texts))]
 
+        # `ids` is part of the VectorStore.from_texts signature and arrives here
+        # in kwargs. Neither RedisConfig nor the constructor reads it, so unless
+        # it is taken out and passed on, the caller's ids are dropped without
+        # an error and every text is stored under a generated one.
+        ids = kwargs.pop("ids", None)
+        id_kwargs: Dict[str, Any] = {} if ids is None else {"ids": ids}
+
         vector_store = cls(embeddings=embedding, config=config, **kwargs)
         out_keys = vector_store.add_texts(  # type: ignore
-            texts, metadatas, keys, batch_size=batch_size
+            texts, metadatas, keys, batch_size=batch_size, **id_kwargs
         )
 
         if return_keys:
@@ -993,6 +1010,15 @@ class RedisVectorStore(VectorStore):
         """
         texts = [doc.page_content for doc in documents]
         metadatas = [doc.metadata for doc in documents]
+
+        # Carry Document.id through, as VectorStore.from_documents does, so the
+        # documents can be read back with get_by_ids() and re-ingesting them
+        # updates the same records instead of adding duplicates. `add_texts`
+        # still lets an explicit `keys` win.
+        if "ids" not in kwargs:
+            document_ids = [doc.id for doc in documents]
+            if any(document_ids):
+                kwargs["ids"] = document_ids
 
         config = config or RedisConfig.from_kwargs(**kwargs)
 
