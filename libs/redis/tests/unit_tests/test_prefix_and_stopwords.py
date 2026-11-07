@@ -142,7 +142,7 @@ def test_generated_schema_preserves_list_prefix() -> None:
     namespaces at query time."""
     config = RedisConfig(key_prefix=PREFIXES, embedding_dimensions=DIMS)
     schema_index = config.to_index_schema().to_dict()["index"]
-    assert schema_index["prefix"] == PREFIXES
+    assert schema_index["prefix"] == [f"{prefix}:" for prefix in PREFIXES]
     assert schema_index["key_separator"] == ":"
 
 

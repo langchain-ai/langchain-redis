@@ -200,11 +200,7 @@ class SchemaCapturingIndex:
 
 
 def test_store_default_schema_path_merges_vector_attrs() -> None:
-    """The store's inline schema construction also merges vector_attrs.
-
-    RedisVectorStore builds its default schema in vectorstores.py, separately
-    from RedisConfig.to_index_schema(); both paths must honor vector_attrs.
-    """
+    """The store's generated schema includes configured vector attributes."""
     with patch("langchain_redis.vectorstores.SearchIndex", SchemaCapturingIndex):
         RedisVectorStore(
             MockEmbeddings(),
