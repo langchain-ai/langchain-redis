@@ -196,14 +196,29 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
                 existing_info = self.index.info()
                 index_definition = existing_info.get("index_definition", [])
 
-                # Parse the index_definition list to find prefixes
-                existing_prefixes = []
-                try:
-                    prefixes_index = index_definition.index("prefixes") + 1
-                    existing_prefixes = index_definition[prefixes_index]
-                except (ValueError, IndexError):
-                    # Could not find prefixes in the definition
-                    pass
+                # Parse the index definition to find prefixes. Its shape
+                # depends on the Redis protocol: under RESP2 (protocol 2)
+                # FT.INFO returns a flat list, e.g.
+                # ["key_type", "JSON", "prefixes", ["chat:"], ...], while
+                # under RESP3 (redis-py 8, protocol 3) it returns a dict,
+                # e.g. {"key_type": "JSON", "prefixes": ["chat:"], ...}.
+                # Calling .index("prefixes") on the dict raised
+                # AttributeError and broke every later instance, so handle
+                # both shapes; the prefix warning below must still work
+                # on RESP3, not be silently skipped.
+                existing_prefixes: List[str] = []
+                if isinstance(index_definition, dict):
+                    prefixes = index_definition.get("prefixes", []) or []
+                    existing_prefixes = (
+                        [prefixes] if isinstance(prefixes, str) else list(prefixes)
+                    )
+                elif isinstance(index_definition, list):
+                    try:
+                        prefixes_index = index_definition.index("prefixes") + 1
+                        existing_prefixes = index_definition[prefixes_index]
+                    except (ValueError, IndexError):
+                        # Could not find prefixes in the definition
+                        pass
 
                 if existing_prefixes and self.key_prefix not in existing_prefixes:
                     logger.warning(

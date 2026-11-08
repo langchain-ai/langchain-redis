@@ -185,3 +185,70 @@ class TestRedisChatMessageHistoryMinimal:
             history = RedisChatMessageHistory(session_id="test_session")
             with pytest.raises(ValueError, match="Message cannot be None"):
                 history.add_messages([HumanMessage(content="hi"), None])  # type: ignore
+
+
+class TestRedisChatMessageHistoryExistingIndex:
+    """Creating an instance when the search index already exists.
+
+    Under RESP2 (protocol 2) FT.INFO returns the index definition as a
+    flat list, while under RESP3 (redis-py 8, protocol 3) it returns a
+    dict. The constructor must read the key prefixes from both shapes
+    instead of crashing on the second instance (issue #222).
+    """
+
+    def _history_with_index_info(self, index_info):  # type: ignore[no-untyped-def]
+        """Build a history whose mocked index returns the given info."""
+        with (
+            patch(
+                "langchain_redis.chat_message_history.SearchIndex"
+            ) as mock_search_index,
+            patch("redis.Redis.from_url"),
+        ):
+            mock_search_index.from_dict.return_value.info.return_value = index_info
+            return RedisChatMessageHistory(session_id="test_session")
+
+    def test_resp3_dict_index_definition_does_not_raise(self) -> None:
+        """A RESP3 dict index definition must not crash the constructor."""
+        history = self._history_with_index_info(
+            {
+                "index_name": "idx:chat_history",
+                "index_definition": {
+                    "key_type": "JSON",
+                    "prefixes": ["chat:"],
+                },
+            }
+        )
+        assert history.id == "test_session"
+        history.index.create.assert_called_once()
+
+    def test_resp3_dict_index_definition_with_different_prefix_warns(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The prefix-mismatch warning must still fire on RESP3."""
+        with caplog.at_level("WARNING", logger="langchain_redis.chat_message_history"):
+            self._history_with_index_info(
+                {
+                    "index_name": "idx:chat_history",
+                    "index_definition": {
+                        "key_type": "JSON",
+                        "prefixes": ["other:"],
+                    },
+                }
+            )
+        assert "already exists with different key prefix" in caplog.text
+
+    def test_resp2_list_index_definition_still_works(self) -> None:
+        """The original RESP2 list shape keeps working unchanged."""
+        history = self._history_with_index_info(
+            {
+                "index_name": "idx:chat_history",
+                "index_definition": [
+                    "key_type",
+                    "JSON",
+                    "prefixes",
+                    ["chat:"],
+                ],
+            }
+        )
+        assert history.id == "test_session"
+        history.index.create.assert_called_once()
