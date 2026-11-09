@@ -4,6 +4,7 @@ from unittest.mock import Mock
 import pytest
 from redisvl.schema import IndexSchema  # type: ignore[import]
 
+from langchain_redis import RedisConfig
 from langchain_redis.migrations import (
     _assert_no_overlapping_prefixes,
     _resolve_source_schema,
@@ -142,6 +143,13 @@ def test_rebuild_source_can_come_from_schema_or_config() -> None:
     config.to_index_schema.assert_called_once_with()
 
 
+def test_generated_source_config_requires_embedding_dimensions() -> None:
+    config = RedisConfig(index_name=INDEX_NAME, legacy_key_format=False)
+
+    with pytest.raises(ValueError, match="source_config.embedding_dimensions"):
+        _resolve_source_schema("rebuild", None, config)
+
+
 @pytest.mark.parametrize("action", ["none", "alter"])
 def test_non_rebuild_does_not_require_a_source(action: str) -> None:
     assert _resolve_source_schema(action, None, None) is None  # type: ignore[arg-type]
@@ -184,11 +192,11 @@ def test_source_schema_must_match_reliable_live_definition(mismatch: str) -> Non
         source.index.stopwords = ["custom"]
         info["stopwords_list"] = ["different"]
 
-    with pytest.raises(ValueError, match="source_schema does not match"):
+    with pytest.raises(ValueError, match="Migration source does not match"):
         _validate_source_schema(info, source)
 
 
-def test_source_schema_vector_tuning_remains_authoritative() -> None:
+def test_source_vector_settings_and_tuning_remain_authoritative() -> None:
     source = _schema({"name": "_index_name", "type": "text"})
     source.add_field(
         {
@@ -204,7 +212,22 @@ def test_source_schema_vector_tuning_remains_authoritative() -> None:
             },
         }
     )
-    _validate_source_schema(_info(_attribute("embedding", "VECTOR")), source)
+    live_vector = _attribute(
+        "embedding",
+        "VECTOR",
+        "ALGORITHM",
+        "FLAT",
+        "DATA_TYPE",
+        "FLOAT64",
+        "DIM",
+        8,
+        "DISTANCE_METRIC",
+        "L2",
+        "EF_RUNTIME",
+        10,
+    )
+
+    _validate_source_schema(_info(live_vector), source)
 
 
 @pytest.mark.parametrize(

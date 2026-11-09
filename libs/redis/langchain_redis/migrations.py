@@ -20,7 +20,7 @@ from redisvl.schema import FieldTypes, IndexSchema, StorageType  # type: ignore[
 from langchain_redis.config import RedisConfig
 
 _FIELD = "_index_name"
-_SCHEMA_MISMATCH = "source_schema does not match the live index definition."
+_SCHEMA_MISMATCH = "Migration source does not match the live index definition."
 
 
 @dataclass(frozen=True)
@@ -65,8 +65,9 @@ def migrate_index_ownership(
     original ``source_config`` used for a generated schema. It is authoritative:
     only its ownership field is replaced. The index name, storage type, prefixes,
     fields and explicit stopwords are checked against the live index before mutation.
-    Vector tuning remains authoritative from the supplied source. Rebuilding an
-    index with INDEXALL enabled requires manual migration.
+    Vector settings and tuning are not inferred or compared with FT.INFO; they
+    remain authoritative from the supplied source. Rebuilding an index with
+    INDEXALL enabled requires manual migration.
 
     The operation is not transactional and has no automatic rollback. Re-run
     marker backfills after interruption. ``completed`` reports marker writes,
@@ -119,7 +120,7 @@ def migrate_index_ownership(
         # Use the operator's declaration directly; FT.INFO is not a schema export.
         target = _target_schema(source)
 
-    # Preflight every marker before any writes. With application writers paused,
+    # Preflight every marker before any writes. With application writers stopped,
     # this establishes that the bulk backfill will not claim another index's data.
     expected = cast(int, index.query(CountQuery("*")))
     keys = _index_keys(index, batch_size)
@@ -245,6 +246,14 @@ def _resolve_source_schema(
     if source_schema is not None:
         return source_schema
     if source_config is not None:
+        if (
+            source_config.index_schema is None
+            and source_config.schema_path is None
+            and source_config.embedding_dimensions is None
+        ):
+            raise ValueError(
+                "source_config.embedding_dimensions is required for generated schemas."
+            )
         return source_config.to_index_schema()
     raise ValueError("Rebuilds require the original source_schema or source_config.")
 
@@ -297,7 +306,7 @@ def _schema_field_identity(field: Any) -> tuple[str, str, str]:
 
 
 def _validate_source_schema(info: Dict[str, Any], source: IndexSchema) -> None:
-    """Compare reliable live field metadata without inferring vector tuning."""
+    """Compare reliable structural metadata without comparing vector settings."""
     live_stopwords = info.get("stopwords_list")
     source_stopwords = source.index.stopwords
     if ("stopwords_list" in info) != (source_stopwords is not None) or (
@@ -330,6 +339,8 @@ def _validate_source_schema(info: Dict[str, Any], source: IndexSchema) -> None:
     }
     for (identifier, alias, field_type), _ in live:
         if field_type == "VECTOR":
+            # FT.INFO is not a lossless vector schema export. The supplied source
+            # remains authoritative for both core settings and tuning.
             continue
         live_attrs = live_fields[identifier].attrs.model_dump()
         expected_attrs = supplied[alias][1].attrs.model_dump()

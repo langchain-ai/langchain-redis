@@ -259,8 +259,46 @@ is not sufficient. Until migration, direct-ID operations remain available for
 legacy TEXT markers, but searches and filter deletion are refused because TEXT
 tokenization cannot provide exact index isolation.
 
-Use `migrate_index_ownership()` to upgrade legacy indexes. See the release
-notes for the full preview-and-apply procedure.
+#### Migrating legacy ownership markers
+
+Use `migrate_index_ownership()` to preview and upgrade a legacy index. Supply
+the original, fully populated `RedisConfig` for a generated schema, or the
+original `IndexSchema` for a custom schema. Provide one source, not both.
+
+```python
+from langchain_redis import migrate_index_ownership
+
+# Use the same definition that originally created the index.
+migration_source = {"source_config": original_config}
+# For a custom schema, use this instead:
+# migration_source = {"source_schema": original_schema}
+
+aliases = ["products-search"]  # Use [] when the index has no aliases.
+preview = migrate_index_ownership(
+    "products",
+    redis_client=client,
+    aliases=aliases,
+    **migration_source,
+)
+print(preview.schema_action, preview.would_update)
+
+# Stop all writers and back up the index before applying.
+result = migrate_index_ownership(
+    "products",
+    redis_client=client,
+    aliases=aliases,
+    dry_run=False,
+    **migration_source,
+)
+print(result.updated, result.completed)
+# Restart writers and recreate existing RedisVectorStore instances afterwards.
+```
+
+Generated configurations must include `embedding_dimensions`. Vector settings
+and tuning are taken exactly from the supplied source; they are not inferred or
+compared with `FT.INFO`. Indexes with overlapping prefixes of the same storage
+type cannot be migrated automatically because ownership of legacy documents is
+ambiguous. Recreate those indexes with disjoint prefixes instead.
 
 #### Vector index tuning
 
