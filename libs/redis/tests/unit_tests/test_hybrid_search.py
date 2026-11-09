@@ -14,7 +14,7 @@ from redisvl.query import (  # type: ignore[import]
 )
 from redisvl.query.filter import Tag  # type: ignore[import]
 from redisvl.redis.utils import hashify  # type: ignore[import]
-from redisvl.schema import FieldTypes  # type: ignore[import]
+from redisvl.schema import FieldTypes, IndexSchema  # type: ignore[import]
 
 from langchain_redis import RedisVectorStore
 
@@ -49,8 +49,11 @@ class FakeSearchIndex:
     rows: List[Dict[str, Any]] = []
     last_instance: Optional["FakeSearchIndex"] = None
 
-    def __init__(self, schema: Optional[Dict[str, Any]] = None, **kwargs: Any):
-        field_specs = (schema or {}).get("fields", [])
+    def __init__(self, schema: Any = None, **kwargs: Any):
+        schema_dict = (
+            schema.to_dict() if isinstance(schema, IndexSchema) else schema or {}
+        )
+        field_specs = schema_dict.get("fields", [])
         self.schema = SimpleNamespace(
             fields={
                 spec["name"]: SimpleNamespace(
@@ -59,7 +62,7 @@ class FakeSearchIndex:
                 for spec in field_specs
             }
         )
-        self.name = (schema or {}).get("index", {}).get("name", INDEX_NAME)
+        self.name = schema_dict.get("index", {}).get("name", INDEX_NAME)
         self.client = SimpleNamespace(info=self._server_info)
         self.captured_query: Any = None
         type(self).last_instance = self
@@ -67,10 +70,6 @@ class FakeSearchIndex:
     def _server_info(self, section: Optional[str] = None) -> Dict[str, str]:
         type(self).info_calls += 1
         return {"redis_version": type(self).redis_version}
-
-    @classmethod
-    def from_dict(cls, schema: Dict[str, Any], **kwargs: Any) -> "FakeSearchIndex":
-        return cls(schema=schema)
 
     @classmethod
     def from_existing(cls, name: str, **kwargs: Any) -> "FakeSearchIndex":

@@ -14,7 +14,7 @@ from redisvl.query.filter import (  # type: ignore[import]
     Tag,
 )
 from redisvl.redis.utils import hashify  # type: ignore[import]
-from redisvl.schema import FieldTypes, StorageType  # type: ignore[import]
+from redisvl.schema import FieldTypes, IndexSchema, StorageType  # type: ignore[import]
 
 from langchain_redis import RedisVectorStore
 
@@ -43,8 +43,11 @@ class FakeBulkIndex:
     live_schema: Any = None
     live_schema_error: Optional[Exception] = None
 
-    def __init__(self, schema: Optional[Dict[str, Any]] = None, **kwargs: Any):
-        field_specs = (schema or {}).get("fields", [])
+    def __init__(self, schema: Any = None, **kwargs: Any):
+        schema_dict = (
+            schema.to_dict() if isinstance(schema, IndexSchema) else schema or {}
+        )
+        field_specs = schema_dict.get("fields", [])
         self.schema: Any = SimpleNamespace(
             fields={
                 spec["name"]: SimpleNamespace(
@@ -61,16 +64,12 @@ class FakeBulkIndex:
                 for spec in field_specs
             }
         )
-        self.name = (schema or {}).get("index", {}).get("name", INDEX_NAME)
+        self.name = schema_dict.get("index", {}).get("name", INDEX_NAME)
         self.client = object()
         self.captured_filter: Any = None
         self.captured_kwargs: Dict[str, Any] = {}
         self.loaded_records: List[Dict[str, Any]] = []
         type(self).last_instance = self
-
-    @classmethod
-    def from_dict(cls, schema: Dict[str, Any], **kwargs: Any) -> "FakeBulkIndex":
-        return cls(schema=schema)
 
     @classmethod
     def from_existing(cls, name: str, redis_client: Any = None, **kwargs: Any) -> Any:

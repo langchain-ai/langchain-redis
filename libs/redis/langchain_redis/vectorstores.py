@@ -498,8 +498,8 @@ class RedisVectorStore(VectorStore):
         else:
             # RedisConfig is the source of truth for generated schemas, including
             # internal fields and the historical key-prefix format.
-            self._index = SearchIndex.from_dict(
-                self.config.to_index_schema().to_dict(),
+            self._index = SearchIndex(
+                schema=self.config.to_index_schema(),
                 redis_client=redis_client,
                 lib_name=__lib_name__,
             )

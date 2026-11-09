@@ -1,13 +1,13 @@
 """Unit tests for multi-prefix indexes and index-level stopwords."""
 
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, List, Optional, Union
 from unittest.mock import patch
 
 import pytest
 from langchain_core.embeddings import Embeddings
 from redisvl.redis.utils import hashify  # type: ignore[import]
-from redisvl.schema import FieldTypes, IndexSchema, StorageType  # type: ignore[import]
+from redisvl.schema import IndexSchema, StorageType  # type: ignore[import]
 
 from langchain_redis import RedisConfig, RedisVectorStore
 
@@ -30,31 +30,18 @@ class MockEmbeddings(Embeddings):
 
 
 class CapturingIndex:
-    """Records the schema dict and the keys passed to drop_keys."""
+    """Records the schema and the keys passed to drop_keys."""
 
-    last_schema: Optional[Dict[str, Any]] = None
+    last_schema: Optional[IndexSchema] = None
     last_instance: Optional["CapturingIndex"] = None
 
-    def __init__(self) -> None:
+    def __init__(self, schema: IndexSchema, **kwargs: Any) -> None:
+        type(self).last_schema = schema
         self.dropped_keys: List[str] = []
-        self.name = INDEX_NAME
+        self.name = schema.index.name
         self.client = object()
-
-    @classmethod
-    def from_dict(cls, schema: Dict[str, Any], **kwargs: Any) -> "CapturingIndex":
-        cls.last_schema = schema
-        instance = cls()
-        field_specs = schema.get("fields", [])
-        instance.schema = SimpleNamespace(  # type: ignore[attr-defined]
-            fields={
-                spec["name"]: SimpleNamespace(
-                    name=spec["name"], type=FieldTypes(spec["type"])
-                )
-                for spec in field_specs
-            }
-        )
-        cls.last_instance = instance
-        return instance
+        self.schema = schema
+        type(self).last_instance = self
 
     @classmethod
     def from_existing(cls, name: str, **kwargs: Any) -> "CapturingIndex":
@@ -66,7 +53,7 @@ class CapturingIndex:
 
     def key(self, id_: str) -> str:
         assert self.last_schema is not None
-        prefix = self.last_schema["index"]["prefix"]
+        prefix = self.last_schema.index.prefix
         if isinstance(prefix, list):
             prefix = prefix[0]
         return f"{prefix.rstrip(':')}:{id_}"
@@ -111,8 +98,8 @@ def test_custom_key_separator_reaches_generated_schema() -> None:
 
     assert store.config.key_separator == CUSTOM_KEY_SEPARATOR
     assert CapturingIndex.last_schema is not None
-    assert CapturingIndex.last_schema["index"]["prefix"] == PREFIX_A
-    assert CapturingIndex.last_schema["index"]["key_separator"] == CUSTOM_KEY_SEPARATOR
+    assert CapturingIndex.last_schema.index.prefix == PREFIX_A
+    assert CapturingIndex.last_schema.index.key_separator == CUSTOM_KEY_SEPARATOR
 
 
 def test_redisvl_schema_key_separator_is_authoritative() -> None:
@@ -218,7 +205,7 @@ def test_inline_schema_formats_list_prefixes(
     store = _make_store(key_prefix=PREFIXES, legacy_key_format=legacy_key_format)
 
     assert CapturingIndex.last_schema is not None
-    assert CapturingIndex.last_schema["index"]["prefix"] == expected_prefix
+    assert CapturingIndex.last_schema.index.prefix == expected_prefix
 
     with patch.object(
         store,
@@ -247,4 +234,4 @@ def test_inline_schema_forwards_stopwords() -> None:
     """The store's inline schema path forwards stopwords like to_index_schema."""
     _make_store(stopwords=[])
     assert CapturingIndex.last_schema is not None
-    assert CapturingIndex.last_schema["index"]["stopwords"] == []
+    assert CapturingIndex.last_schema.index.stopwords == []

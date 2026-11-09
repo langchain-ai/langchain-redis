@@ -175,20 +175,17 @@ class MockEmbeddings(Embeddings):
 
 
 class SchemaCapturingIndex:
-    """Records the schema dict the vector store builds for its index."""
+    """Records the schema the vector store builds for its index."""
 
-    last_schema: Optional[Dict[str, Any]] = None
+    last_schema: Optional[IndexSchema] = None
     last_instance: Optional["SchemaCapturingIndex"] = None
 
-    def __init__(self) -> None:
-        self.name = "vector_attrs_unit"
+    def __init__(self, schema: IndexSchema, **kwargs: Any) -> None:
+        type(self).last_schema = schema
+        self.schema = schema
+        self.name = schema.index.name
         self.client = object()
-
-    @classmethod
-    def from_dict(cls, schema: Dict[str, Any], **kwargs: Any) -> "SchemaCapturingIndex":
-        cls.last_schema = schema
-        cls.last_instance = cls()
-        return cls.last_instance
+        type(self).last_instance = self
 
     @classmethod
     def from_existing(cls, name: str, **kwargs: Any) -> "SchemaCapturingIndex":
@@ -211,10 +208,25 @@ def test_store_default_schema_path_merges_vector_attrs() -> None:
         )
 
     assert SchemaCapturingIndex.last_schema is not None
+    schema_dict = SchemaCapturingIndex.last_schema.to_dict()
     (vector_field,) = [
-        field
-        for field in SchemaCapturingIndex.last_schema["fields"]
-        if field["type"] == "vector"
+        field for field in schema_dict["fields"] if field["type"] == "vector"
     ]
     for name, value in HNSW_ATTRS.items():
         assert vector_field["attrs"][name] == value
+
+
+def test_store_generated_svs_schema_preserves_compression() -> None:
+    """Generated SVS schemas reach SearchIndex without a lossy dict round trip."""
+    with patch("langchain_redis.vectorstores.SearchIndex", SchemaCapturingIndex):
+        RedisVectorStore(
+            MockEmbeddings(),
+            index_name="vector_attrs_unit",
+            redis_url="redis://localhost",
+            indexing_algorithm="SVS-VAMANA",
+            vector_attrs={"compression": "LeanVec4x8", "reduce": 2},
+        )
+
+    assert SchemaCapturingIndex.last_schema is not None
+    compression = SchemaCapturingIndex.last_schema.fields["embedding"].attrs.compression
+    assert compression.value == "LeanVec4x8"
