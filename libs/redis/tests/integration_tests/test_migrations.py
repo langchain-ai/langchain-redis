@@ -105,6 +105,8 @@ def test_migration_supports_resp2(
     make_legacy_store: Callable[..., RedisVectorStore],
 ) -> None:
     store = make_legacy_store(ids=("one",))
+    # Exercise RESP2 normalization while checking another index's disjoint prefix.
+    make_legacy_store(ids=("other",))
     key = store.index.key("one")
 
     with Redis.from_url(redis_url, protocol=2) as client:
