@@ -60,13 +60,19 @@ def migrate_index_ownership(
     Use a client configured with ``protocol=2``. Explicit ``protocol=3`` clients
     are rejected before any Redis operations.
 
+    Only persistent indexes are supported. Do not use this utility on indexes
+    created with FT.CREATE TEMPORARY: dropping them during a rebuild deletes
+    their documents even without DD. FT.INFO does not expose this option, so
+    the utility cannot detect and reject these indexes automatically.
+
     Stop all application/background writers and back up the schema before applying.
     After applying, restart the writers or recreate every RedisVectorStore instance
     so no process continues writing markers using its cached legacy schema.
     Missing fields use FT.ALTER; legacy TEXT or incompatible TAG fields require
     recreating the index definition, causing query downtime during reindexing.
-    Document keys, embeddings and TTLs are retained. Supply every desired alias
-    in ``aliases`` so it can be restored after a rebuild or interrupted run.
+    For supported persistent indexes, document keys, embeddings and TTLs are
+    retained. Supply every desired alias in ``aliases`` so it can be restored
+    after a rebuild or interrupted run.
     Rebuilds require this argument explicitly; use an empty iterable when the
     index has no aliases.
     Custom FT.CREATE options and nonstandard ownership paths require manual
@@ -88,8 +94,8 @@ def migrate_index_ownership(
     marker backfills after interruption. ``completed`` reports marker writes,
     not whether Redis has finished reindexing after the writes. Backfills update
     only keys checked before the schema change; newly indexed documents are untouched.
-    Rebuild previews create and remove an empty temporary index to confirm that
-    Redis accepts the supplied schema before the live index can be replaced.
+    Rebuild previews create and remove an empty probe index (without TEMPORARY)
+    to confirm that Redis accepts the supplied schema before replacing the live index.
     """
     if batch_size <= 0:
         raise ValueError("batch_size must be greater than zero.")
@@ -217,7 +223,7 @@ def migrate_index_ownership(
     if not dry_run:
         if action == "rebuild":
             # Redis cannot change an existing field's type/options in place.
-            # drop=False retains document keys and TTLs while replacing the index.
+            # drop=False retains keys and TTLs for supported persistent indexes.
             SearchIndex(schema=target, redis_client=client).create(
                 overwrite=True, drop=False
             )

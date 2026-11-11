@@ -265,6 +265,8 @@ Use `migrate_index_ownership()` to preview and upgrade a legacy index. Supply
 the original, fully populated `RedisConfig` for a generated schema, or the
 original `IndexSchema` for a custom schema. Provide one source, not both.
 
+`TEMPORARY` indexes are unsupported: rebuilding them deletes their documents.
+
 Use a separate migration client with `protocol=2`, connected to the application's
 Redis deployment. Explicit `protocol=3` clients are rejected before any Redis
 operations because migration does not yet support their query and cursor replies.
