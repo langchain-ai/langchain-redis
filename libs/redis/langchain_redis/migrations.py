@@ -400,13 +400,12 @@ def _validate_source_schema(info: Dict[str, Any], source: IndexSchema) -> None:
         raise _schema_mismatch("Fields", live_identities, supplied_identities)
 
     nonvector = [attribute for identity, attribute in live if identity[2] != "VECTOR"]
-    live_schema = IndexSchema.from_dict(
-        convert_index_info_to_schema({**info, "attributes": nonvector})
-    )
-    live_fields = {
-        field.path or field.name: field for field in live_schema.fields.values()
-    }
-    for (identifier, alias, field_type), attribute in live:
+    definition = convert_index_info_to_schema({**info, "attributes": nonvector})
+    # Preserve distinct aliases for fields sharing the same stored value.
+    for field, attribute in zip(definition["fields"], nonvector, strict=True):
+        field["name"] = _attribute_identity(attribute)[1]
+    live_fields = IndexSchema.from_dict(definition).fields
+    for (_, alias, field_type), attribute in live:
         if field_type == "VECTOR":
             live_core = _vector_core_settings(attribute)
             source_attrs = supplied[alias][1].attrs
@@ -426,7 +425,7 @@ def _validate_source_schema(info: Dict[str, Any], source: IndexSchema) -> None:
                     expected_core,
                 )
             continue
-        live_attrs = live_fields[identifier].attrs.model_dump()
+        live_attrs = live_fields[alias].attrs.model_dump()
         expected_attrs = supplied[alias][1].attrs.model_dump()
         # Redis adds UNF automatically to SORTABLE JSON text fields.
         if source.index.storage_type == StorageType.JSON and field_type == "TEXT":

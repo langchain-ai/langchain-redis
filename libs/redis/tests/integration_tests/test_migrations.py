@@ -495,17 +495,21 @@ def test_alias_pointing_to_another_index_is_rejected(
     assert convert_bytes(client.ft(alias).info())["index_name"] == other.index.name
 
 
-def test_rebuild_preserves_hash_field_aliases(
-    client: Redis, make_legacy_store: Callable[..., RedisVectorStore]
+@pytest.mark.parametrize("storage_type", ["hash", "json"])
+def test_rebuild_preserves_field_aliases_sharing_a_path(
+    client: Redis,
+    make_legacy_store: Callable[..., RedisVectorStore],
+    storage_type: str,
 ) -> None:
-    store = make_legacy_store(marker_type="text", ids=("one",))
+    store = make_legacy_store(storage_type, marker_type="text", ids=("one",))
     name, key = store.index.name, store.index.key("one")
+    path = "$.title" if storage_type == "json" else "title"
     client.execute_command(
         "FT.ALTER",
         name,
         "SCHEMA",
         "ADD",
-        "title",
+        path,
         "AS",
         "display",
         "TEXT",
@@ -513,8 +517,17 @@ def test_rebuild_preserves_hash_field_aliases(
         2,
         "NOSTEM",
         "SORTABLE",
+        path,
+        "AS",
+        "display_exact",
+        "TAG",
+        "SEPARATOR",
+        ",",
     )
-    client.hset(key, "title", "hello")
+    if storage_type == "json":
+        client.json().set(key, path, "hello world")
+    else:
+        client.hset(key, "title", "hello world")
     source = store.config.to_index_schema().model_copy(deep=True)
     source.add_field(
         {
@@ -523,18 +536,25 @@ def test_rebuild_preserves_hash_field_aliases(
             "attrs": {"weight": 2, "no_stem": True, "sortable": True},
         }
     )
-    source.fields["display"].path = "title"
-    before = client.hgetall(key)
+    source.add_field({"name": "display_exact", "type": "tag"})
+    # Both aliases index the same value, with distinct TEXT and TAG options.
+    for alias in ("display", "display_exact"):
+        source.fields[alias].path = path
+    before = _read_record(client, store, key)
     attributes = convert_bytes(client.ft(name).info())["attributes"]
-    query = Query("@display:hello").no_content().dialect(2)
-    assert [doc.id for doc in client.ft(name).search(query).docs] == [key]
+    queries = [
+        Query(expression).no_content().dialect(2)
+        for expression in ("@display:hello", "@display_exact:{hello world}")
+    ]
+    for query in queries:
+        assert [doc.id for doc in client.ft(name).search(query).docs] == [key]
 
     preview = migrate_index_ownership(
         name, redis_client=client, source_schema=source, aliases=[]
     )
     assert preview.schema_action == "rebuild"
     assert convert_bytes(client.ft(name).info())["attributes"] == attributes
-    assert client.hgetall(key) == before
+    assert _read_record(client, store, key) == before
 
     result = migrate_index_ownership(
         name,
@@ -549,10 +569,11 @@ def test_rebuild_preserves_hash_field_aliases(
         identifier = (
             attribute["identifier"] if isinstance(attribute, dict) else attribute[1]
         )
-        if identifier != "_index_name":
+        if identifier not in ("_index_name", "$._index_name"):
             assert attribute in after_attributes
-    assert [doc.id for doc in client.ft(name).search(query).docs] == [key]
-    assert client.hgetall(key) == {**before, b"_index_name": hashify(name).encode()}
+    for query in queries:
+        assert [doc.id for doc in client.ft(name).search(query).docs] == [key]
+    assert _read_record(client, store, key) == {**before, "_index_name": hashify(name)}
 
 
 def test_generated_config_supplies_rebuild_schema(
