@@ -1,9 +1,10 @@
-from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, cast
 from uuid import uuid4
 
 import pytest
 from langchain_core.embeddings import Embeddings
 from redis import Redis
+from redis.commands.search.index_definition import IndexDefinition, IndexType
 from redis.commands.search.query import Query
 from redisvl.exceptions import RedisSearchError  # type: ignore[import]
 from redisvl.index import SearchIndex  # type: ignore[import]
@@ -282,27 +283,74 @@ def test_aliases_rejects_a_bare_string_before_mutation(
     assert client.hgetall(key) == before
 
 
+@pytest.mark.parametrize("unseen_reason", ["invalid-marker", "skipped-initial-scan"])
+def test_rebuild_does_not_claim_documents_missing_from_preflight(
+    client: Redis,
+    make_legacy_store: Callable[..., RedisVectorStore],
+    unseen_reason: str,
+) -> None:
+    store = make_legacy_store("json", marker_type="text", ids=("one",))
+    name = store.index.name
+    checked, unseen = [store.index.key(doc_id) for doc_id in ("one", "unseen")]
+    source = store.config.to_index_schema()
+    document = cast(Dict[str, Any], client.json().get(checked))
+    # TEXT rejects a boolean marker; TAG accepts it after the rebuild.
+    document["_index_name"] = (
+        True if unseen_reason == "invalid-marker" else "other_index"
+    )
+    client.json().set(unseen, "$", document)
+    if unseen_reason == "skipped-initial-scan":
+        client.ft(name).dropindex(delete_documents=False)
+        client.ft(name).create_index(
+            source.redis_fields,
+            definition=IndexDefinition(prefix=[name], index_type=IndexType.JSON),
+            skip_initial_scan=True,
+        )
+        # Only this post-creation write is picked up by the old index.
+        client.json().set(checked, "$._index_name", name)
+    query = Query("*").no_content()
+    assert [doc.id for doc in client.ft(name).search(query).docs] == [checked]
+
+    result = migrate_index_ownership(
+        name,
+        redis_client=client,
+        source_schema=source,
+        aliases=[],
+        dry_run=False,
+    )
+
+    assert (result.would_update, result.updated, result.completed) == (1, 1, True)
+    assert client.json().get(checked, "$._index_name") == [hashify(name)]
+    assert client.json().get(unseen) == document
+    wait_for_index_ready(store.index, timeout_seconds=5, poll_interval_seconds=0.05)
+    assert {doc.id for doc in client.ft(name).search(query).docs} == {checked, unseen}
+
+
+@pytest.mark.parametrize("storage_type", ["hash", "json"])
 def test_expiry_after_preflight_reports_incomplete_and_allows_retry(
     client: Redis,
     make_legacy_store: Callable[..., RedisVectorStore],
     monkeypatch: pytest.MonkeyPatch,
+    storage_type: str,
 ) -> None:
-    store = make_legacy_store()
+    store = make_legacy_store(storage_type)
     expired, remaining = [store.index.key(doc_id) for doc_id in ("one", "two")]
-    update_by_filter = SearchIndex.update_by_filter
+    apply_update_batch = SearchIndex._apply_update_batch
 
     def expire_before_update(index: SearchIndex, *args: Any, **kwargs: Any) -> Any:
         # A past timestamp expires the key immediately, without a real wait.
         client.pexpireat(expired, 1)
-        return update_by_filter(index, *args, **kwargs)
+        return apply_update_batch(index, *args, **kwargs)
 
-    monkeypatch.setattr(SearchIndex, "update_by_filter", expire_before_update)
+    monkeypatch.setattr(SearchIndex, "_apply_update_batch", expire_before_update)
     result = migrate_index_ownership(
         store.index.name, redis_client=client, dry_run=False
     )
     assert (result.would_update, result.updated, result.completed) == (2, 1, False)
     assert client.exists(expired) == 0
-    assert client.hget(remaining, "_index_name") == hashify(store.index.name).encode()
+    assert _read_record(client, store, remaining)["_index_name"] == hashify(
+        store.index.name
+    )
 
     retry = migrate_index_ownership(
         store.index.name, redis_client=client, dry_run=False

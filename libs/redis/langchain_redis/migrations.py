@@ -1,7 +1,6 @@
 """Migrate legacy RedisVectorStore ownership fields and stored markers."""
 
 from dataclasses import dataclass
-from time import sleep
 from typing import Any, Dict, Iterable, List, Literal, Optional, cast
 from uuid import uuid4
 
@@ -15,7 +14,6 @@ from redisvl.exceptions import (  # type: ignore[import]
 )
 from redisvl.index import SearchIndex  # type: ignore[import]
 from redisvl.query import CountQuery  # type: ignore[import]
-from redisvl.query.filter import Tag  # type: ignore[import]
 from redisvl.redis.connection import (  # type: ignore[import]
     convert_index_info_to_schema,
     normalize_index_definition,
@@ -87,8 +85,8 @@ def migrate_index_ownership(
 
     The operation is not transactional and has no automatic rollback. Re-run
     marker backfills after interruption. ``completed`` reports marker writes,
-    not whether Redis has finished reindexing after the writes. Schema changes
-    check indexing readiness up to 60 times, once per second, before the bulk update.
+    not whether Redis has finished reindexing after the writes. Backfills update
+    only keys checked before the schema change; newly indexed documents are untouched.
     Rebuild previews create and remove an empty temporary index to confirm that
     Redis accepts the supplied schema before the live index can be replaced.
     """
@@ -143,8 +141,8 @@ def migrate_index_ownership(
         # Use the operator's declaration directly; FT.INFO is not a schema export.
         target = _target_schema(source)
 
-    # Preflight every marker before any writes. With application writers stopped,
-    # this establishes that the bulk backfill will not claim another index's data.
+    # Validate the old index's documents and retain only approved keys for backfill.
+    # A rebuild can discover additional documents whose markers we have not checked.
     expected = cast(int, index.query(CountQuery("*")))
     keys = _index_keys(index, batch_size)
     if len(keys) != expected:
@@ -154,7 +152,7 @@ def migrate_index_ownership(
         )
     storage = schema.index.storage_type.value
     marker = hashify(index_name)
-    would_update = 0
+    keys_to_update: List[str] = []
     for offset in range(0, len(keys), batch_size):
         batch = keys[offset : offset + batch_size]
         pipe = client.pipeline(transaction=False)
@@ -163,14 +161,15 @@ def migrate_index_ownership(
                 pipe.json().get(key, "$._index_name")
             else:
                 pipe.hget(key, _FIELD)
-        for value in convert_bytes(pipe.execute()):
+        for key, value in zip(batch, convert_bytes(pipe.execute()), strict=True):
             if storage == "json":
                 # JSONPath reads wrap values in a list; missing/null both become None.
                 value = value[0] if value else None
             if value is None or value == index_name:
-                would_update += 1
+                keys_to_update.append(key)
             elif value != marker:
                 raise ValueError("A document carries another index's marker.")
+    would_update = len(keys_to_update)
 
     # Refuse aliases owned by another index, but allow interrupted runs to
     # recreate aliases that disappeared during a rebuild.
@@ -216,28 +215,13 @@ def migrate_index_ownership(
             )
         for alias in aliases:
             client.ft(index_name).aliasupdate(alias)
-        if would_update:
-            # Bulk updates select through the index, so a rebuild/ALTER must
-            # finish indexing the retained documents before selection starts.
-            for _ in range(60):
-                status = index.info()
-                if (
-                    not int(status["indexing"])
-                    and float(status["percent_indexed"]) >= 1
-                ):
-                    break
-                sleep(1)
-            else:
-                raise TimeoutError("Index is still rebuilding; retry migration later.")
-            # After preflight, non-hashed markers are legacy or missing/null.
-            # This negative filter includes missing fields without INDEXMISSING.
-            # RedisVL handles HASH/JSON partial writes and skips expired documents.
-            result = index.update_by_filter(
-                Tag(_FIELD) != marker,
+        # RedisVL's conditional writer preserves other fields/TTLs and skips
+        # expired keys. Writing known keys does not require index readiness.
+        for offset in range(0, would_update, batch_size):
+            updated += index._apply_update_batch(
+                keys_to_update[offset : offset + batch_size],
                 {_FIELD: marker},
-                batch_size=batch_size,
             )
-            updated = result.processed
 
     # Fewer writes than planned (for example, from TTL expiry) means incomplete.
     return IndexOwnershipMigrationResult(

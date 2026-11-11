@@ -422,45 +422,4 @@ def test_preflight_rejects_incomplete_cursor_before_mutation(
 
     client.pipeline.assert_not_called()
     client.ft.return_value.alter_schema_add.assert_not_called()
-    index.update_by_filter.assert_not_called()
-
-
-@pytest.mark.parametrize("becomes_ready", [True, False], ids=["ready", "timeout"])
-def test_backfill_waits_for_index_readiness(
-    monkeypatch: pytest.MonkeyPatch, becomes_ready: bool
-) -> None:
-    index = Mock()
-    index.name = INDEX_NAME
-    index.query.return_value = 1
-    index.listall.return_value = [INDEX_NAME]
-    building = {"indexing": 1, "percent_indexed": 0.5}
-    ready = {"indexing": 0, "percent_indexed": 1}
-    index.info.side_effect = [building, ready] if becomes_ready else [building] * 60
-    index.update_by_filter.return_value.processed = 1
-    client = Mock()
-    client.ft.return_value.info.return_value = {
-        "index_name": INDEX_NAME,
-        "percent_indexed": 1,
-        "index_definition": {"key_type": "HASH", "prefixes": ["migration:"]},
-        "attributes": [],
-    }
-    client.pipeline.return_value.execute.return_value = [None]
-    sleep = Mock()
-    monkeypatch.setattr(
-        "langchain_redis.migrations.SearchIndex", lambda **kwargs: index
-    )
-    monkeypatch.setattr(
-        "langchain_redis.migrations._index_keys", lambda *args: ["migration:one"]
-    )
-    monkeypatch.setattr("langchain_redis.migrations.sleep", sleep)
-
-    if becomes_ready:
-        result = migrate_index_ownership(INDEX_NAME, redis_client=client, dry_run=False)
-        assert (result.updated, result.completed) == (1, True)
-        index.update_by_filter.assert_called_once()
-        sleep.assert_called_once_with(1)
-    else:
-        with pytest.raises(TimeoutError, match="still rebuilding"):
-            migrate_index_ownership(INDEX_NAME, redis_client=client, dry_run=False)
-        index.update_by_filter.assert_not_called()
-        assert sleep.call_count == 60
+    index._apply_update_batch.assert_not_called()
