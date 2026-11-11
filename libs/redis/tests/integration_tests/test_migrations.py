@@ -283,6 +283,48 @@ def test_aliases_rejects_a_bare_string_before_mutation(
     assert client.hgetall(key) == before
 
 
+@pytest.mark.parametrize(
+    "root",
+    [
+        pytest.param(["precious", "list", 1], id="array"),
+        pytest.param("precious string", id="string"),
+        pytest.param(42, id="number"),
+        pytest.param(True, id="boolean"),
+        pytest.param(None, id="null"),
+    ],
+)
+@pytest.mark.parametrize("dry_run", [True, False], ids=["preview", "apply"])
+def test_json_nonobject_roots_are_rejected_before_mutation(
+    client: Redis,
+    make_legacy_store: Callable[..., RedisVectorStore],
+    root: Any,
+    dry_run: bool,
+) -> None:
+    store = make_legacy_store("json", marker_type="text")
+    name = store.index.name
+    keys = [store.index.key(doc_id) for doc_id in ("one", "two")]
+    client.json().set(keys[1], "$", root)
+    before = [client.json().get(key) for key in keys]
+    attributes = convert_bytes(client.ft(name).info())["attributes"]
+    assert {doc.id for doc in client.ft(name).search(Query("*").no_content()).docs} == (
+        set(keys)
+    )
+
+    with pytest.raises(ValueError):
+        migrate_index_ownership(
+            name,
+            redis_client=client,
+            source_schema=store.config.to_index_schema(),
+            aliases=[],
+            dry_run=dry_run,
+            batch_size=1,
+        )
+
+    assert convert_bytes(client.ft(name).info())["attributes"] == attributes
+    assert client.exists(*keys) == len(keys)
+    assert [client.json().get(key) for key in keys] == before
+
+
 @pytest.mark.parametrize("unseen_reason", ["invalid-marker", "skipped-initial-scan"])
 def test_rebuild_does_not_claim_documents_missing_from_preflight(
     client: Redis,

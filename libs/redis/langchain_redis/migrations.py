@@ -55,6 +55,7 @@ def migrate_index_ownership(
     dedicated document namespace: all indexed documents must belong to it.
     Missing, null and raw index-name markers are backfilled; already-hashed
     markers are left alone. Conflicting markers are refused before mutation.
+    JSON documents must have object roots.
 
     Use a client configured with ``protocol=2``. Explicit ``protocol=3`` clients
     are rejected before any Redis operations.
@@ -158,10 +159,21 @@ def migrate_index_ownership(
         pipe = client.pipeline(transaction=False)
         for key in batch:
             if storage == "json":
+                pipe.json().type(key)
                 pipe.json().get(key, "$._index_name")
             else:
                 pipe.hget(key, _FIELD)
-        for key, value in zip(batch, convert_bytes(pipe.execute()), strict=True):
+        values = convert_bytes(pipe.execute())
+        if storage == "json":
+            # JSON.MERGE would replace non-object roots. None means a missing key.
+            for key, root_type in zip(batch, values[::2], strict=True):
+                if root_type not in (None, "object"):
+                    raise ValueError(
+                        f"Cannot migrate JSON document {key!r}: "
+                        f"expected an object root, got {root_type!r}."
+                    )
+            values = values[1::2]
+        for key, value in zip(batch, values, strict=True):
             if storage == "json":
                 # JSONPath reads wrap values in a list; missing/null both become None.
                 value = value[0] if value else None
