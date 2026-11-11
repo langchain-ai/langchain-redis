@@ -182,8 +182,8 @@ def migrate_index_ownership(
         raise ValueError("aliases must be an iterable of names, not a string.")
     aliases = tuple(aliases or ())
     for alias in aliases:
-        if not alias:
-            raise ValueError("Alias names must be non-empty.")
+        if not isinstance(alias, str) or not alias:
+            raise ValueError("Alias names must be non-empty strings.")
         if alias == index_name:
             raise ValueError("An index cannot be supplied as its own alias.")
         try:

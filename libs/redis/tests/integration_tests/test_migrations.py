@@ -388,6 +388,7 @@ def test_incomplete_preflight_cursor_is_rejected_before_mutation(
         pytest.param("{name}", "cannot be supplied as its own alias", id="index-name"),
         pytest.param("{name}-current", "does not point", id="missing"),
         pytest.param("", "must be non-empty", id="empty"),
+        pytest.param(b"{name}", None, id="bytes-index-name"),
     ],
 )
 @pytest.mark.parametrize("dry_run", [True, False], ids=["preview", "apply"])
@@ -395,8 +396,8 @@ def test_rebuild_rejects_invalid_alias_before_mutation(
     client: Redis,
     make_legacy_store: Callable[..., RedisVectorStore],
     dry_run: bool,
-    alias_template: Optional[str],
-    error: str,
+    alias_template: Optional[str | bytes],
+    error: Optional[str],
 ) -> None:
     store = make_legacy_store(storage_type="json", marker_type="text", ids=("one",))
     name, key = store.index.name, store.index.key("one")
@@ -404,15 +405,20 @@ def test_rebuild_rejects_invalid_alias_before_mutation(
     client.ft(name).aliasadd(alias)
     attributes = convert_bytes(client.ft(name).info())["attributes"]
     before = client.json().get(key)
+    aliases: Optional[List[Any]] = None
+    if alias_template is not None:
+        aliases = [
+            alias_template.replace(b"{name}", name.encode())
+            if isinstance(alias_template, bytes)
+            else alias_template.format(name=name)
+        ]
 
     with pytest.raises(ValueError, match=error):
         migrate_index_ownership(
             name,
             redis_client=client,
             source_schema=store.config.to_index_schema(),
-            aliases=(
-                None if alias_template is None else [alias_template.format(name=name)]
-            ),
+            aliases=aliases,
             dry_run=dry_run,
         )
 
