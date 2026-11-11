@@ -388,6 +388,58 @@ def test_rebuild_restores_supplied_alias(
     assert convert_bytes(client.ft(alias).info())["index_name"] == store.index.name
 
 
+def test_rerun_restores_alias_missing_after_rebuild(
+    client: Redis, make_legacy_store: Callable[..., RedisVectorStore]
+) -> None:
+    store = make_legacy_store(marker_type="text")
+    name = store.index.name
+    alias = f"{name}_current"
+    client.ft(name).aliasadd(alias)
+
+    # Recreate the index without restoring its alias, matching an interruption
+    # between the migration's rebuild and alias restoration steps.
+    target = store.config.to_index_schema().model_copy(deep=True)
+    target.fields.pop("_index_name")
+    target.add_field(
+        {"name": "_index_name", "type": "tag", "attrs": {"case_sensitive": True}}
+    )
+    SearchIndex(schema=target, redis_client=client).create(overwrite=True, drop=False)
+
+    result = migrate_index_ownership(
+        name,
+        redis_client=client,
+        aliases=[alias],
+        dry_run=False,
+    )
+
+    assert (result.schema_action, result.updated, result.completed) == (
+        "none",
+        2,
+        True,
+    )
+    assert convert_bytes(client.ft(alias).info())["index_name"] == name
+
+
+def test_alias_pointing_to_another_index_is_rejected(
+    client: Redis, make_legacy_store: Callable[..., RedisVectorStore]
+) -> None:
+    store = make_legacy_store(marker_type="text", ids=("one",))
+    other = make_legacy_store(ids=("other",))
+    alias = f"{store.index.name}_current"
+    client.ft(other.index.name).aliasadd(alias)
+
+    with pytest.raises(ValueError, match="points to another index"):
+        migrate_index_ownership(
+            store.index.name,
+            redis_client=client,
+            source_schema=store.config.to_index_schema(),
+            aliases=[alias],
+            dry_run=False,
+        )
+
+    assert convert_bytes(client.ft(alias).info())["index_name"] == other.index.name
+
+
 def test_rebuild_preserves_hash_field_aliases(
     client: Redis, make_legacy_store: Callable[..., RedisVectorStore]
 ) -> None:
@@ -467,6 +519,10 @@ def test_generated_config_supplies_rebuild_schema(
         )
         client.hset(key, "_index_name", name)
 
+        mismatched = config.model_copy(update={"embedding_dimensions": DIMS * 2})
+        with pytest.raises(ValueError, match="source.*match"):
+            migrate_index_ownership(name, redis_client=client, source_config=mismatched)
+
         preview = migrate_index_ownership(
             name, redis_client=client, source_config=config
         )
@@ -527,7 +583,7 @@ def test_vector_rebuild_requires_original_schema_and_preserves_tuning(
         migrate_index_ownership(name, redis_client=client, dry_run=False)
     mismatched = source.model_copy(deep=True)
     mismatched.index.prefix = "wrong:"
-    with pytest.raises(ValueError, match="migration source must match"):
+    with pytest.raises(ValueError, match="source.*match"):
         migrate_index_ownership(
             name, redis_client=client, source_schema=mismatched, dry_run=False
         )

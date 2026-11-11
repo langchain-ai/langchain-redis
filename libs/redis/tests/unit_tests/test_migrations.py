@@ -196,7 +196,7 @@ def test_source_schema_must_match_reliable_live_definition(mismatch: str) -> Non
         _validate_source_schema(info, source)
 
 
-def test_source_vector_settings_and_tuning_remain_authoritative() -> None:
+def _vector_source() -> IndexSchema:
     source = _schema({"name": "_index_name", "type": "text"})
     source.add_field(
         {
@@ -212,22 +212,55 @@ def test_source_vector_settings_and_tuning_remain_authoritative() -> None:
             },
         }
     )
+    return source
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        pytest.param("ALGORITHM", "FLAT", id="algorithm"),
+        pytest.param("DATA_TYPE", "FLOAT64", id="datatype"),
+        pytest.param("DIM", 8, id="dimensions"),
+        pytest.param("DISTANCE_METRIC", "L2", id="distance-metric"),
+    ],
+)
+def test_source_vector_core_settings_must_match_live_definition(
+    option: str, value: Any
+) -> None:
+    live_options = {
+        "ALGORITHM": "HNSW",
+        "DATA_TYPE": "FLOAT32",
+        "DIM": 4,
+        "DISTANCE_METRIC": "COSINE",
+    }
+    live_options[option] = value
+    live_vector = _attribute(
+        "embedding",
+        "VECTOR",
+        *(item for pair in live_options.items() for item in pair),
+    )
+
+    with pytest.raises(ValueError, match="Migration source does not match"):
+        _validate_source_schema(_info(live_vector), _vector_source())
+
+
+def test_source_vector_tuning_remains_authoritative() -> None:
     live_vector = _attribute(
         "embedding",
         "VECTOR",
         "ALGORITHM",
-        "FLAT",
+        "HNSW",
         "DATA_TYPE",
-        "FLOAT64",
+        "FLOAT32",
         "DIM",
-        8,
+        4,
         "DISTANCE_METRIC",
-        "L2",
+        "COSINE",
         "EF_RUNTIME",
         10,
     )
 
-    _validate_source_schema(_info(live_vector), source)
+    _validate_source_schema(_info(live_vector), _vector_source())
 
 
 @pytest.mark.parametrize(

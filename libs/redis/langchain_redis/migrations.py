@@ -7,12 +7,17 @@ from typing import Any, Dict, Iterable, List, Literal, Optional, cast
 import redis.exceptions
 from redis import Redis
 from redis.commands.search.aggregation import AggregateRequest, Cursor
+from redisvl.exceptions import (  # type: ignore[import]
+    RedisSearchError,
+    _is_missing_index_error,
+)
 from redisvl.index import SearchIndex  # type: ignore[import]
 from redisvl.query import CountQuery  # type: ignore[import]
 from redisvl.query.filter import Tag  # type: ignore[import]
 from redisvl.redis.connection import (  # type: ignore[import]
     convert_index_info_to_schema,
     normalize_index_definition,
+    normalize_index_fields,
 )
 from redisvl.redis.utils import convert_bytes, hashify  # type: ignore[import]
 from redisvl.schema import FieldTypes, IndexSchema, StorageType  # type: ignore[import]
@@ -56,18 +61,19 @@ def migrate_index_ownership(
     so no process continues writing markers using its cached legacy schema.
     Missing fields use FT.ALTER; legacy TEXT or incompatible TAG fields require
     recreating the index definition, causing query downtime during reindexing.
-    Document keys, embeddings and TTLs are retained. Supply every existing alias
-    in ``aliases`` so it can be restored after a rebuild. Custom FT.CREATE options
-    and nonstandard ownership paths require manual migration. Indexes with
-    overlapping prefixes of the same storage type are refused.
+    Document keys, embeddings and TTLs are retained. Supply every desired alias
+    in ``aliases`` so it can be restored after a rebuild or interrupted run.
+    Custom FT.CREATE options and nonstandard ownership paths require manual
+    migration. Indexes with overlapping prefixes of the same storage type are
+    refused.
 
     Every rebuild requires either the complete deployment ``source_schema`` or the
     original ``source_config`` used for a generated schema. It is authoritative:
     only its ownership field is replaced. The index name, storage type, prefixes,
-    fields and explicit stopwords are checked against the live index before mutation.
-    Vector settings and tuning are not inferred or compared with FT.INFO; they
-    remain authoritative from the supplied source. Rebuilding an index with
-    INDEXALL enabled requires manual migration.
+    fields, explicit stopwords and reported core vector settings are checked against
+    the live index before mutation. Vector tuning is not inferred or compared with
+    FT.INFO; it remains authoritative from the supplied source. Rebuilding an index
+    with INDEXALL enabled requires manual migration.
 
     The operation is not transactional and has no automatic rollback. Re-run
     marker backfills after interruption. ``completed`` reports marker writes,
@@ -149,13 +155,20 @@ def migrate_index_ownership(
             elif value != marker:
                 raise ValueError("A document carries another index's marker.")
 
-    # Validate supplied index aliases before a rebuild can remove their bindings.
+    # Refuse aliases owned by another index, but allow interrupted runs to
+    # recreate aliases that disappeared during a rebuild.
     aliases = tuple(aliases)
     for alias in aliases:
         if alias == index_name:
             raise ValueError("An index cannot be supplied as its own alias.")
-        if convert_bytes(client.ft(alias).info())["index_name"] != index_name:
-            raise ValueError(f"Alias {alias!r} does not point to {index_name!r}.")
+        try:
+            alias_index = index.info(alias)["index_name"]
+        except RedisSearchError as exc:
+            if not _is_missing_index_error(exc):
+                raise
+        else:
+            if alias_index != index_name:
+                raise ValueError(f"Alias {alias!r} points to another index.")
 
     updated = 0
     if not dry_run:
@@ -165,12 +178,12 @@ def migrate_index_ownership(
             SearchIndex(schema=target, redis_client=client).create(
                 overwrite=True, drop=False
             )
-            for alias in aliases:
-                client.ft(index_name).aliasupdate(alias)
         elif action == "alter":
             client.ft(index_name).alter_schema_add(
                 target.fields[_FIELD].as_redis_field()
             )
+        for alias in aliases:
+            client.ft(index_name).aliasupdate(alias)
         if would_update:
             # Bulk updates select through the index, so a rebuild/ALTER must
             # finish indexing the retained documents before selection starts.
@@ -287,11 +300,7 @@ def _assert_no_overlapping_prefixes(index: SearchIndex) -> None:
 
 def _attribute_identity(attribute: Any) -> tuple[str, str, str]:
     """Read identifier, alias and type directly from a raw FT.INFO attribute."""
-    metadata = (
-        attribute
-        if isinstance(attribute, dict)
-        else dict(zip(attribute[:6:2], attribute[1:6:2]))
-    )
+    metadata = _attribute_metadata(attribute)
     return (
         str(metadata["identifier"]),
         str(metadata["attribute"]),
@@ -305,8 +314,38 @@ def _schema_field_identity(field: Any) -> tuple[str, str, str]:
     return field.path or field.name, field.name, str(field_type).upper()
 
 
+def _attribute_metadata(attribute: Any) -> Dict[str, Any]:
+    """Normalize RESP2/RESP3 FT.INFO field metadata and key casing."""
+    normalized = normalize_index_fields({"attributes": [attribute]})[0]
+    return {str(key).lower(): value for key, value in normalized.items()}
+
+
+def _vector_core_settings(attribute: Any) -> Dict[str, Any]:
+    """Return only the core vector settings that FT.INFO explicitly reports."""
+    metadata = _attribute_metadata(attribute)
+    aliases = {
+        "algorithm": "algorithm",
+        "data_type": "datatype",
+        "datatype": "datatype",
+        "dim": "dims",
+        "dims": "dims",
+        "distance_metric": "distance_metric",
+    }
+    settings = {}
+    for live_name, source_name in aliases.items():
+        if live_name not in metadata:
+            continue
+        value = metadata[live_name]
+        settings[source_name] = (
+            int(value)
+            if source_name == "dims"
+            else str(getattr(value, "value", value)).upper()
+        )
+    return settings
+
+
 def _validate_source_schema(info: Dict[str, Any], source: IndexSchema) -> None:
-    """Compare reliable structural metadata without comparing vector settings."""
+    """Compare reliable structural metadata and reported core vector settings."""
     live_stopwords = info.get("stopwords_list")
     source_stopwords = source.index.stopwords
     if ("stopwords_list" in info) != (source_stopwords is not None) or (
@@ -337,10 +376,21 @@ def _validate_source_schema(info: Dict[str, Any], source: IndexSchema) -> None:
     live_fields = {
         field.path or field.name: field for field in live_schema.fields.values()
     }
-    for (identifier, alias, field_type), _ in live:
+    for (identifier, alias, field_type), attribute in live:
         if field_type == "VECTOR":
-            # FT.INFO is not a lossless vector schema export. The supplied source
-            # remains authoritative for both core settings and tuning.
+            live_core = _vector_core_settings(attribute)
+            source_attrs = supplied[alias][1].attrs
+            expected_core = {
+                name: (
+                    int(value)
+                    if name == "dims"
+                    else str(getattr(value, "value", value)).upper()
+                )
+                for name in live_core
+                if (value := getattr(source_attrs, name, None)) is not None
+            }
+            if live_core != expected_core:
+                raise ValueError(_SCHEMA_MISMATCH)
             continue
         live_attrs = live_fields[identifier].attrs.model_dump()
         expected_attrs = supplied[alias][1].attrs.model_dump()
