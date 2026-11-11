@@ -5,6 +5,7 @@ import pytest
 from langchain_core.embeddings import Embeddings
 from redis import Redis
 from redis.commands.search.query import Query
+from redisvl.exceptions import RedisSearchError  # type: ignore[import]
 from redisvl.index import SearchIndex  # type: ignore[import]
 from redisvl.migration.utils import wait_for_index_ready  # type: ignore[import]
 from redisvl.redis.utils import convert_bytes, hashify  # type: ignore[import]
@@ -352,9 +353,7 @@ def test_incomplete_preflight_cursor_is_rejected_before_mutation(
 @pytest.mark.parametrize(
     ("alias_template", "error"),
     [
-        pytest.param(
-            "{name}", "cannot be supplied as its own alias", id="index-name"
-        ),
+        pytest.param("{name}", "cannot be supplied as its own alias", id="index-name"),
         pytest.param("{name}-current", "does not point", id="missing"),
         pytest.param("", "must be non-empty", id="empty"),
     ],
@@ -628,11 +627,47 @@ def test_vector_rebuild_requires_original_schema_and_preserves_tuning(
         name, redis_client=client, source_schema=source, dry_run=False
     )
     assert (result.updated, result.completed) == (1, True)
-    assert len(creates) == 1
-    for option, expected in tuning.items():
-        assert creates[0][creates[0].index(option.upper()) + 1] == expected
+    assert len(creates) == 2
+    for create in creates:
+        for option, expected in tuning.items():
+            assert create[create.index(option.upper()) + 1] == expected
     assert source.to_dict() == source_before
     assert _read_record(client, store, key) == {**before, "_index_name": hashify(name)}
+
+
+@pytest.mark.parametrize("dry_run", [True, False], ids=["preview", "apply"])
+def test_invalid_rebuild_schema_does_not_drop_live_index(
+    client: Redis,
+    make_legacy_store: Callable[..., RedisVectorStore],
+    dry_run: bool,
+) -> None:
+    store = make_legacy_store(
+        marker_type="text",
+        ids=("one",),
+        vector_attrs={"algorithm": "hnsw"},
+    )
+    name, key = store.index.name, store.index.key("one")
+    alias = f"{name}_current"
+    client.ft(name).aliasadd(alias)
+    source = store.config.to_index_schema().model_copy(deep=True)
+    source.fields["embedding"].attrs.m = 0
+    attributes = convert_bytes(client.ft(name).info())["attributes"]
+    before = _read_record(client, store, key)
+    indexes = set(convert_bytes(client.execute_command("FT._LIST")))
+
+    with pytest.raises(RedisSearchError, match="M.*outside acceptable bounds"):
+        migrate_index_ownership(
+            name,
+            redis_client=client,
+            source_schema=source,
+            aliases=[alias],
+            dry_run=dry_run,
+        )
+
+    assert set(convert_bytes(client.execute_command("FT._LIST"))) == indexes
+    assert convert_bytes(client.ft(name).info())["attributes"] == attributes
+    assert convert_bytes(client.ft(alias).info())["index_name"] == name
+    assert _read_record(client, store, key) == before
 
 
 @pytest.mark.parametrize("dry_run", [True, False], ids=["preview", "apply"])

@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from time import sleep
 from typing import Any, Dict, Iterable, List, Literal, Optional, cast
+from uuid import uuid4
 
 import redis.exceptions
 from redis import Redis
@@ -79,6 +80,8 @@ def migrate_index_ownership(
     marker backfills after interruption. ``completed`` reports marker writes,
     not whether Redis has finished reindexing after the writes. Schema changes
     check indexing readiness up to 60 times, once per second, before the bulk update.
+    Rebuild previews create and remove an empty temporary index to confirm that
+    Redis accepts the supplied schema before the live index can be replaced.
     """
     if batch_size <= 0:
         raise ValueError("batch_size must be greater than zero.")
@@ -175,6 +178,9 @@ def migrate_index_ownership(
         else:
             if alias_index != index_name:
                 raise ValueError(f"Alias {alias!r} points to another index.")
+
+    if action == "rebuild":
+        _validate_rebuild_target(target, client)
 
     updated = 0
     if not dry_run:
@@ -431,6 +437,20 @@ def _target_schema(source: IndexSchema) -> IndexSchema:
     target.fields.pop(_FIELD, None)
     target.add_field({"name": _FIELD, "type": "tag", "attrs": {"case_sensitive": True}})
     return target
+
+
+def _validate_rebuild_target(target: IndexSchema, client: Any) -> None:
+    """Confirm Redis accepts a replacement schema before dropping the live index."""
+    probe_schema = target.model_copy(deep=True)
+    probe_name = f"__ownership_migration_probe_{uuid4().hex}"
+    probe_schema.index.name = probe_name
+    probe_schema.index.prefix = f"{probe_name}:"
+    probe = SearchIndex(schema=probe_schema, redis_client=client)
+    try:
+        probe.create()
+    finally:
+        if probe.exists():
+            probe.delete(drop=False)
 
 
 def _index_keys(index: SearchIndex, batch_size: int) -> List[str]:
