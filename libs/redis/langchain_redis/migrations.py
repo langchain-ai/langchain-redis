@@ -166,6 +166,10 @@ def migrate_index_ownership(
         except RedisSearchError as exc:
             if not _is_missing_index_error(exc):
                 raise
+            if action != "none":
+                raise ValueError(
+                    f"Alias {alias!r} does not point to {index_name!r}."
+                ) from exc
         else:
             if alias_index != index_name:
                 raise ValueError(f"Alias {alias!r} points to another index.")
