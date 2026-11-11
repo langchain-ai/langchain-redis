@@ -69,6 +69,9 @@ def migrate_index_ownership(
     Custom FT.CREATE options and nonstandard ownership paths require manual
     migration. Indexes with overlapping prefixes of the same storage type cannot
     be migrated automatically; recreate them with disjoint prefixes instead.
+    For both previews and applied migrations, credentials must permit FT._LIST
+    and FT.INFO on every index, including those outside the target key prefix,
+    so overlap checks can inspect all index definitions.
 
     Every rebuild requires either the complete deployment ``source_schema`` or the
     original ``source_config`` used for a generated schema. It is authoritative:
@@ -452,7 +455,10 @@ def _validate_rebuild_target(target: IndexSchema, client: Any) -> None:
     probe_schema = target.model_copy(deep=True)
     probe_name = f"__ownership_migration_probe_{uuid4().hex}"
     probe_schema.index.name = probe_name
-    probe_schema.index.prefix = f"{probe_name}:"
+    live_prefix = target.index.prefix
+    if not isinstance(live_prefix, str):
+        live_prefix = live_prefix[0]
+    probe_schema.index.prefix = f"{live_prefix}{probe_name}:"
     probe = SearchIndex(schema=probe_schema, redis_client=client)
     try:
         probe.create()

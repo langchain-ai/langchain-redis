@@ -717,6 +717,52 @@ def test_invalid_rebuild_schema_does_not_drop_live_index(
 
 
 @pytest.mark.parametrize("dry_run", [True, False], ids=["preview", "apply"])
+def test_rebuild_probe_uses_live_prefix_with_key_scoped_acl(
+    redis_url: str,
+    client: Redis,
+    make_legacy_store: Callable[..., RedisVectorStore],
+    dry_run: bool,
+) -> None:
+    store = make_legacy_store(marker_type="text", ids=("one",))
+    source = store.config.to_index_schema()
+    live_prefix = source.index.prefix
+    if not isinstance(live_prefix, str):
+        live_prefix = live_prefix[0]
+    username = f"migration_{uuid4().hex[:8]}"
+    password = uuid4().hex
+    indexes = set(convert_bytes(client.execute_command("FT._LIST")))
+    client.execute_command(
+        "ACL",
+        "SETUSER",
+        username,
+        "reset",
+        "on",
+        f">{password}",
+        f"~{live_prefix}*",
+        "+@all",
+    )
+    try:
+        with Redis.from_url(
+            redis_url,
+            username=username,
+            password=password,
+            decode_responses=False,
+        ) as restricted_client:
+            result = migrate_index_ownership(
+                store.index.name,
+                redis_client=restricted_client,
+                source_schema=source,
+                aliases=[],
+                dry_run=dry_run,
+            )
+    finally:
+        client.execute_command("ACL", "DELUSER", username)
+
+    assert (result.schema_action, result.completed) == ("rebuild", True)
+    assert set(convert_bytes(client.execute_command("FT._LIST"))) == indexes
+
+
+@pytest.mark.parametrize("dry_run", [True, False], ids=["preview", "apply"])
 def test_indexall_rebuild_is_rejected_before_mutation(
     client: Redis, dry_run: bool
 ) -> None:
