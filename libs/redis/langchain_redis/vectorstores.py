@@ -2098,9 +2098,13 @@ class RedisVectorStore(VectorStore):
                     with_scores=True,
                 )
             else:
-                # Fetch full JSON data for each document
+                # Fetch full JSON data for each document. JSON.MGET takes one
+                # or more keys, so a search that matched nothing must not reach
+                # it; similarity_search_by_vector guards the same fetch.
                 doc_ids = [doc["id"] for doc in results]
-                full_docs = self._index.client.json().mget(doc_ids, ".")
+                full_docs = (
+                    self._index.client.json().mget(doc_ids, ".") if doc_ids else []
+                )
 
                 docs_with_scores = self._prepare_docs_full(
                     return_all,

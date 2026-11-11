@@ -255,6 +255,22 @@ class TestRedisVectorStore:
         assert isinstance(results[0][0], Document)
         assert isinstance(results[0][1], float)
 
+    def test_similarity_search_with_score_return_all_json_no_matches(
+        self, vector_store: RedisVectorStore
+    ) -> None:
+        """JSON.MGET takes one or more keys, so no matches must mean no fetch."""
+        vector_store.config.storage_type = "json"
+        client = Mock()
+        client.json.return_value.mget.return_value = []
+
+        with patch.object(vector_store._index, "client", client):
+            results = vector_store.similarity_search_with_score(
+                "Hello", return_all=True
+            )
+
+        assert results == []
+        client.json().mget.assert_not_called()
+
     @staticmethod
     def _use_metric(metric: VectorDistanceMetric, field: str = "embedding") -> None:
         index = MockSearchIndex.last_instance
