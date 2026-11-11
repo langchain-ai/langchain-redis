@@ -2,6 +2,7 @@ from typing import Any, Dict, List, Optional
 from unittest.mock import Mock
 
 import pytest
+from redis import Redis
 from redisvl.schema import IndexSchema  # type: ignore[import]
 
 from langchain_redis import RedisConfig
@@ -382,6 +383,17 @@ def test_resp2_index_definition_is_normalized(
     )
 
     assert result.schema_action == "rebuild"
+
+
+@pytest.mark.parametrize("dry_run", [True, False], ids=["preview", "apply"])
+def test_resp3_is_rejected_before_redis_operations(dry_run: bool) -> None:
+    client = Mock(spec=Redis)
+    client.connection_pool = Mock(connection_kwargs={"protocol": 3})
+
+    with pytest.raises(ValueError):
+        migrate_index_ownership(INDEX_NAME, redis_client=client, dry_run=dry_run)
+
+    assert client.method_calls == []
 
 
 def test_preflight_rejects_incomplete_cursor_before_mutation(

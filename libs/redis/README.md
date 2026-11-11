@@ -265,8 +265,16 @@ Use `migrate_index_ownership()` to preview and upgrade a legacy index. Supply
 the original, fully populated `RedisConfig` for a generated schema, or the
 original `IndexSchema` for a custom schema. Provide one source, not both.
 
+Use a separate migration client with `protocol=2`, connected to the application's
+Redis deployment. Explicit `protocol=3` clients are rejected before any Redis
+operations because migration does not yet support their query and cursor replies.
+
 ```python
+from redis import Redis
+
 from langchain_redis import migrate_index_ownership
+
+migration_client = Redis.from_url(redis_url, protocol=2)
 
 # Use the same definition that originally created the index.
 migration_source = {"source_config": original_config}
@@ -276,7 +284,7 @@ migration_source = {"source_config": original_config}
 aliases = ["products-search"]  # Use [] when the index has no aliases.
 preview = migrate_index_ownership(
     "products",
-    redis_client=client,
+    redis_client=migration_client,
     aliases=aliases,
     **migration_source,
 )
@@ -285,7 +293,7 @@ print(preview.schema_action, preview.would_update)
 # Stop all writers and back up the index before applying.
 result = migrate_index_ownership(
     "products",
-    redis_client=client,
+    redis_client=migration_client,
     aliases=aliases,
     dry_run=False,
     **migration_source,

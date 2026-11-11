@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import redis.exceptions
 from redis import Redis
+from redis.commands.helpers import get_protocol_version
 from redis.commands.search.aggregation import AggregateRequest, Cursor
 from redisvl.exceptions import (  # type: ignore[import]
     RedisSearchError,
@@ -57,6 +58,9 @@ def migrate_index_ownership(
     Missing, null and raw index-name markers are backfilled; already-hashed
     markers are left alone. Conflicting markers are refused before mutation.
 
+    Use a client configured with ``protocol=2``. Explicit ``protocol=3`` clients
+    are rejected before any Redis operations.
+
     Stop all application/background writers and back up the schema before applying.
     After applying, restart the writers or recreate every RedisVectorStore instance
     so no process continues writing markers using its cached legacy schema.
@@ -90,6 +94,11 @@ def migrate_index_ownership(
     """
     if batch_size <= 0:
         raise ValueError("batch_size must be greater than zero.")
+    if get_protocol_version(redis_client) in (3, "3"):
+        raise ValueError(
+            "Explicit RESP3 clients are not yet supported for migration. "
+            "Use a separate Redis client configured with protocol=2."
+        )
 
     # Inspect the live definition before planning either schema or data changes.
     client = cast(Any, redis_client)
