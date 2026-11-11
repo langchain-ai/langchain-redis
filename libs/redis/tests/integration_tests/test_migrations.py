@@ -739,17 +739,31 @@ def test_rebuild_preserves_field_aliases_sharing_a_path(
 
 
 @pytest.mark.parametrize("storage_type", ["hash", "json"])
-@pytest.mark.parametrize("index_missing", [False, True])
+@pytest.mark.parametrize(
+    ("marker_type", "index_missing", "supplied_index_missing", "refused"),
+    [
+        ("text", False, True, True),
+        ("text", True, False, True),
+        ("text", True, True, True),
+        (None, True, True, False),
+        ("tag", True, True, False),
+    ],
+)
 @pytest.mark.parametrize("dry_run", [True, False], ids=["preview", "apply"])
-def test_vector_indexmissing_mismatch_is_rejected_before_mutation(
+def test_vector_indexmissing_migration_paths(
     client: Redis,
     make_legacy_store: Callable[..., RedisVectorStore],
     storage_type: str,
+    marker_type: Optional[str],
     index_missing: bool,
+    supplied_index_missing: bool,
+    refused: bool,
     dry_run: bool,
 ) -> None:
-    store = make_legacy_store(storage_type, marker_type="text", ids=("one",))
+    store = make_legacy_store(storage_type, marker_type=marker_type, ids=("one",))
     source = store.config.to_index_schema().model_copy(deep=True)
+    if marker_type == "tag":
+        source.fields["_index_name"].attrs.case_sensitive = True
     if index_missing:
         # RedisVL currently serializes this vector flag as a parameter; use
         # redis-py to create the live index with the proper field-level flag.
@@ -763,13 +777,19 @@ def test_vector_indexmissing_mismatch_is_rejected_before_mutation(
             ),
         )
         wait_for_index_ready(store.index, timeout_seconds=5, poll_interval_seconds=0.05)
-    source.fields["embedding"].attrs.index_missing = not index_missing
+    source.fields["embedding"].attrs.index_missing = supplied_index_missing
     key = store.index.key("one")
+    if marker_type == "tag":
+        # Exercise a marker-only backfill rather than an already-migrated no-op.
+        if storage_type == "json":
+            client.json().set(key, "$._index_name", store.index.name)
+        else:
+            client.hset(key, "_index_name", store.index.name)
     before = _read_record(client, store, key)
     attributes = convert_bytes(client.ft(store.index.name).info())["attributes"]
 
-    with pytest.raises(ValueError):
-        migrate_index_ownership(
+    def migrate() -> Any:
+        return migrate_index_ownership(
             store.index.name,
             redis_client=client,
             source_schema=source,
@@ -777,8 +797,21 @@ def test_vector_indexmissing_mismatch_is_rejected_before_mutation(
             dry_run=dry_run,
         )
 
-    assert convert_bytes(client.ft(store.index.name).info())["attributes"] == attributes
-    assert _read_record(client, store, key) == before
+    if refused:
+        with pytest.raises(ValueError):
+            migrate()
+        assert (
+            convert_bytes(client.ft(store.index.name).info())["attributes"]
+            == attributes
+        )
+        assert _read_record(client, store, key) == before
+    else:
+        result = migrate()
+        assert result.schema_action == ("alter" if marker_type is None else "none")
+        assert (result.updated, result.completed) == (0 if dry_run else 1, True)
+        assert _read_record(client, store, key) == (
+            before if dry_run else {**before, "_index_name": hashify(store.index.name)}
+        )
 
 
 @pytest.mark.parametrize("storage_type", ["hash", "json"])

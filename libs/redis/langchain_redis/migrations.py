@@ -91,6 +91,8 @@ def migrate_index_ownership(
     from the supplied source without comparison, even when FT.INFO reports it.
     The source must also preserve phonetic matching, which FT.INFO does not expose.
     Rebuilding an index with INDEXALL enabled requires manual migration.
+    Vector fields with INDEXMISSING also require manual index recreation when
+    rebuilding, because the current RedisVL serializer cannot encode that flag.
 
     The operation is not transactional and has no automatic rollback. Re-run
     marker backfills after interruption. ``completed`` reports marker writes,
@@ -147,6 +149,14 @@ def migrate_index_ownership(
             "storage type and prefixes."
         )
     _validate_source_schema(info, source)
+    if action == "rebuild" and any(
+        field.type == FieldTypes.VECTOR and field.attrs.index_missing
+        for field in source.fields.values()
+    ):
+        raise ValueError(
+            "Rebuilding vector fields with INDEXMISSING is unsupported by "
+            "the current RedisVL serializer. Use manual index recreation."
+        )
     # Use the operator's declaration directly; FT.INFO is not a schema export.
     target = _target_schema(source)
 
@@ -496,11 +506,8 @@ def _validate_rebuild_target(target: IndexSchema, client: Any) -> None:
         live_prefix = live_prefix[0]
     probe_schema.index.prefix = f"{live_prefix}{probe_name}:"
     probe = SearchIndex(schema=probe_schema, redis_client=client)
-    try:
-        probe.create()
-    finally:
-        if probe.exists():
-            probe.delete(drop=False)
+    probe.create()
+    client.ft(probe_name).dropindex(delete_documents=False)
 
 
 def _index_keys(index: SearchIndex, batch_size: int) -> List[str]:
