@@ -159,6 +159,8 @@ def migrate_index_ownership(
     # recreate aliases that disappeared during a rebuild.
     aliases = tuple(aliases)
     for alias in aliases:
+        if not alias:
+            raise ValueError("Alias names must be non-empty.")
         if alias == index_name:
             raise ValueError("An index cannot be supplied as its own alias.")
         try:

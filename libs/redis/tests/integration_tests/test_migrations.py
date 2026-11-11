@@ -355,6 +355,7 @@ def test_incomplete_preflight_cursor_is_rejected_before_mutation(
             "{name}", "cannot be supplied as its own alias", id="index-name"
         ),
         pytest.param("{name}-current", "does not point", id="missing"),
+        pytest.param("", "must be non-empty", id="empty"),
     ],
 )
 @pytest.mark.parametrize("dry_run", [True, False], ids=["preview", "apply"])
