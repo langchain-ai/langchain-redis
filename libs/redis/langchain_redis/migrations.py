@@ -64,8 +64,8 @@ def migrate_index_ownership(
     Document keys, embeddings and TTLs are retained. Supply every desired alias
     in ``aliases`` so it can be restored after a rebuild or interrupted run.
     Custom FT.CREATE options and nonstandard ownership paths require manual
-    migration. Indexes with overlapping prefixes of the same storage type are
-    refused.
+    migration. Indexes with overlapping prefixes of the same storage type cannot
+    be migrated automatically; recreate them with disjoint prefixes instead.
 
     Every rebuild requires either the complete deployment ``source_schema`` or the
     original ``source_config`` used for a generated schema. It is authoritative:
