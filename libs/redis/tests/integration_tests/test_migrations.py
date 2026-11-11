@@ -195,7 +195,7 @@ def test_migration_preserves_documents_and_is_rerunnable(
     source = store.config.to_index_schema()
 
     preview = migrate_index_ownership(
-        store.index.name, redis_client=client, source_schema=source
+        store.index.name, redis_client=client, source_schema=source, aliases=[]
     )
     assert preview.dry_run
     assert (preview.schema_action, preview.would_update, preview.updated) == (
@@ -215,6 +215,7 @@ def test_migration_preserves_documents_and_is_rerunnable(
         store.index.name,
         redis_client=client,
         source_schema=source,
+        aliases=[],
         dry_run=False,
         batch_size=1,
     )
@@ -318,11 +319,15 @@ def test_json_backfill_handles_null_and_skips_already_migrated_documents(
 
     source = store.config.to_index_schema()
     preview = migrate_index_ownership(
-        store.index.name, redis_client=client, source_schema=source
+        store.index.name, redis_client=client, source_schema=source, aliases=[]
     )
     assert preview.would_update == 1
     result = migrate_index_ownership(
-        store.index.name, redis_client=client, source_schema=source, dry_run=False
+        store.index.name,
+        redis_client=client,
+        source_schema=source,
+        aliases=[],
+        dry_run=False,
     )
     assert (result.updated, result.completed) == (1, True)
     assert client.json().get(null_key, "$._index_name") == [marker]
@@ -377,6 +382,7 @@ def test_incomplete_preflight_cursor_is_rejected_before_mutation(
 @pytest.mark.parametrize(
     ("alias_template", "error"),
     [
+        pytest.param(None, "require aliases explicitly", id="omitted"),
         pytest.param("{name}", "cannot be supplied as its own alias", id="index-name"),
         pytest.param("{name}-current", "does not point", id="missing"),
         pytest.param("", "must be non-empty", id="empty"),
@@ -387,7 +393,7 @@ def test_rebuild_rejects_invalid_alias_before_mutation(
     client: Redis,
     make_legacy_store: Callable[..., RedisVectorStore],
     dry_run: bool,
-    alias_template: str,
+    alias_template: Optional[str],
     error: str,
 ) -> None:
     store = make_legacy_store(storage_type="json", marker_type="text", ids=("one",))
@@ -402,7 +408,9 @@ def test_rebuild_rejects_invalid_alias_before_mutation(
             name,
             redis_client=client,
             source_schema=store.config.to_index_schema(),
-            aliases=[alias_template.format(name=name)],
+            aliases=(
+                None if alias_template is None else [alias_template.format(name=name)]
+            ),
             dry_run=dry_run,
         )
 
@@ -521,13 +529,19 @@ def test_rebuild_preserves_hash_field_aliases(
     query = Query("@display:hello").no_content().dialect(2)
     assert [doc.id for doc in client.ft(name).search(query).docs] == [key]
 
-    preview = migrate_index_ownership(name, redis_client=client, source_schema=source)
+    preview = migrate_index_ownership(
+        name, redis_client=client, source_schema=source, aliases=[]
+    )
     assert preview.schema_action == "rebuild"
     assert convert_bytes(client.ft(name).info())["attributes"] == attributes
     assert client.hgetall(key) == before
 
     result = migrate_index_ownership(
-        name, redis_client=client, source_schema=source, dry_run=False
+        name,
+        redis_client=client,
+        source_schema=source,
+        aliases=[],
+        dry_run=False,
     )
     assert (result.updated, result.completed) == (1, True)
     after_attributes = convert_bytes(client.ft(name).info())["attributes"]
@@ -571,10 +585,14 @@ def test_generated_config_supplies_rebuild_schema(
             migrate_index_ownership(name, redis_client=client, source_config=mismatched)
 
         preview = migrate_index_ownership(
-            name, redis_client=client, source_config=config
+            name, redis_client=client, source_config=config, aliases=[]
         )
         result = migrate_index_ownership(
-            name, redis_client=client, source_config=config, dry_run=False
+            name,
+            redis_client=client,
+            source_config=config,
+            aliases=[],
+            dry_run=False,
         )
 
         assert (preview.schema_action, preview.would_update) == ("rebuild", 1)
@@ -648,7 +666,11 @@ def test_vector_rebuild_requires_original_schema_and_preserves_tuning(
 
     monkeypatch.setattr(client, "execute_command", capture_create)
     result = migrate_index_ownership(
-        name, redis_client=client, source_schema=source, dry_run=False
+        name,
+        redis_client=client,
+        source_schema=source,
+        aliases=[],
+        dry_run=False,
     )
     assert (result.updated, result.completed) == (1, True)
     assert len(creates) == 2

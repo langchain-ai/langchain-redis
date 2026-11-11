@@ -320,6 +320,7 @@ def test_resp2_index_definition_is_normalized(
         INDEX_NAME,
         redis_client=client,
         source_schema=_schema({"name": "_index_name", "type": "text"}),
+        aliases=[],
     )
 
     assert result.schema_action == "rebuild"

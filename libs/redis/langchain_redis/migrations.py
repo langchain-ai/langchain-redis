@@ -47,7 +47,7 @@ def migrate_index_ownership(
     source_schema: Optional[IndexSchema] = None,
     source_config: Optional[RedisConfig] = None,
     dry_run: bool = True,
-    aliases: Iterable[str] = (),
+    aliases: Optional[Iterable[str]] = None,
     batch_size: int = 500,
 ) -> IndexOwnershipMigrationResult:
     """Upgrade a legacy index and backfill its hashed ownership marker.
@@ -64,6 +64,8 @@ def migrate_index_ownership(
     recreating the index definition, causing query downtime during reindexing.
     Document keys, embeddings and TTLs are retained. Supply every desired alias
     in ``aliases`` so it can be restored after a rebuild or interrupted run.
+    Rebuilds require this argument explicitly; use an empty iterable when the
+    index has no aliases.
     Custom FT.CREATE options and nonstandard ownership paths require manual
     migration. Indexes with overlapping prefixes of the same storage type cannot
     be migrated automatically; recreate them with disjoint prefixes instead.
@@ -160,9 +162,13 @@ def migrate_index_ownership(
 
     # Refuse aliases owned by another index, but allow interrupted runs to
     # recreate aliases that disappeared during a rebuild.
+    if action == "rebuild" and aliases is None:
+        raise ValueError(
+            "Rebuilds require aliases explicitly; use aliases=[] when there are none."
+        )
     if isinstance(aliases, (str, bytes)):
         raise ValueError("aliases must be an iterable of names, not a string.")
-    aliases = tuple(aliases)
+    aliases = tuple(aliases or ())
     for alias in aliases:
         if not alias:
             raise ValueError("Alias names must be non-empty.")
