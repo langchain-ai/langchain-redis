@@ -6,6 +6,7 @@ from langchain_core.embeddings import Embeddings
 from redis import Redis
 from redis.commands.search.query import Query
 from redisvl.index import SearchIndex  # type: ignore[import]
+from redisvl.migration.utils import wait_for_index_ready  # type: ignore[import]
 from redisvl.redis.utils import convert_bytes, hashify  # type: ignore[import]
 from redisvl.schema import IndexSchema  # type: ignore[import]
 
@@ -420,7 +421,13 @@ def test_rerun_restores_alias_missing_after_rebuild(
     target.add_field(
         {"name": "_index_name", "type": "tag", "attrs": {"case_sensitive": True}}
     )
-    SearchIndex(schema=target, redis_client=client).create(overwrite=True, drop=False)
+    rebuilt_index = SearchIndex(schema=target, redis_client=client)
+    rebuilt_index.create(overwrite=True, drop=False)
+    wait_for_index_ready(
+        rebuilt_index,
+        timeout_seconds=5,
+        poll_interval_seconds=0.05,
+    )
 
     result = migrate_index_ownership(
         name,
