@@ -255,6 +255,30 @@ def test_migration_preserves_documents_and_is_rerunnable(
     assert [_read_record(client, store, key) for key in keys] == after
 
 
+@pytest.mark.parametrize("dry_run", [True, False], ids=["preview", "apply"])
+def test_aliases_rejects_a_bare_string_before_mutation(
+    client: Redis,
+    make_legacy_store: Callable[..., RedisVectorStore],
+    dry_run: bool,
+) -> None:
+    store = make_legacy_store(ids=("one",))
+    name, key = store.index.name, store.index.key("one")
+    migrate_index_ownership(name, redis_client=client, dry_run=False)
+    attributes = convert_bytes(client.ft(name).info())["attributes"]
+    before = client.hgetall(key)
+
+    with pytest.raises(ValueError, match="iterable of names"):
+        migrate_index_ownership(
+            name,
+            redis_client=client,
+            aliases=f"{name}_current",  # type: ignore[arg-type]
+            dry_run=dry_run,
+        )
+
+    assert convert_bytes(client.ft(name).info())["attributes"] == attributes
+    assert client.hgetall(key) == before
+
+
 def test_expiry_after_preflight_reports_incomplete_and_allows_retry(
     client: Redis,
     make_legacy_store: Callable[..., RedisVectorStore],

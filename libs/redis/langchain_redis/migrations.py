@@ -160,6 +160,8 @@ def migrate_index_ownership(
 
     # Refuse aliases owned by another index, but allow interrupted runs to
     # recreate aliases that disappeared during a rebuild.
+    if isinstance(aliases, (str, bytes)):
+        raise ValueError("aliases must be an iterable of names, not a string.")
     aliases = tuple(aliases)
     for alias in aliases:
         if not alias:
