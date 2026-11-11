@@ -82,11 +82,12 @@ def migrate_index_ownership(
     and FT.INFO on every index, including those outside the target key prefix,
     so overlap checks can inspect all index definitions.
 
-    Every rebuild requires either the complete deployment ``source_schema`` or the
-    original ``source_config`` used for a generated schema. It is authoritative:
-    only its ownership field is replaced. The index name, storage type, prefixes,
-    fields, explicit stopwords and reported core vector settings are checked against
-    the live index before mutation. Vector tuning is not inferred or compared with
+    Every migration, including previews and reruns, requires exactly one of the
+    complete deployment ``source_schema`` or the original ``source_config`` used
+    for a generated schema. It is authoritative: only its ownership field is
+    changed. The index name, storage type, prefixes, fields, explicit stopwords
+    and reported core vector settings are checked against the live index before
+    mutation. Vector tuning is not inferred or compared with
     FT.INFO; it remains authoritative from the supplied source. Rebuilding an index
     with INDEXALL enabled requires manual migration.
 
@@ -117,10 +118,9 @@ def migrate_index_ownership(
     index = SearchIndex(schema=schema, redis_client=client)
     _assert_no_overlapping_prefixes(index)
     action = _schema_action(schema, index_name)
-    target = _target_schema(schema)
+    index_definition = info["index_definition"]
     if action == "rebuild":
         # IndexSchema cannot represent these FT.CREATE options.
-        index_definition = info.get("index_definition", {})
         if str(index_definition.get("indexes_all", "false")).lower() == "true":
             raise ValueError("Indexes with INDEXALL enabled require manual migration.")
         supported = {"key_type", "prefixes", "default_score", "indexes_all"}
@@ -130,23 +130,24 @@ def migrate_index_ownership(
             or float(index_definition.get("default_score", 1)) != 1
         ):
             raise ValueError("Custom index options require manual schema migration.")
-        source = _resolve_source_schema(action, source_schema, source_config)
-        assert source is not None
-        prefixes = source.index.prefix
-        if isinstance(prefixes, str):
-            prefixes = [prefixes]
-        if (
-            source.index.name != index_name
-            or source.index.storage_type != schema.index.storage_type
-            or prefixes != index_definition["prefixes"]
-        ):
-            raise ValueError(
-                "The migration source must match the live index name, "
-                "storage type and prefixes."
-            )
-        _validate_source_schema(info, source)
-        # Use the operator's declaration directly; FT.INFO is not a schema export.
-        target = _target_schema(source)
+
+    # Validate the supplied source for every path, including marker-only backfills.
+    source = _resolve_source_schema(source_schema, source_config)
+    prefixes = source.index.prefix
+    if isinstance(prefixes, str):
+        prefixes = [prefixes]
+    if (
+        source.index.name != index_name
+        or source.index.storage_type != schema.index.storage_type
+        or prefixes != index_definition["prefixes"]
+    ):
+        raise ValueError(
+            "The migration source must match the live index name, "
+            "storage type and prefixes."
+        )
+    _validate_source_schema(info, source)
+    # Use the operator's declaration directly; FT.INFO is not a schema export.
+    target = _target_schema(source)
 
     # Validate the old index's documents and retain only approved keys for backfill.
     # A rebuild can discover additional documents whose markers we have not checked.
@@ -281,15 +282,12 @@ def _schema_action(
 
 
 def _resolve_source_schema(
-    action: Literal["none", "alter", "rebuild"],
     source_schema: Optional[IndexSchema],
     source_config: Optional[RedisConfig],
-) -> Optional[IndexSchema]:
-    """Resolve rebuild input to one authoritative schema."""
+) -> IndexSchema:
+    """Resolve migration input to one authoritative schema."""
     if source_schema is not None and source_config is not None:
         raise ValueError("Provide source_schema or source_config, not both.")
-    if action != "rebuild":
-        return None
     if source_schema is not None:
         return source_schema
     if source_config is not None:
@@ -302,7 +300,7 @@ def _resolve_source_schema(
                 "source_config.embedding_dimensions is required for generated schemas."
             )
         return source_config.to_index_schema()
-    raise ValueError("Rebuilds require the original source_schema or source_config.")
+    raise ValueError("Migration requires the original source_schema or source_config.")
 
 
 def _assert_no_overlapping_prefixes(index: SearchIndex) -> None:
@@ -379,7 +377,7 @@ def _vector_core_settings(attribute: Any) -> Dict[str, Any]:
 
 
 def _schema_mismatch(component: str, live: Any, supplied: Any) -> ValueError:
-    """Describe the live and supplied values that prevent a safe rebuild."""
+    """Describe the live and supplied values that prevent a safe migration."""
     return ValueError(
         f"{_SCHEMA_MISMATCH} {component} differs: live={live!r}, supplied={supplied!r}."
     )

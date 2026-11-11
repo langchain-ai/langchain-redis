@@ -263,7 +263,8 @@ tokenization cannot provide exact index isolation.
 
 Use `migrate_index_ownership()` to preview and upgrade a legacy index. Supply
 the original, fully populated `RedisConfig` for a generated schema, or the
-original `IndexSchema` for a custom schema. Provide one source, not both.
+original `IndexSchema` for a custom schema. Every call, including previews and
+reruns, requires exactly one source, validated against the live index.
 
 `TEMPORARY` indexes are unsupported: rebuilding them deletes their documents.
 

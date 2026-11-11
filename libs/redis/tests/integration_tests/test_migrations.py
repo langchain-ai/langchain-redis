@@ -115,9 +115,14 @@ def test_migration_supports_resp2(
     key = store.index.key("one")
 
     with Redis.from_url(redis_url, protocol=2) as client:
-        preview = migrate_index_ownership(store.index.name, redis_client=client)
+        preview = migrate_index_ownership(
+            store.index.name, source_config=store.config, redis_client=client
+        )
         result = migrate_index_ownership(
-            store.index.name, redis_client=client, dry_run=False
+            store.index.name,
+            source_config=store.config,
+            redis_client=client,
+            dry_run=False,
         )
 
         assert (preview.schema_action, preview.would_update) == ("alter", 1)
@@ -170,6 +175,7 @@ def test_overlapping_prefixes_are_rejected_before_mutation(
         client.delete(*keys)
 
 
+@pytest.mark.parametrize("source_kind", ["schema", "config"])
 @pytest.mark.parametrize(
     ("storage_type", "marker_type", "action"),
     [
@@ -185,6 +191,7 @@ def test_migration_preserves_documents_and_is_rerunnable(
     storage_type: str,
     marker_type: Optional[str],
     action: str,
+    source_kind: str,
 ) -> None:
     store = make_legacy_store(storage_type, marker_type)
     keys = [store.index.key(doc_id) for doc_id in ("one", "two")]
@@ -195,10 +202,14 @@ def test_migration_preserves_documents_and_is_rerunnable(
     schema_before = SearchIndex.from_existing(
         store.index.name, redis_client=client
     ).schema.to_dict()
-    source = store.config.to_index_schema()
+    source: Dict[str, Any] = (
+        {"source_schema": store.config.to_index_schema()}
+        if source_kind == "schema"
+        else {"source_config": store.config}
+    )
 
     preview = migrate_index_ownership(
-        store.index.name, redis_client=client, source_schema=source, aliases=[]
+        store.index.name, redis_client=client, **source, aliases=[]
     )
     assert preview.dry_run
     assert (preview.schema_action, preview.would_update, preview.updated) == (
@@ -217,7 +228,7 @@ def test_migration_preserves_documents_and_is_rerunnable(
     result = migrate_index_ownership(
         store.index.name,
         redis_client=client,
-        source_schema=source,
+        **source,
         aliases=[],
         dry_run=False,
         batch_size=1,
@@ -243,7 +254,7 @@ def test_migration_preserves_documents_and_is_rerunnable(
     }
 
     rerun = migrate_index_ownership(
-        store.index.name, redis_client=client, dry_run=False
+        store.index.name, redis_client=client, **source, dry_run=False
     )
     assert (
         rerun.schema_action,
@@ -259,6 +270,54 @@ def test_migration_preserves_documents_and_is_rerunnable(
     assert [_read_record(client, store, key) for key in keys] == after
 
 
+@pytest.mark.parametrize("marker_type", [None, "text", "compatible-tag"])
+@pytest.mark.parametrize("invalid_source", ["missing", "both", "prefix", "fields"])
+@pytest.mark.parametrize("dry_run", [True, False], ids=["preview", "apply"])
+def test_invalid_source_is_rejected_before_mutation(
+    client: Redis,
+    make_legacy_store: Callable[..., RedisVectorStore],
+    marker_type: Optional[str],
+    invalid_source: str,
+    dry_run: bool,
+) -> None:
+    store = make_legacy_store(
+        marker_type=None if marker_type == "compatible-tag" else marker_type,
+        ids=("one",),
+    )
+    source = store.config.to_index_schema().model_copy(deep=True)
+    if marker_type == "compatible-tag":
+        source.add_field(
+            {"name": "_index_name", "type": "tag", "attrs": {"case_sensitive": True}}
+        )
+        client.ft(store.index.name).alter_schema_add(
+            source.fields["_index_name"].as_redis_field()
+        )
+    key = store.index.key("one")
+    before = client.hgetall(key)
+    attributes = convert_bytes(client.ft(store.index.name).info())["attributes"]
+    supplied: Dict[str, Any] = {"source_schema": source}
+    if invalid_source == "missing":
+        supplied = {}
+    elif invalid_source == "both":
+        supplied["source_config"] = store.config
+    elif invalid_source == "prefix":
+        source.index.prefix = "wrong:"
+    else:
+        source.fields.pop("doc_id")
+
+    with pytest.raises(ValueError):
+        migrate_index_ownership(
+            store.index.name,
+            redis_client=client,
+            **supplied,
+            aliases=[],
+            dry_run=dry_run,
+        )
+
+    assert convert_bytes(client.ft(store.index.name).info())["attributes"] == attributes
+    assert client.hgetall(key) == before
+
+
 @pytest.mark.parametrize("dry_run", [True, False], ids=["preview", "apply"])
 def test_aliases_rejects_a_bare_string_before_mutation(
     client: Redis,
@@ -267,13 +326,16 @@ def test_aliases_rejects_a_bare_string_before_mutation(
 ) -> None:
     store = make_legacy_store(ids=("one",))
     name, key = store.index.name, store.index.key("one")
-    migrate_index_ownership(name, redis_client=client, dry_run=False)
+    migrate_index_ownership(
+        name, source_config=store.config, redis_client=client, dry_run=False
+    )
     attributes = convert_bytes(client.ft(name).info())["attributes"]
     before = client.hgetall(key)
 
     with pytest.raises(ValueError, match="iterable of names"):
         migrate_index_ownership(
             name,
+            source_config=store.config,
             redis_client=client,
             aliases=f"{name}_current",  # type: ignore[arg-type]
             dry_run=dry_run,
@@ -386,7 +448,7 @@ def test_expiry_after_preflight_reports_incomplete_and_allows_retry(
 
     monkeypatch.setattr(SearchIndex, "_apply_update_batch", expire_before_update)
     result = migrate_index_ownership(
-        store.index.name, redis_client=client, dry_run=False
+        store.index.name, source_config=store.config, redis_client=client, dry_run=False
     )
     assert (result.would_update, result.updated, result.completed) == (2, 1, False)
     assert client.exists(expired) == 0
@@ -395,7 +457,7 @@ def test_expiry_after_preflight_reports_incomplete_and_allows_retry(
     )
 
     retry = migrate_index_ownership(
-        store.index.name, redis_client=client, dry_run=False
+        store.index.name, source_config=store.config, redis_client=client, dry_run=False
     )
     assert (retry.would_update, retry.updated, retry.completed) == (0, 0, True)
 
@@ -463,6 +525,7 @@ def test_incomplete_preflight_cursor_is_rejected_before_mutation(
     with pytest.raises(RuntimeError, match="different number of documents"):
         migrate_index_ownership(
             store.index.name,
+            source_config=store.config,
             redis_client=client,
             dry_run=False,
         )
@@ -560,6 +623,7 @@ def test_rerun_restores_alias_missing_after_rebuild(
 
     result = migrate_index_ownership(
         name,
+        source_config=store.config,
         redis_client=client,
         aliases=[alias],
         dry_run=False,
@@ -813,7 +877,7 @@ def test_generated_config_supplies_rebuild_schema(
         ),
     ],
 )
-def test_vector_rebuild_requires_original_schema_and_preserves_tuning(
+def test_vector_rebuild_preserves_supplied_tuning(
     client: Redis,
     make_legacy_store: Callable[..., RedisVectorStore],
     monkeypatch: pytest.MonkeyPatch,
@@ -834,19 +898,6 @@ def test_vector_rebuild_requires_original_schema_and_preserves_tuning(
     source = store.config.to_index_schema().model_copy(deep=True)
     source_before = source.to_dict()
     before = _read_record(client, store, key)
-    attributes = convert_bytes(client.ft(name).info())["attributes"]
-
-    with pytest.raises(ValueError, match="source_schema or source_config"):
-        migrate_index_ownership(name, redis_client=client, dry_run=False)
-    mismatched = source.model_copy(deep=True)
-    mismatched.index.prefix = "wrong:"
-    with pytest.raises(ValueError, match="source.*match"):
-        migrate_index_ownership(
-            name, redis_client=client, source_schema=mismatched, dry_run=False
-        )
-    assert convert_bytes(client.ft(name).info())["attributes"] == attributes
-    assert _read_record(client, store, key) == before
-
     # FT.INFO/RedisVL cannot round-trip all tuning; inspect the replacement command.
     creates = []
     execute = client.execute_command

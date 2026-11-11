@@ -134,13 +134,13 @@ def test_target_schema_preserves_declared_hash_field_alias() -> None:
     assert target.fields["display"] is not field
 
 
-def test_rebuild_source_can_come_from_schema_or_config() -> None:
+def test_source_can_come_from_schema_or_config() -> None:
     source = _schema({"name": "_index_name", "type": "text"})
     config = Mock()
     config.to_index_schema.return_value = source
 
-    assert _resolve_source_schema("rebuild", source, None) is source
-    assert _resolve_source_schema("rebuild", None, config) is source
+    assert _resolve_source_schema(source, None) is source
+    assert _resolve_source_schema(None, config) is source
     config.to_index_schema.assert_called_once_with()
 
 
@@ -148,22 +148,16 @@ def test_generated_source_config_requires_embedding_dimensions() -> None:
     config = RedisConfig(index_name=INDEX_NAME, legacy_key_format=False)
 
     with pytest.raises(ValueError, match="source_config.embedding_dimensions"):
-        _resolve_source_schema("rebuild", None, config)
-
-
-@pytest.mark.parametrize("action", ["none", "alter"])
-def test_non_rebuild_does_not_require_a_source(action: str) -> None:
-    assert _resolve_source_schema(action, None, None) is None  # type: ignore[arg-type]
+        _resolve_source_schema(None, config)
 
 
 @pytest.mark.parametrize("supplies_both", [False, True], ids=["missing", "both"])
-def test_rebuild_requires_exactly_one_source(supplies_both: bool) -> None:
+def test_migration_requires_exactly_one_source(supplies_both: bool) -> None:
     source = _schema({"name": "_index_name", "type": "text"})
     config = Mock()
 
     with pytest.raises(ValueError, match="source_schema or source_config"):
         _resolve_source_schema(
-            "rebuild",
             source if supplies_both else None,
             config if supplies_both else None,
         )
@@ -408,7 +402,7 @@ def test_preflight_rejects_incomplete_cursor_before_mutation(
         "index_name": INDEX_NAME,
         "percent_indexed": 1,
         "index_definition": {"key_type": "HASH", "prefixes": ["migration:"]},
-        "attributes": [],
+        "attributes": [_attribute("text", "TEXT", "WEIGHT", 1.0)],
     }
     monkeypatch.setattr(
         "langchain_redis.migrations.SearchIndex", lambda **kwargs: index
@@ -418,7 +412,9 @@ def test_preflight_rejects_incomplete_cursor_before_mutation(
     )
 
     with pytest.raises(RuntimeError, match="different number of documents"):
-        migrate_index_ownership(INDEX_NAME, redis_client=client, dry_run=False)
+        migrate_index_ownership(
+            INDEX_NAME, redis_client=client, source_schema=_schema(None), dry_run=False
+        )
 
     client.pipeline.assert_not_called()
     client.ft.return_value.alter_schema_add.assert_not_called()
