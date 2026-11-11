@@ -46,9 +46,11 @@ def make_legacy_store(
         marker_type: Optional[str] = None,
         ids: Sequence[str] = ("one", "two"),
         vector_attrs: Optional[Dict[str, Any]] = None,
+        extra_fields: Optional[List[Dict[str, Any]]] = None,
     ) -> RedisVectorStore:
         name = f"ownership_migration_{uuid4().hex[:8]}"
         fields: List[Dict[str, Any]] = [
+            *(extra_fields or []),
             {"name": "text", "type": "text"},
             {
                 "name": "embedding",
@@ -574,6 +576,79 @@ def test_rebuild_preserves_field_aliases_sharing_a_path(
     for query in queries:
         assert [doc.id for doc in client.ft(name).search(query).docs] == [key]
     assert _read_record(client, store, key) == {**before, "_index_name": hashify(name)}
+
+
+@pytest.mark.parametrize("storage_type", ["hash", "json"])
+@pytest.mark.parametrize(
+    ("field_type", "attrs", "values", "expression", "expected_ids"),
+    [
+        pytest.param(
+            "text",
+            {"phonetic_matcher": "dm:en"},
+            ("Jon", "Bob"),
+            "@value:John",
+            ("one",),
+            id="phonetic",
+        ),
+        *[
+            pytest.param(
+                "numeric",
+                {"sortable": True, "unf": unf},
+                (10, 2),
+                "@value:[0 20]",
+                ("two", "one"),
+                id=f"numeric-unf-{unf}",
+            )
+            for unf in (False, True)
+        ],
+    ],
+)
+def test_rebuild_preserves_nonvector_field_options(
+    client: Redis,
+    make_legacy_store: Callable[..., RedisVectorStore],
+    storage_type: str,
+    field_type: str,
+    attrs: Dict[str, Any],
+    values: Sequence[Any],
+    expression: str,
+    expected_ids: Sequence[str],
+) -> None:
+    store = make_legacy_store(
+        storage_type,
+        marker_type="text",
+        extra_fields=[{"name": "value", "type": field_type, "attrs": attrs}],
+    )
+    source = store.config.to_index_schema().model_copy(deep=True)
+    keys = [store.index.key(doc_id) for doc_id in ("one", "two")]
+    for key, value in zip(keys, values, strict=True):
+        if storage_type == "json":
+            client.json().set(key, "$.value", value)
+        else:
+            client.hset(key, "value", value)
+    before = [_read_record(client, store, key) for key in keys]
+    query = Query(expression).no_content().dialect(2)
+    if field_type == "numeric":
+        query.sort_by("value")
+    expected_keys = [store.index.key(doc_id) for doc_id in expected_ids]
+    assert [doc.id for doc in client.ft(store.index.name).search(query).docs] == (
+        expected_keys
+    )
+
+    result = migrate_index_ownership(
+        store.index.name,
+        redis_client=client,
+        source_schema=source,
+        aliases=[],
+        dry_run=False,
+    )
+
+    assert result.completed
+    assert [doc.id for doc in client.ft(store.index.name).search(query).docs] == (
+        expected_keys
+    )
+    assert [_read_record(client, store, key) for key in keys] == [
+        {**record, "_index_name": hashify(store.index.name)} for record in before
+    ]
 
 
 def test_generated_config_supplies_rebuild_schema(

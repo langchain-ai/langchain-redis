@@ -427,10 +427,16 @@ def _validate_source_schema(info: Dict[str, Any], source: IndexSchema) -> None:
             continue
         live_attrs = live_fields[alias].attrs.model_dump()
         expected_attrs = supplied[alias][1].attrs.model_dump()
-        # Redis adds UNF automatically to SORTABLE JSON text fields.
-        if source.index.storage_type == StorageType.JSON and field_type == "TEXT":
-            live_attrs.pop("unf", None)
-            expected_attrs.pop("unf", None)
+        for options in (live_attrs, expected_attrs):
+            if field_type == "TEXT":
+                # FT.INFO omits the phonetic matcher; retain the supplied setting.
+                options.pop("phonetic_matcher", None)
+                if source.index.storage_type == StorageType.JSON:
+                    # Redis adds UNF automatically to SORTABLE JSON text fields.
+                    options.pop("unf", None)
+            elif field_type == "NUMERIC" and options.get("sortable"):
+                # SORTABLE numeric fields always have UNF, even if not requested.
+                options["unf"] = True
         if live_attrs != expected_attrs:
             raise _schema_mismatch(
                 f"Field {alias!r} options", live_attrs, expected_attrs
