@@ -367,6 +367,13 @@ def _vector_core_settings(attribute: Any) -> Dict[str, Any]:
     return settings
 
 
+def _schema_mismatch(component: str, live: Any, supplied: Any) -> ValueError:
+    """Describe the live and supplied values that prevent a safe rebuild."""
+    return ValueError(
+        f"{_SCHEMA_MISMATCH} {component} differs: live={live!r}, supplied={supplied!r}."
+    )
+
+
 def _validate_source_schema(info: Dict[str, Any], source: IndexSchema) -> None:
     """Compare reliable structural metadata and reported core vector settings."""
     live_stopwords = info.get("stopwords_list")
@@ -375,7 +382,7 @@ def _validate_source_schema(info: Dict[str, Any], source: IndexSchema) -> None:
         source_stopwords is not None
         and sorted(live_stopwords or []) != sorted(source_stopwords)
     ):
-        raise ValueError(_SCHEMA_MISMATCH)
+        raise _schema_mismatch("Stopwords", live_stopwords, source_stopwords)
 
     live = []
     for attribute in info["attributes"]:
@@ -387,10 +394,10 @@ def _validate_source_schema(info: Dict[str, Any], source: IndexSchema) -> None:
         for field in source.fields.values()
         if field.name != _FIELD
     }
-    if sorted(identity for identity, _ in live) != sorted(
-        identity for identity, _ in supplied.values()
-    ):
-        raise ValueError(_SCHEMA_MISMATCH)
+    live_identities = sorted(identity for identity, _ in live)
+    supplied_identities = sorted(identity for identity, _ in supplied.values())
+    if live_identities != supplied_identities:
+        raise _schema_mismatch("Fields", live_identities, supplied_identities)
 
     nonvector = [attribute for identity, attribute in live if identity[2] != "VECTOR"]
     live_schema = IndexSchema.from_dict(
@@ -413,7 +420,11 @@ def _validate_source_schema(info: Dict[str, Any], source: IndexSchema) -> None:
                 if (value := getattr(source_attrs, name, None)) is not None
             }
             if live_core != expected_core:
-                raise ValueError(_SCHEMA_MISMATCH)
+                raise _schema_mismatch(
+                    f"Vector field {alias!r} core settings",
+                    live_core,
+                    expected_core,
+                )
             continue
         live_attrs = live_fields[identifier].attrs.model_dump()
         expected_attrs = supplied[alias][1].attrs.model_dump()
@@ -422,7 +433,9 @@ def _validate_source_schema(info: Dict[str, Any], source: IndexSchema) -> None:
             live_attrs.pop("unf", None)
             expected_attrs.pop("unf", None)
         if live_attrs != expected_attrs:
-            raise ValueError(_SCHEMA_MISMATCH)
+            raise _schema_mismatch(
+                f"Field {alias!r} options", live_attrs, expected_attrs
+            )
 
 
 def _ownership_schema(info: Dict[str, Any]) -> IndexSchema:

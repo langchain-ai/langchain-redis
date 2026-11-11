@@ -168,11 +168,25 @@ def test_rebuild_requires_exactly_one_source(supplies_both: bool) -> None:
         )
 
 
+@pytest.fixture
+def mismatch_details(monkeypatch: pytest.MonkeyPatch) -> Dict[str, Any]:
+    details: Dict[str, Any] = {}
+
+    def capture(component: str, live: Any, supplied: Any) -> ValueError:
+        details.update(component=component, live=live, supplied=supplied)
+        return ValueError("schema mismatch")
+
+    monkeypatch.setattr("langchain_redis.migrations._schema_mismatch", capture)
+    return details
+
+
 @pytest.mark.parametrize(
     "mismatch",
     ["missing", "extra", "alias", "type", "field-options", "stopwords"],
 )
-def test_source_schema_must_match_reliable_live_definition(mismatch: str) -> None:
+def test_source_schema_mismatch_identifies_difference(
+    mismatch: str, mismatch_details: Dict[str, Any]
+) -> None:
     source = _schema({"name": "_index_name", "type": "text"})
     info = _info()
     if mismatch == "missing":
@@ -192,8 +206,34 @@ def test_source_schema_must_match_reliable_live_definition(mismatch: str) -> Non
         source.index.stopwords = ["custom"]
         info["stopwords_list"] = ["different"]
 
-    with pytest.raises(ValueError, match="Migration source does not match"):
+    with pytest.raises(ValueError):
         _validate_source_schema(info, source)
+
+    if mismatch == "field-options":
+        assert mismatch_details["component"] == "Field 'text' options"
+        live, supplied = mismatch_details["live"], mismatch_details["supplied"]
+        assert (live["weight"], supplied["weight"]) == (1, 2)
+        assert {key: value for key, value in live.items() if key != "weight"} == {
+            key: value for key, value in supplied.items() if key != "weight"
+        }
+    else:
+        identity = ("text", "text", "TEXT")
+        expected = {
+            "missing": ("Fields", [identity], []),
+            "extra": (
+                "Fields",
+                [identity],
+                [("extra", "extra", "TEXT"), identity],
+            ),
+            "alias": ("Fields", [identity], [("text", "display", "TEXT")]),
+            "type": ("Fields", [identity], [("text", "text", "TAG")]),
+            "stopwords": ("Stopwords", ["different"], ["custom"]),
+        }[mismatch]
+        assert (
+            mismatch_details["component"],
+            mismatch_details["live"],
+            mismatch_details["supplied"],
+        ) == expected
 
 
 def _vector_source() -> IndexSchema:
@@ -225,7 +265,7 @@ def _vector_source() -> IndexSchema:
     ],
 )
 def test_source_vector_core_settings_must_match_live_definition(
-    option: str, value: Any
+    option: str, value: Any, mismatch_details: Dict[str, Any]
 ) -> None:
     live_options = {
         "ALGORITHM": "HNSW",
@@ -240,8 +280,26 @@ def test_source_vector_core_settings_must_match_live_definition(
         *(item for pair in live_options.items() for item in pair),
     )
 
-    with pytest.raises(ValueError, match="Migration source does not match"):
+    with pytest.raises(ValueError):
         _validate_source_schema(_info(live_vector), _vector_source())
+
+    supplied_core = {
+        "algorithm": "HNSW",
+        "datatype": "FLOAT32",
+        "dims": 4,
+        "distance_metric": "COSINE",
+    }
+    live_name = {
+        "ALGORITHM": "algorithm",
+        "DATA_TYPE": "datatype",
+        "DIM": "dims",
+        "DISTANCE_METRIC": "distance_metric",
+    }[option]
+    assert mismatch_details == {
+        "component": "Vector field 'embedding' core settings",
+        "live": {**supplied_core, live_name: value},
+        "supplied": supplied_core,
+    }
 
 
 def test_source_vector_tuning_remains_authoritative() -> None:
