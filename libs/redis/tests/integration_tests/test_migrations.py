@@ -1040,8 +1040,13 @@ def test_rebuild_probe_uses_live_prefix_with_key_scoped_acl(
     redis_url: str,
     client: Redis,
     make_legacy_store: Callable[..., RedisVectorStore],
+    monkeypatch: pytest.MonkeyPatch,
     dry_run: bool,
 ) -> None:
+    # Test probe permissions independently of access to unrelated index definitions.
+    monkeypatch.setattr(
+        "langchain_redis.migrations._assert_no_overlapping_prefixes", lambda index: None
+    )
     store = make_legacy_store(marker_type="text", ids=("one",))
     source = store.config.to_index_schema()
     live_prefix = source.index.prefix
