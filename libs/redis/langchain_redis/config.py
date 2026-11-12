@@ -161,7 +161,7 @@ class RedisConfig(BaseModel):
         if schema is None:
             schema = values.get("index_schema")
         options = [
-            values.get("index_schema"),
+            schema,
             values.get("schema_path"),
             values.get("metadata_schema"),
         ]
@@ -291,6 +291,10 @@ class RedisConfig(BaseModel):
         Returns:
             RedisConfig: A new instance of `RedisConfig` configured based on the
                 provided schema and kwargs.
+
+        Raises:
+            ValueError: If `metadata_schema` (even an empty list) or `schema_path`
+                is also passed. The schema is the only schema source.
 
         Example:
             ```python
