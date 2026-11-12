@@ -1356,7 +1356,11 @@ class RedisVectorStore(VectorStore):
     def _fetch_records_by_keys(
         self, keys: Sequence[str]
     ) -> List[Optional[Dict[str, Any]]]:
-        """Fetch raw HASH or JSON records for ownership validation."""
+        """Fetch raw HASH or JSON records by Redis key, `None` for a missing one.
+
+        Each key is read with a single-key command in a non-transactional
+        pipeline, so the reads stay valid across Redis Cluster hash slots.
+        """
         if not keys:
             return []
 
@@ -1544,39 +1548,13 @@ class RedisVectorStore(VectorStore):
             return cast(
                 List[Document], self._prepare_docs(return_all, results, return_metadata)
             )
-        else:
-            if self.config.storage_type == StorageType.HASH.value:
-                # Fetch full hash data for each document
-                if not results:
-                    full_docs = []
-                else:
-                    with self._index.client.pipeline(transaction=False) as pipe:
-                        for doc in results:
-                            pipe.hgetall(doc["id"])
-                        full_docs = convert_bytes(pipe.execute())
 
-                return cast(
-                    List[Document],
-                    self._prepare_docs_full(
-                        return_all, results, full_docs, return_metadata
-                    ),
-                )
-            else:
-                # Fetch full JSON data for each document
-                if not results:
-                    full_docs = []
-                else:
-                    with self._index.client.json().pipeline(transaction=False) as pipe:
-                        for doc in results:
-                            pipe.get(doc["id"], ".")
-                        full_docs = pipe.execute()
-
-                return cast(
-                    List[Document],
-                    self._prepare_docs_full(
-                        return_all, results, full_docs, return_metadata
-                    ),
-                )
+        # Fetch the full HASH or JSON record of each hit
+        full_docs = self._fetch_records_by_keys([doc["id"] for doc in results])
+        return cast(
+            List[Document],
+            self._prepare_docs_full(return_all, results, full_docs, return_metadata),
+        )
 
     def similarity_search(
         self,
@@ -1968,7 +1946,7 @@ class RedisVectorStore(VectorStore):
         self,
         return_all: bool | None,
         results: List[Dict[str, Any]],
-        full_docs: List[Dict[str, Any]],
+        full_docs: Sequence[Optional[Dict[str, Any]]],
         return_metadata: bool,
         with_vectors: bool = False,
         with_scores: bool = False,
@@ -2090,38 +2068,16 @@ class RedisVectorStore(VectorStore):
         else:
             results = self._index.query(query)
 
-            if self.config.storage_type == StorageType.HASH.value:
-                # Fetch full hash data for each document
-                pipe = self._index.client.pipeline()
-                for doc in results:
-                    pipe.hgetall(doc["id"])
-                full_docs = convert_bytes(pipe.execute())
-
-                docs_with_scores = self._prepare_docs_full(
-                    return_all,
-                    results,
-                    full_docs,
-                    return_metadata,
-                    with_vectors=with_vectors,
-                    with_scores=True,
-                )
-            else:
-                # Fetch full JSON data for each document. JSON.MGET takes one
-                # or more keys, so a search that matched nothing must not reach
-                # it; similarity_search_by_vector guards the same fetch.
-                doc_ids = [doc["id"] for doc in results]
-                full_docs = (
-                    self._index.client.json().mget(doc_ids, ".") if doc_ids else []
-                )
-
-                docs_with_scores = self._prepare_docs_full(
-                    return_all,
-                    results,
-                    full_docs,
-                    return_metadata,
-                    with_vectors=with_vectors,
-                    with_scores=True,
-                )
+            # Fetch the full HASH or JSON record of each hit
+            full_docs = self._fetch_records_by_keys([doc["id"] for doc in results])
+            docs_with_scores = self._prepare_docs_full(
+                return_all,
+                results,
+                full_docs,
+                return_metadata,
+                with_vectors=with_vectors,
+                with_scores=True,
+            )
 
         return docs_with_scores
 
