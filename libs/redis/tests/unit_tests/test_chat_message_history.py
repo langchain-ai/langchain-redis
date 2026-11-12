@@ -1,3 +1,4 @@
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -185,3 +186,76 @@ class TestRedisChatMessageHistoryMinimal:
             history = RedisChatMessageHistory(session_id="test_session")
             with pytest.raises(ValueError, match="Message cannot be None"):
                 history.add_messages([HumanMessage(content="hi"), None])  # type: ignore
+
+
+class TestRedisChatMessageHistoryExistingIndex:
+    """Creating an instance when the search index already exists.
+
+    Under RESP2 (protocol 2) FT.INFO returns the index definition as a
+    flat list, while under RESP3 (redis-py 8, protocol 3) it returns a
+    dict. The constructor must read the key prefixes from both shapes
+    instead of crashing on the second instance (issue #222).
+    """
+
+    def _history_with_index_info(self, index_info):  # type: ignore[no-untyped-def]
+        """Build a history whose mocked index returns the given info."""
+        with (
+            patch(
+                "langchain_redis.chat_message_history.SearchIndex"
+            ) as mock_search_index,
+            patch("redis.Redis.from_url"),
+        ):
+            mock_search_index.from_dict.return_value.info.return_value = index_info
+            return RedisChatMessageHistory(session_id="test_session")
+
+    @pytest.mark.parametrize(
+        "index_definition, should_warn",
+        [
+            (
+                {"key_type": "JSON", "prefixes": ["chat:"]},
+                False,
+            ),
+            (
+                {"key_type": "JSON", "prefixes": ["other:"]},
+                True,
+            ),
+            (
+                ["key_type", "JSON", "prefixes", ["chat:"]],
+                False,
+            ),
+            (
+                ["key_type", "JSON", "prefixes", ["other:"]],
+                True,
+            ),
+        ],
+        ids=[
+            "resp3-dict-matching-prefix",
+            "resp3-dict-different-prefix",
+            "resp2-list-matching-prefix",
+            "resp2-list-different-prefix",
+        ],
+    )
+    def test_index_definition_prefix_warning(
+        self,
+        index_definition: dict[str, Any] | list[Any],
+        should_warn: bool,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The prefix-mismatch warning fires only when the prefix differs.
+
+        Covers both FT.INFO response shapes (RESP3 dict and RESP2 list)
+        and both prefix outcomes (matching and different).
+        """
+        with caplog.at_level("WARNING", logger="langchain_redis.chat_message_history"):
+            history = self._history_with_index_info(
+                {
+                    "index_name": "idx:chat_history",
+                    "index_definition": index_definition,
+                }
+            )
+        if should_warn:
+            assert "already exists with different key prefix" in caplog.text
+        else:
+            assert history.id == "test_session"
+            history.index.create.assert_called_once()
+            assert "already exists with different key prefix" not in caplog.text
