@@ -185,6 +185,8 @@ def migrate_index_ownership(
         if storage == "json":
             # JSON.MERGE would replace non-object roots. None means a missing key.
             for key, root_type in zip(batch, values[::2], strict=True):
+                if isinstance(root_type, list):
+                    root_type = root_type[0] if root_type else None
                 if root_type not in (None, "object"):
                     raise ValueError(
                         f"Cannot migrate JSON document {key!r}: "

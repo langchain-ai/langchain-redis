@@ -105,16 +105,22 @@ def _read_record(client: Redis, store: RedisVectorStore, key: str) -> Dict[str, 
     return convert_bytes(record)
 
 
+@pytest.mark.parametrize("storage_type", ["hash", "json"])
+@pytest.mark.parametrize("legacy_responses", [True, False])
 def test_migration_supports_resp2(
     redis_url: str,
     make_legacy_store: Callable[..., RedisVectorStore],
+    storage_type: str,
+    legacy_responses: bool,
 ) -> None:
-    store = make_legacy_store(ids=("one",))
+    store = make_legacy_store(storage_type, ids=("one",))
     # Exercise RESP2 normalization while checking another index's disjoint prefix.
     make_legacy_store(ids=("other",))
     key = store.index.key("one")
 
-    with Redis.from_url(redis_url, protocol=2) as client:
+    with Redis.from_url(
+        redis_url, protocol=2, legacy_responses=legacy_responses
+    ) as client:
         preview = migrate_index_ownership(
             store.index.name, source_config=store.config, redis_client=client
         )
@@ -127,7 +133,12 @@ def test_migration_supports_resp2(
 
         assert (preview.schema_action, preview.would_update) == ("alter", 1)
         assert (result.updated, result.completed) == (1, True)
-        assert client.hget(key, "_index_name") == hashify(store.index.name).encode()
+        if storage_type == "json":
+            assert client.json().get(key, "$._index_name") == [
+                hashify(store.index.name)
+            ]
+        else:
+            assert client.hget(key, "_index_name") == hashify(store.index.name).encode()
 
 
 @pytest.mark.parametrize("dry_run", [True, False], ids=["preview", "apply"])
@@ -345,6 +356,7 @@ def test_aliases_rejects_a_bare_string_before_mutation(
     assert client.hgetall(key) == before
 
 
+@pytest.mark.parametrize("legacy_responses", [True, False])
 @pytest.mark.parametrize(
     "root",
     [
@@ -358,9 +370,11 @@ def test_aliases_rejects_a_bare_string_before_mutation(
 @pytest.mark.parametrize("dry_run", [True, False], ids=["preview", "apply"])
 def test_json_nonobject_roots_are_rejected_before_mutation(
     client: Redis,
+    redis_url: str,
     make_legacy_store: Callable[..., RedisVectorStore],
     root: Any,
     dry_run: bool,
+    legacy_responses: bool,
 ) -> None:
     store = make_legacy_store("json", marker_type="text")
     name = store.index.name
@@ -372,16 +386,22 @@ def test_json_nonobject_roots_are_rejected_before_mutation(
         set(keys)
     )
 
-    with pytest.raises(ValueError):
+    with (
+        Redis.from_url(
+            redis_url, protocol=2, legacy_responses=legacy_responses
+        ) as migration_client,
+        pytest.raises(ValueError) as exc,
+    ):
         migrate_index_ownership(
             name,
-            redis_client=client,
+            redis_client=migration_client,
             source_schema=store.config.to_index_schema(),
             aliases=[],
             dry_run=dry_run,
             batch_size=1,
         )
 
+    assert keys[1] in str(exc.value)
     assert convert_bytes(client.ft(name).info())["attributes"] == attributes
     assert client.exists(*keys) == len(keys)
     assert [client.json().get(key) for key in keys] == before
