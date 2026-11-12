@@ -1,5 +1,5 @@
 import math
-import os
+from pathlib import Path
 from typing import List, Optional, Tuple, Union, cast
 
 import pytest
@@ -119,9 +119,6 @@ def test_redis_from_existing(texts: List[str], redis_url: str) -> None:
         storage_type="json",
     )
 
-    # write schema for the next test
-    vector_store.index.schema.to_yaml("test_schema_json.yml")
-
     # Test creating from an existing index
     vector_store2 = RedisVectorStore(
         get_embeddings_for_tests(),
@@ -131,6 +128,8 @@ def test_redis_from_existing(texts: List[str], redis_url: str) -> None:
     )
     output = vector_store2.similarity_search("foo", k=1, return_metadata=False)
     assert output == TEST_SINGLE_RESULT
+    # Clean up
+    vector_store.index.delete(drop=True)
 
 
 def test_redis_from_existing_with_class_method(
@@ -148,9 +147,6 @@ def test_redis_from_existing_with_class_method(
         storage_type="json",
     )
 
-    # write schema for the next test
-    vector_store.index.schema.to_yaml("test_schema_json.yml")
-
     # Test creating from an existing
     vector_store2 = RedisVectorStore.from_existing_index(
         index_name=index_name,
@@ -159,28 +155,37 @@ def test_redis_from_existing_with_class_method(
     )
     output = vector_store2.similarity_search("foo", k=1, return_metadata=False)
     assert output == TEST_SINGLE_RESULT
+    # Clean up
+    vector_store.index.delete(drop=True)
 
 
-def test_redis_add_texts_to_existing(redis_url: str) -> None:
-    """Test adding a new document"""
-    # Test creating from an existing with yaml from file
-    vector_store = RedisVectorStore(
+def test_redis_add_texts_to_existing(
+    texts: List[str], redis_url: str, tmp_path: Path
+) -> None:
+    """Test adding texts to an existing index loaded from a schema file."""
+    index_name = f"test_index_{str(ULID())}"
+    vector_store = RedisVectorStore.from_texts(
+        texts,
         get_embeddings_for_tests(),
-        index_name=TEST_INDEX_NAME,
+        index_name=index_name,
         redis_url=redis_url,
-        schema_path="test_schema_json.yml",
         storage_type="json",
     )
-    vector_store.add_texts(["foo"])
-    output = vector_store.similarity_search("foo", k=2, return_metadata=False)
-    # Just check that we get at least one result with the right content
-    assert len(output) > 0
-    for doc in output:
-        assert doc.page_content == "foo"
-        # Metadata should be empty because return_metadata=False
-        assert doc.metadata == {}
-    # remove the test_schema.yml file
-    os.remove("test_schema_json.yml")
+    schema_path = str(tmp_path / "schema.yml")
+    vector_store.index.schema.to_yaml(schema_path)
+
+    # Reopen the existing index from the schema file and add to it
+    existing = RedisVectorStore(
+        get_embeddings_for_tests(),
+        redis_url=redis_url,
+        schema_path=schema_path,
+    )
+    existing.add_texts(["foo"])
+
+    count = existing.index.query(CountQuery(FilterExpression("*")))
+    assert count == len(texts) + 1
+    output = existing.similarity_search("foo", k=2, return_metadata=False)
+    assert output == TEST_RESULT
 
     # Clean up
     vector_store.index.delete(drop=True)
@@ -364,13 +369,11 @@ def test_similarity_search_returns_keys(redis_url: str) -> None:
     "filter_expr, expected_length, expected_nums",
     [
         (Text("val") == "foo", 1, None),
-        (Text("val") == "foo", 1, None),
         (Text("val") % "ba*", 2, ["bar", "baz"]),
         (Num("num") > 2, 1, [3]),
         (Num("num") < 2, 1, [1]),
         (Num("num") >= 2, 2, [2, 3]),
         (Num("num") <= 2, 2, [1, 2]),
-        (Num("num") != 2, 2, [1, 3]),
         (Num("num") != 2, 2, [1, 3]),
         (Tag("category") == "a", 3, None),
         (Tag("category") == "b", 2, None),
@@ -379,14 +382,12 @@ def test_similarity_search_returns_keys(redis_url: str) -> None:
     ],
     ids=[
         "text-filter-equals-foo",
-        "alternative-text-equals-foo",
-        "text-filter-fuzzy-match-ba",
+        "text-filter-like-prefix-ba",
         "number-filter-greater-than-2",
         "number-filter-less-than-2",
         "number-filter-greater-equals-2",
         "number-filter-less-equals-2",
         "number-filter-not-equals-2",
-        "alternative-number-not-equals-2",
         "tag-filter-equals-a",
         "tag-filter-equals-b",
         "tag-filter-equals-c",
@@ -441,13 +442,11 @@ def test_redis_similarity_search_with_filters(
     "filter_expr, expected_length, expected_nums",
     [
         (Text("val") == "foo", 1, None),
-        (Text("val") == "foo", 1, None),
         (Text("val") % "ba*", 2, ["bar", "baz"]),
         (Num("num") > 2, 1, [3]),
         (Num("num") < 2, 1, [1]),
         (Num("num") >= 2, 2, [2, 3]),
         (Num("num") <= 2, 2, [1, 2]),
-        (Num("num") != 2, 2, [1, 3]),
         (Num("num") != 2, 2, [1, 3]),
         (Tag("category") == "a", 3, None),
         (Tag("category") == "b", 2, None),
@@ -456,14 +455,12 @@ def test_redis_similarity_search_with_filters(
     ],
     ids=[
         "text-filter-equals-foo",
-        "alternative-text-equals-foo",
-        "text-filter-fuzzy-match-ba",
+        "text-filter-like-prefix-ba",
         "number-filter-greater-than-2",
         "number-filter-less-than-2",
         "number-filter-greater-equals-2",
         "number-filter-less-equals-2",
         "number-filter-not-equals-2",
-        "alternative-number-not-equals-2",
         "tag-filter-equals-a",
         "tag-filter-equals-b",
         "tag-filter-equals-c",
@@ -1110,7 +1107,6 @@ def test_large_batch(redis_url: str) -> None:
         index_name=index_name,
         key_prefix="tst19",
         redis_url=redis_url,
-        ids=[str(ULID) for _ in range(len(texts))],
         storage_type="json",
     )
 
@@ -1514,7 +1510,9 @@ def test_redis_vector_store_with_preconfigured_config_with_redis_client(
 ) -> None:
     redis_client = Redis.from_url(redis_url)
     config = RedisConfig(
-        index_name=f"test_index_{str(ULID())}", redis_client=redis_client
+        index_name=f"test_index_{str(ULID())}",
+        redis_client=redis_client,
+        storage_type="json",
     )
     vector_store = RedisVectorStore(get_embeddings_for_tests(), config=config)
     vector_store.add_texts(texts)
@@ -1531,12 +1529,12 @@ def test_redis_vector_store_with_preconfigured_redis_client(
     redis_url: str, texts: List[str]
 ) -> None:
     redis_client = Redis.from_url(redis_url)
-    config = RedisConfig(
+    vector_store = RedisVectorStore(
+        get_embeddings_for_tests(),
         index_name=f"test_index_{str(ULID())}",
         redis_client=redis_client,
         storage_type="json",
     )
-    vector_store = RedisVectorStore(get_embeddings_for_tests(), config=config)
     vector_store.add_texts(texts)
 
     count_query = CountQuery(FilterExpression("*"))

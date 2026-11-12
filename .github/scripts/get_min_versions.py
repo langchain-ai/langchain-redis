@@ -52,7 +52,7 @@ def get_min_version_from_toml(toml_path: str):
             # Get the version string
             version_string = dependencies[lib]
 
-            # Use parse_version to get the minimum supported version from version_string
+            # Use get_min_version to get the minimum supported version from version_string
             min_version = get_min_version(version_string)
 
             # Store the minimum version in the min_versions dictionary

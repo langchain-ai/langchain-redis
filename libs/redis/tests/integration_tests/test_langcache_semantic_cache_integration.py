@@ -154,26 +154,25 @@ class TestLangCacheSemanticCacheIntegrationWithAttributes:
         await langcache_with_attrs.aclear()
         assert await langcache_with_attrs.alookup(prompt, llm_string) is None
 
-    @pytest.mark.requires_api_keys
-    class TestLangCacheSemanticCacheIntegrationWithoutAttributes:
-        def test_update_errors_when_no_attributes_configured(
-            self, langcache_no_attrs: LangCacheSemanticCache
-        ) -> None:
-            """update() should raise if attributes are not configured on the cache."""
 
-            prompt = "Attributes not configured (sync)"
-            llm_string = "langchain-redis/tests:no-attributes:sync"
+@pytest.mark.requires_api_keys
+class TestLangCacheSemanticCacheIntegrationWithoutAttributes:
+    def test_update_errors_when_no_attributes_configured(
+        self, langcache_no_attrs: LangCacheSemanticCache
+    ) -> None:
+        """update() should raise if attributes are not configured on the cache."""
 
-            with pytest.raises(RuntimeError) as exc:
-                langcache_no_attrs.update(
-                    prompt,
-                    llm_string,
-                    [Generation(text="This should not be stored.")],
-                )
+        prompt = "Attributes not configured (sync)"
+        llm_string = "langchain-redis/tests:no-attributes:sync"
 
-            assert (
-                "attributes are not configured for this cache" in str(exc.value).lower()
+        with pytest.raises(RuntimeError) as exc:
+            langcache_no_attrs.update(
+                prompt,
+                llm_string,
+                [Generation(text="This should not be stored.")],
             )
+
+        assert "attributes are not configured for this cache" in str(exc.value).lower()
 
     def test_lookup_errors_when_no_attributes_configured(
         self, langcache_no_attrs: LangCacheSemanticCache
