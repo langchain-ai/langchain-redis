@@ -1,3 +1,5 @@
+import logging
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -185,3 +187,75 @@ class TestRedisChatMessageHistoryMinimal:
             history = RedisChatMessageHistory(session_id="test_session")
             with pytest.raises(ValueError, match="Message cannot be None"):
                 history.add_messages([HumanMessage(content="hi"), None])  # type: ignore
+
+
+# FT.INFO ``index_definition`` as returned by redis-py 7 and 8, plus an
+# undecoded (decode_responses=False) flat list.
+_INDEX_DEFINITIONS = {
+    "redis-py 7 flat list": [
+        "key_type",
+        "JSON",
+        "prefixes",
+        ["chat:"],
+        "default_score",
+        "1",
+    ],
+    "redis-py 8 dict": {
+        "key_type": "JSON",
+        "prefixes": ["chat:"],
+        "default_score": "1",
+    },
+    "bytes flat list": [
+        b"key_type",
+        b"JSON",
+        b"prefixes",
+        [b"chat:"],
+        b"default_score",
+        b"1",
+    ],
+}
+
+
+class TestExistingIndexPrefixCheck:
+    """The prefix-conflict check must parse every FT.INFO reply shape."""
+
+    @pytest.mark.parametrize(
+        "index_definition",
+        list(_INDEX_DEFINITIONS.values()),
+        ids=list(_INDEX_DEFINITIONS),
+    )
+    @pytest.mark.parametrize(
+        ("key_prefix", "expect_warning"),
+        [("chat:", False), ("custom_app:", True)],
+    )
+    def test_prefix_check_handles_reply_shape(
+        self,
+        index_definition: Any,
+        key_prefix: str,
+        expect_warning: bool,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        with (
+            patch("langchain_redis.chat_message_history.SearchIndex") as search_index,
+            patch("redis.Redis.from_url"),
+            caplog.at_level(logging.WARNING, logger="langchain_redis"),
+        ):
+            index = search_index.from_dict.return_value
+            index.info.return_value = {
+                "index_name": "chat_history",
+                "index_definition": index_definition,
+            }
+            RedisChatMessageHistory(session_id="test_session", key_prefix=key_prefix)
+
+        index.create.assert_called_once_with(overwrite=False)
+        warnings = [
+            r.getMessage()
+            for r in caplog.records
+            if "already exists with different key prefix" in r.getMessage()
+        ]
+        if expect_warning:
+            assert len(warnings) == 1
+            assert "['chat:']" in warnings[0]
+            assert "custom_app:" in warnings[0]
+        else:
+            assert warnings == []

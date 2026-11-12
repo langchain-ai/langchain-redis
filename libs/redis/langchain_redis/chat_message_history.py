@@ -17,6 +17,7 @@ from redisvl.exceptions import RedisSearchError  # type: ignore
 from redisvl.index import SearchIndex  # type: ignore
 from redisvl.query import CountQuery, FilterQuery, TextQuery  # type: ignore
 from redisvl.query.filter import Tag  # type: ignore
+from redisvl.redis.connection import normalize_index_definition  # type: ignore
 from ulid import ULID
 
 from langchain_redis.version import __full_lib_name__
@@ -194,16 +195,11 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         if not self.overwrite_index:
             try:
                 existing_info = self.index.info()
-                index_definition = existing_info.get("index_definition", [])
-
-                # Parse the index_definition list to find prefixes
-                existing_prefixes = []
-                try:
-                    prefixes_index = index_definition.index("prefixes") + 1
-                    existing_prefixes = index_definition[prefixes_index]
-                except (ValueError, IndexError):
-                    # Could not find prefixes in the definition
-                    pass
+                # FT.INFO's index_definition is a flat list on redis-py 7 and
+                # a dict on redis-py 8; RedisVL normalizes both to a dict.
+                existing_prefixes = (
+                    normalize_index_definition(existing_info).get("prefixes") or []
+                )
 
                 if existing_prefixes and self.key_prefix not in existing_prefixes:
                     logger.warning(
