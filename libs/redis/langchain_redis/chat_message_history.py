@@ -17,6 +17,7 @@ from redisvl.exceptions import RedisSearchError  # type: ignore
 from redisvl.index import SearchIndex  # type: ignore
 from redisvl.query import CountQuery, FilterQuery, TextQuery  # type: ignore
 from redisvl.query.filter import Tag  # type: ignore
+from redisvl.redis.connection import normalize_index_definition  # type: ignore
 from ulid import ULID
 
 from langchain_redis.version import __full_lib_name__
@@ -193,32 +194,13 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
         # Check if index already exists and detect prefix conflicts
         if not self.overwrite_index:
             try:
-                existing_info = self.index.info()
-                index_definition = existing_info.get("index_definition", [])
-
-                # Parse the index definition to find prefixes. Its shape
-                # depends on the Redis protocol: under RESP2 (protocol 2)
-                # FT.INFO returns a flat list, e.g.
-                # ["key_type", "JSON", "prefixes", ["chat:"], ...], while
-                # under RESP3 (redis-py 8, protocol 3) it returns a dict,
-                # e.g. {"key_type": "JSON", "prefixes": ["chat:"], ...}.
-                # Calling .index("prefixes") on the dict raised
-                # AttributeError and broke every later instance, so handle
-                # both shapes; the prefix warning below must still work
-                # on RESP3, not be silently skipped.
-                existing_prefixes: List[str] = []
-                if isinstance(index_definition, dict):
-                    prefixes = index_definition.get("prefixes", []) or []
-                    existing_prefixes = (
-                        [prefixes] if isinstance(prefixes, str) else list(prefixes)
-                    )
-                elif isinstance(index_definition, list):
-                    try:
-                        prefixes_index = index_definition.index("prefixes") + 1
-                        existing_prefixes = index_definition[prefixes_index]
-                    except (ValueError, IndexError):
-                        # Could not find prefixes in the definition
-                        pass
+                # normalize_index_definition returns the FT.INFO index
+                # definition as a dict, handling both the RESP2 flat-list
+                # shape and the RESP3 dict shape, so the prefix check below
+                # works on both protocols.
+                existing_prefixes = (
+                    normalize_index_definition(self.index.info()).get("prefixes") or []
+                )
 
                 if existing_prefixes and self.key_prefix not in existing_prefixes:
                     logger.warning(
