@@ -154,7 +154,7 @@ class RedisChatMessageHistory(BaseChatMessageHistory):
             # In newer Redis-py versions, we can set a default pubsub_configs
             self.redis_client.pubsub_configs = {"push_handler_func": _noop_push_handler}
         try:
-            self.redis_client.client_setinfo("LIB-NAME", __full_lib_name__)  # type: ignore
+            self.redis_client.client_setinfo("LIB-NAME", __full_lib_name__)
         except ResponseError:
             # Fall back to a simple log echo
             self.redis_client.echo(__full_lib_name__)

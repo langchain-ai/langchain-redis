@@ -502,9 +502,7 @@ class RedisVectorStore(VectorStore):
                 for field in self.config.metadata_schema:
                     if field["type"] == "tag":
                         # Ensure a default separator is present
-                        if "attrs" not in field or "separator" not in field.get(
-                            "attrs", {}
-                        ):
+                        if "separator" not in field.get("attrs", {}):
                             updated_field = field.copy()
                             updated_field.setdefault("attrs", {})["separator"] = (
                                 self.config.default_tag_separator
@@ -747,10 +745,7 @@ class RedisVectorStore(VectorStore):
 
         # Check if schema has _index_name and _metadata_json fields
         index_name_field = self._index.schema.fields.get(_INDEX_NAME_FIELD)
-        has_metadata_json_field = any(
-            field.name == "_metadata_json"
-            for field in self._index.schema.fields.values()
-        )
+        has_metadata_json_field = "_metadata_json" in self._index.schema.fields
 
         # Build records to load to SearchIndex
         records = []
@@ -900,9 +895,7 @@ class RedisVectorStore(VectorStore):
             metadatas = [{} for _ in range(len(texts))]
 
         vector_store = cls(embeddings=embedding, config=config, **kwargs)
-        out_keys = vector_store.add_texts(  # type: ignore
-            texts, metadatas, keys, batch_size=batch_size
-        )
+        out_keys = vector_store.add_texts(texts, metadatas, keys, batch_size=batch_size)
 
         if return_keys:
             return cast(RedisVectorStore, (vector_store, out_keys))
@@ -1433,7 +1426,7 @@ class RedisVectorStore(VectorStore):
         embedding: Union[List[float], bytes],
         filter_expression: FilterExpression,
         k: int = 10,
-        distance_threshold: Any = None,
+        distance_threshold: Optional[float] = None,
         sort_by: Optional[str] = None,
         return_fields: Optional[List[str]] = None,
     ) -> Union[VectorQuery, RangeQuery]:
@@ -1491,14 +1484,7 @@ class RedisVectorStore(VectorStore):
         return_fields = []
 
         if not return_all:
-            return_fields = [self.config.content_field]
-            if return_metadata:
-                return_fields += [
-                    field.name
-                    for field in self._index.schema.fields.values()
-                    if field.name
-                    not in [self.config.embedding_field, self.config.content_field]
-                ]
+            return_fields = self._default_return_fields(return_metadata)
 
         query = self._query_builder(
             distance_threshold=distance_threshold,
@@ -1865,13 +1851,12 @@ class RedisVectorStore(VectorStore):
 
     def _extract_metadata_from_result(self, res: Dict[str, Any]) -> Dict[str, Any]:
         """Get metadata fields from a search result without `_metadata_json`."""
-        metadata = {}
+        metadata: Dict[str, Any] = {}
         # Extract all fields except for special ones
         for key, value in res.items():
             if (
                 key != self.config.content_field
                 and key != self.config.embedding_field
-                and key != "_index_name"
                 and not key.startswith("_")
             ):
                 # Try to convert string numbers to their native types
@@ -1880,14 +1865,14 @@ class RedisVectorStore(VectorStore):
                     try:
                         # Try to convert to int first
                         if value.isdigit():
-                            metadata[key] = int(value)  # type: ignore
+                            metadata[key] = int(value)
                         # Then try float
                         elif value.replace(".", "", 1).isdigit():
-                            metadata[key] = float(value)  # type: ignore
+                            metadata[key] = float(value)
                         else:
-                            metadata[key] = value  # type: ignore
+                            metadata[key] = value
                     except (ValueError, TypeError):
-                        metadata[key] = value  # type: ignore
+                        metadata[key] = value
                 else:
                     metadata[key] = value
         return metadata
@@ -1926,12 +1911,12 @@ class RedisVectorStore(VectorStore):
 
         return docs
 
-    def convert_vector(self, obj: dict) -> List[float]:
+    def convert_vector(self, obj: Dict[str, Any]) -> List[float]:
         vector = obj.get(self.config.embedding_field)
         if isinstance(vector, bytes):
-            vector = buffer_to_array(vector, dtype=self.config.vector_datatype)  # type: ignore
+            vector = buffer_to_array(vector, dtype=self.config.vector_datatype)
         if isinstance(vector, str):
-            vector = ast.literal_eval(vector)  # type: ignore
+            vector = ast.literal_eval(vector)
 
         return vector  # type: ignore[return-value]
 
@@ -2038,14 +2023,7 @@ class RedisVectorStore(VectorStore):
         return_fields = []
 
         if not return_all:
-            return_fields = [self.config.content_field]
-            if return_metadata:
-                return_fields += [
-                    field.name
-                    for field in self._index.schema.fields.values()
-                    if field.name
-                    not in [self.config.embedding_field, self.config.content_field]
-                ]
+            return_fields = self._default_return_fields(return_metadata)
 
             if with_vectors:
                 return_fields.append(self.config.embedding_field)
@@ -2339,42 +2317,25 @@ class RedisVectorStore(VectorStore):
         values = self._fetch_records_by_keys(full_ids)
         documents = []
         for id_, value in zip(ids, values):
-            if value is None or not value:
+            if not value:
                 continue
-            doc = value
-            if not self._record_belongs_to_index(doc, expected_marker):
+            if not self._record_belongs_to_index(value, expected_marker):
                 continue
-            # Process metadata the same way we do in _build_document_from_result
-            metadata = {}
-            if "_metadata_json" in doc:
-                try:
-                    # Try to parse the JSON metadata
-                    metadata = json.loads(doc["_metadata_json"])
-                except (json.JSONDecodeError, TypeError):
-                    # Fall back to extracting metadata fields from result directly
-                    metadata = {
-                        k: v
-                        for k, v in doc.items()
-                        if k != self.config.content_field
-                        and k != self.config.embedding_field
-                        and k != "_index_name"
-                        and not k.startswith("_")
-                    }
-            else:
-                # Fall back to extracting metadata fields from doc directly
+            try:
+                metadata = json.loads(value["_metadata_json"])
+            except (KeyError, json.JSONDecodeError, TypeError):
+                # Missing or unparsable `_metadata_json`: use the record's fields
                 metadata = {
                     k: v
-                    for k, v in doc.items()
+                    for k, v in value.items()
                     if k != self.config.content_field
                     and k != self.config.embedding_field
-                    and k != "_index_name"
                     and not k.startswith("_")
                 }
-
             documents.append(
                 Document(
                     id=id_,
-                    page_content=doc[self.config.content_field],
+                    page_content=value[self.config.content_field],
                     metadata=metadata,
                 )
             )

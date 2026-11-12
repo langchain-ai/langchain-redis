@@ -77,6 +77,25 @@ def _hash_llm_string(llm_string: str) -> str:
     return hashlib.md5(llm_string.encode()).hexdigest()
 
 
+def _serialize_generations(return_val: RETURN_VAL_TYPE) -> str:
+    """Serialize generations into the JSON string stored by the semantic caches."""
+    return json.dumps([dumps(gen) for gen in return_val])
+
+
+def _get_redis_client(redis_url: str, redis_client: Optional[Redis]) -> Redis:
+    """Return `redis_client` if provided, otherwise connect to `redis_url`."""
+    if redis_client is not None:
+        return redis_client
+    if redis_url.startswith("redis+sentinel://"):
+        # For Sentinel URLs, use RedisVL's connection factory
+        from redisvl.redis.connection import (  # type: ignore[import-untyped]
+            RedisConnectionFactory,
+        )
+
+        return RedisConnectionFactory.get_redis_connection(redis_url=redis_url)
+    return Redis.from_url(redis_url)
+
+
 class EmbeddingsVectorizer(BaseVectorizer):
     embeddings: Embeddings = Field(...)
     model: str = Field(default="custom_embeddings")
@@ -183,22 +202,10 @@ class RedisCache(BaseCache):
         prefix: Optional[str] = "redis",
         redis_client: Optional[Redis] = None,
     ):
-        if redis_client is not None:
-            self.redis = redis_client
-        elif redis_url.startswith("redis+sentinel://"):
-            # For Sentinel URLs, use RedisVL's connection factory
-            from redisvl.redis.connection import (  # type: ignore[import-untyped]
-                RedisConnectionFactory,
-            )
-
-            self.redis = RedisConnectionFactory.get_redis_connection(
-                redis_url=redis_url
-            )
-        else:
-            self.redis = Redis.from_url(redis_url)
+        self.redis = _get_redis_client(redis_url, redis_client)
 
         try:
-            self.redis.client_setinfo("LIB-NAME", __full_lib_name__)  # type: ignore
+            self.redis.client_setinfo("LIB-NAME", __full_lib_name__)
         except ResponseError:
             # Fall back to a simple log echo
             self.redis.echo(__full_lib_name__)
@@ -436,7 +443,7 @@ class RedisSemanticCache(BaseCache):
         prefix: Optional[str] = _DEFAULT_CACHE_PREFIX,
         redis_client: Optional[Redis] = None,
     ):
-        self.redis = self._get_redis_client(redis_url, redis_client)
+        self.redis = _get_redis_client(redis_url, redis_client)
         self.embeddings = embeddings
         self.prefix = prefix
         vectorizer = EmbeddingsVectorizer(embeddings=self.embeddings)
@@ -462,20 +469,6 @@ class RedisSemanticCache(BaseCache):
                 "Upgrade it by calling RedisSemanticCache.migrate_index() with the "
                 "same connection, name and prefix."
             ) from e
-
-    @staticmethod
-    def _get_redis_client(redis_url: str, redis_client: Optional[Redis]) -> Redis:
-        """Return `redis_client` if provided, otherwise connect to `redis_url`."""
-        if redis_client is not None:
-            return redis_client
-        if redis_url.startswith("redis+sentinel://"):
-            # For Sentinel URLs, use RedisVL's connection factory
-            from redisvl.redis.connection import (  # type: ignore[import-untyped]
-                RedisConnectionFactory,
-            )
-
-            return RedisConnectionFactory.get_redis_connection(redis_url=redis_url)
-        return Redis.from_url(redis_url)
 
     @staticmethod
     def _get_cache_name(name: Optional[str], prefix: Optional[str]) -> Optional[str]:
@@ -570,7 +563,7 @@ class RedisSemanticCache(BaseCache):
             - Skipped entries are left in place.
             - Entries that an earlier version already overwrote cannot be recovered.
         """
-        client = cls._get_redis_client(redis_url, redis_client)
+        client = _get_redis_client(redis_url, redis_client)
         cache_name = cls._get_cache_name(name, prefix)
         index = SearchIndex.from_existing(cache_name, redis_client=client)
 
@@ -719,7 +712,12 @@ class RedisSemanticCache(BaseCache):
                 Tag(_LLM_STRING_HASH_FIELD_NAME) == _hash_llm_string(llm_string)
             ),
         )
+        return self._process_lookup_results(results, llm_string)
 
+    def _process_lookup_results(
+        self, results: List[Any], llm_string: str
+    ) -> Optional[RETURN_VAL_TYPE]:
+        """Deserialize the first result cached for `llm_string`, or return `None`."""
         if results:
             for result in results:
                 if result.get("metadata", {}).get("llm_string") == llm_string:
@@ -783,7 +781,7 @@ class RedisSemanticCache(BaseCache):
             - The effectiveness of the cache depends on the quality of the embedding
                 function used.
         """
-        serialized_response = json.dumps([dumps(gen) for gen in return_val])
+        serialized_response = _serialize_generations(return_val)
         vector = self.cache._vectorize_prompt(prompt)
 
         self.cache.store(
@@ -847,13 +845,6 @@ class RedisSemanticCache(BaseCache):
                 changed significantly.
         """
         self.cache.clear()
-
-    def _key(self, prompt: str, llm_string: str) -> str:
-        """Create a key for the cache."""
-
-        prompt_hash = hashlib.md5(prompt.encode()).hexdigest()
-        llm_string_hash = hashlib.md5(llm_string.encode()).hexdigest()
-        return f"{self.prefix}:{prompt_hash}:{llm_string_hash}"
 
     def name(self) -> str:
         """Get the name of the semantic cache index.
@@ -919,18 +910,7 @@ class RedisSemanticCache(BaseCache):
                 Tag(_LLM_STRING_HASH_FIELD_NAME) == _hash_llm_string(llm_string)
             ),
         )
-
-        if results:
-            for result in results:
-                if result.get("metadata", {}).get("llm_string") == llm_string:
-                    try:
-                        return [
-                            loads(gen_str, allowed_objects="core")
-                            for gen_str in json.loads(result.get("response"))
-                        ]
-                    except (json.JSONDecodeError, TypeError):
-                        return None
-        return None
+        return self._process_lookup_results(results, llm_string)
 
     async def aupdate(
         self, prompt: str, llm_string: str, return_val: RETURN_VAL_TYPE
@@ -955,7 +935,7 @@ class RedisSemanticCache(BaseCache):
 
                 The value is a list of `Generation` objects (or subclasses).
         """
-        serialized_response = json.dumps([dumps(gen) for gen in return_val])
+        serialized_response = _serialize_generations(return_val)
         vector = await self.cache._avectorize_prompt(prompt)
 
         await self.cache.astore(
@@ -1071,7 +1051,7 @@ class LangCacheSemanticCache(BaseCache):
                 ) from e
 
         # Instantiate the LangCache wrapper; it will validate cache_id/api_key
-        self.cache: Any = RVLLangCacheSemanticCache(
+        self.cache = RVLLangCacheSemanticCache(
             name=self._cache_name,
             server_url=server_url or _DEFAULT_LANGCACHE_SERVER_URL,
             cache_id=cache_id,
@@ -1114,7 +1094,7 @@ class LangCacheSemanticCache(BaseCache):
 
     def update(self, prompt: str, llm_string: str, return_val: RETURN_VAL_TYPE) -> None:
         """Store using LangCache's store API via redisvl wrapper."""
-        serialized_response = json.dumps([dumps(gen) for gen in return_val])
+        serialized_response = _serialize_generations(return_val)
         # LangCacheSemanticCache ignores per-entry TTL; it uses cache-level TTL if set
         self.cache.store(
             prompt=prompt,
@@ -1144,7 +1124,7 @@ class LangCacheSemanticCache(BaseCache):
         self, prompt: str, llm_string: str, return_val: RETURN_VAL_TYPE
     ) -> None:
         """Async store using LangCache's astore API via redisvl wrapper."""
-        serialized_response = json.dumps([dumps(gen) for gen in return_val])
+        serialized_response = _serialize_generations(return_val)
         await self.cache.astore(
             prompt=prompt,
             response=serialized_response,
