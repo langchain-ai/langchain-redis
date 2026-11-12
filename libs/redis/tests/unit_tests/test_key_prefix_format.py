@@ -20,8 +20,8 @@ class TestKeyPrefixFormat:
     def test_double_colon_in_generated_keys(self, mock_search_index: MagicMock) -> None:
         """Verify the historical double-colon key format.
 
-        A schema with prefix="myprefix:" generates keys like
-        "myprefix::doc_id" because RedisVL adds its own key separator.
+        A schema with prefix="test_prefix:" generates keys like
+        "test_prefix::doc_id" because RedisVL adds its own key separator.
         """
         mock_embeddings = MagicMock()
         mock_embeddings.embed_query.return_value = [0.1] * 768

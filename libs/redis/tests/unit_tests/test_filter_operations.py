@@ -1,4 +1,5 @@
-"""Unit tests for filter-based deletion on RedisVectorStore."""
+"""Unit tests for filter-based deletion, index-ownership scoping, and direct-id
+operations on RedisVectorStore."""
 
 import json
 from types import SimpleNamespace

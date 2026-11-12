@@ -2,7 +2,7 @@ from typing import Any, Dict, List, Optional, Type, Union
 
 from pydantic import BaseModel, ConfigDict, Field, SkipValidation, model_validator
 from redis import Redis
-from redisvl.schema import IndexSchema, StorageType  # type: ignore[import]
+from redisvl.schema import IndexSchema  # type: ignore[import]
 from redisvl.utils.utils import create_ulid  # type: ignore[import]
 from typing_extensions import Annotated, Self
 
@@ -161,7 +161,7 @@ class RedisConfig(BaseModel):
         if schema is None:
             schema = values.get("index_schema")
         options = [
-            values.get("index_schema"),
+            schema,
             values.get("schema_path"),
             values.get("metadata_schema"),
         ]
@@ -292,6 +292,10 @@ class RedisConfig(BaseModel):
             RedisConfig: A new instance of `RedisConfig` configured based on the
                 provided schema and kwargs.
 
+        Raises:
+            ValueError: If `metadata_schema` (even an empty list) or `schema_path`
+                is also passed. The schema is the only schema source.
+
         Example:
             ```python
             from redisvl.schema import IndexSchema
@@ -330,15 +334,11 @@ class RedisConfig(BaseModel):
             - The resulting config can be used to ensure that a `RedisVectorStore`
                 matches an existing index structure.
         """
-        if schema.index.storage_type == StorageType.HASH:
-            storage_type = "hash"
-        else:
-            storage_type = "json"
         return cls(
             schema=schema,
             index_name=schema.index.name,
             key_prefix=schema.index.prefix,
-            storage_type=storage_type,
+            storage_type=schema.index.storage_type.value,
             **kwargs,
         )
 
@@ -649,9 +649,6 @@ class RedisConfig(BaseModel):
                 )
             else:
                 # For standard URLs, use Redis.from_url
-                if self.connection_args is not None:
-                    return Redis.from_url(self.redis_url, **self.connection_args)
-                else:
-                    return Redis.from_url(self.redis_url)
+                return Redis.from_url(self.redis_url, **(self.connection_args or {}))
         else:
             raise ValueError("Either redis_client or redis_url must be provided")

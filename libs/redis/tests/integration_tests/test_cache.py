@@ -47,6 +47,13 @@ def openai_embeddings() -> Embeddings:
     return get_embeddings_for_tests()
 
 
+@pytest.fixture(autouse=True)
+def reset_llm_cache() -> Generator[None, None, None]:
+    """Reset the global LLM cache that tests and fixtures set via set_llm_cache."""
+    yield
+    set_llm_cache(None)
+
+
 @pytest.fixture
 def redis_cache(redis_url: str) -> Generator[RedisCache, None, None]:
     cache = RedisCache(redis_url=redis_url, ttl=3600)  # Set TTL to 1 hour
@@ -229,7 +236,7 @@ def test_set_llm(openai_embeddings: Embeddings, redis_url: str) -> None:
         embeddings=openai_embeddings,
         distance_threshold=0.1,  # Stricter similarity threshold
         ttl=3600,  # 1 hour TTL
-        name="custom_cache",  # Custom cache name
+        name=f"custom_cache_{str(ULID())}",  # Custom cache name
     )
 
     # Use FakeListLLM instead of ChatOpenAI to avoid API issues
@@ -238,13 +245,15 @@ def test_set_llm(openai_embeddings: Embeddings, redis_url: str) -> None:
 
     # Test the custom semantic cache
     set_llm_cache(custom_semantic_cache)
+    try:
+        test_prompt = "What's the largest planet in our solar system?"
+        result = llm.invoke(test_prompt)
 
-    test_prompt = "What's the largest planet in our solar system?"
-    result = llm.invoke(test_prompt)
+        # Try a slightly different query that should hit the semantic cache
+        similar_test_prompt = "Which planet is the biggest in the solar system?"
+        similar_result = llm.invoke(similar_test_prompt)
 
-    # Try a slightly different query that should hit the semantic cache
-    similar_test_prompt = "Which planet is the biggest in the solar system?"
-    similar_result = llm.invoke(similar_test_prompt)
-
-    # With semantic similarity, both should return the same result
-    assert result == similar_result
+        # With semantic similarity, both should return the same result
+        assert result == similar_result
+    finally:
+        custom_semantic_cache.cache.delete()
