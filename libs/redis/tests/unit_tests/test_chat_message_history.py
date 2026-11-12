@@ -1,3 +1,4 @@
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -235,7 +236,10 @@ class TestRedisChatMessageHistoryExistingIndex:
         ],
     )
     def test_index_definition_prefix_warning(
-        self, index_definition, should_warn, caplog: pytest.LogCaptureFixture
+        self,
+        index_definition: dict[str, Any] | list[Any],
+        should_warn: bool,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """The prefix-mismatch warning fires only when the prefix differs.
 
