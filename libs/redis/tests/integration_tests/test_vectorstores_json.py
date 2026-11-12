@@ -1321,27 +1321,6 @@ def test_similarity_search_with_score_by_vector_with_extra_fields(
         # different values depending on implementation details
         assert -2 <= score <= 2
 
-    # Test with_vectors=True
-    results_with_vectors = vector_store.similarity_search_with_score_by_vector(
-        query_embedding, k=2, with_vectors=True, return_all=True
-    )
-
-    assert len(results_with_vectors) == 2
-    for result in results_with_vectors:
-        doc, score, vector = result  # type: ignore[misc]
-        assert doc.page_content in texts
-        assert "indexed_metadata" in doc.metadata
-        assert "extra_field1" in doc.metadata
-        assert "extra_field2" in doc.metadata
-        assert isinstance(score, float)
-        # This assertion allows for negative scores in the test environment
-        # Cosine distance should be between 0 and 2, but the test vectors may produce
-        # different values depending on implementation details
-        assert -2 <= score <= 2
-        assert isinstance(vector, list)
-        assert len(vector) == 1536  # Assuming OpenAI embeddings
-        assert all(isinstance(v, float) for v in vector)
-
     # Clean up
     vector_store.index.delete(drop=True)
 

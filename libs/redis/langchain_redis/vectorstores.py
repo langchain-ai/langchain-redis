@@ -19,6 +19,7 @@ from typing import (
 )
 
 import numpy as np
+from langchain_core._api import warn_deprecated
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
@@ -46,6 +47,30 @@ from langchain_redis.version import __lib_name__
 
 Matrix = Union[List[List[float]], List[np.ndarray], np.ndarray]
 _INDEX_NAME_FIELD = "_index_name"
+
+
+def _drop_with_vectors(kwargs: Dict[str, Any]) -> None:
+    """Remove the deprecated `with_vectors` kwarg, warning if it was passed.
+
+    Each public search method that accepted `with_vectors` calls this on its
+    own `kwargs`. The first one called removes it, so a user gets one warning
+    per call. The warning points at the caller of that method.
+    """
+    if "with_vectors" not in kwargs:
+        return
+    del kwargs["with_vectors"]
+    warn_deprecated(
+        since="0.3.0",
+        removal="1.0.0",
+        message=(
+            "The `with_vectors` argument was deprecated in langchain-redis 0.3.0 "
+            "and will be removed in 1.0.0. It has no effect: "
+            "similarity_search_with_score() and "
+            "similarity_search_with_score_by_vector() return (Document, score) "
+            "pairs. To request a way to retrieve document vectors, open an "
+            "issue at https://github.com/langchain-ai/langchain-redis/issues."
+        ),
+    )
 
 
 def _find_unescaped(
@@ -2000,41 +2025,24 @@ class RedisVectorStore(VectorStore):
 
         return docs
 
-    def similarity_search_with_score_by_vector(
+    def _similarity_search_with_score_by_vector(
         self,
         embedding: List[float],
         k: int = 4,
         filter: Optional[FilterExpression] = None,
         sort_by: Optional[str] = None,
+        *,
+        with_vectors: bool = False,
         **kwargs: Any,
     ) -> Sequence[Any]:
-        """Return docs most similar to embedding vector.
+        """Run the vector query behind `similarity_search_with_score_by_vector`.
 
-        Args:
-            embedding: Embedding to look up documents similar to.
-            k: Number of `Document` objects to return.
-            filter: Optional RedisVL `FilterExpression` to apply.
-            sort_by: Optional `sort_by` expression to apply.
-            **kwargs: Other keyword arguments.
-
-                Common kwargs include:
-
-                - `with_vectors`: Whether to return document vectors.
-                    - Defaults to `False`.
-                - `return_metadata`: Whether to return metadata.
-                    - Defaults to `True`.
-                - `distance_threshold`: Optional distance threshold for filtering
-                    results.
-                - `return_all`: Whether to return all data in the Hash/JSON including
-                    non-indexed fields.
-                    - Defaults to `False`.
-
-        Returns:
-            List of tuples of `Document` objects most similar to the query vector,
-                score, and optionally the document vector.
+        Returns `(Document, distance)` pairs, or `(Document, distance, vector)`
+        triples with `with_vectors=True`. Only
+        `max_marginal_relevance_search_by_vector` needs the vectors, so the
+        public methods never pass it.
         """
         filter_expression = self._with_index_name_filter(filter)
-        with_vectors = kwargs.get("with_vectors", False)
         return_metadata = kwargs.get("return_metadata", True)
         distance_threshold = kwargs.get("distance_threshold")
         return_all = kwargs.get("return_all", False)
@@ -2117,14 +2125,54 @@ class RedisVectorStore(VectorStore):
 
         return docs_with_scores
 
-    def similarity_search_with_score(  # type: ignore[override]
+    def similarity_search_with_score_by_vector(
+        self,
+        embedding: List[float],
+        k: int = 4,
+        filter: Optional[FilterExpression] = None,
+        sort_by: Optional[str] = None,
+        **kwargs: Any,
+    ) -> List[Tuple[Document, float]]:
+        """Return docs most similar to embedding vector, along with scores.
+
+        Args:
+            embedding: Embedding to look up documents similar to.
+            k: Number of `Document` objects to return.
+            filter: Optional RedisVL `FilterExpression` to apply.
+            sort_by: Optional `sort_by` expression to apply.
+            **kwargs: Other keyword arguments.
+
+                Common kwargs include:
+
+                - `return_metadata`: Whether to return metadata.
+                    - Defaults to `True`.
+                - `distance_threshold`: Optional distance threshold for filtering
+                    results.
+                - `return_all`: Whether to return all data in the Hash/JSON including
+                    non-indexed fields.
+                    - Defaults to `False`.
+                - `with_vectors`: Deprecated and has no effect. Passing it emits a
+                    deprecation warning. It will be removed in 1.0.0.
+
+        Returns:
+            List of tuples of `(Document, score)` most similar to the query vector.
+        """
+        _drop_with_vectors(kwargs)
+        return cast(
+            List[Tuple[Document, float]],
+            self._similarity_search_with_score_by_vector(
+                embedding, k, filter, sort_by, **kwargs
+            ),
+        )
+
+    def similarity_search_with_score(
         self,
         query: str,
         k: int = 4,
         filter: Optional[FilterExpression] = None,
         sort_by: Optional[str] = None,
         **kwargs: Any,
-    ) -> Sequence[Any]:
+    ) -> List[Tuple[Document, float]]:
         r"""Return documents most similar to query string, along with scores.
 
         Args:
@@ -2143,6 +2191,8 @@ class RedisVectorStore(VectorStore):
                 - `return_all`: Whether to return all data in the Hash/JSON including
                     non-indexed fields.
                     - Defaults to `False`.
+                - `with_vectors`: Deprecated and has no effect. Passing it emits a
+                    deprecation warning. It will be removed in 1.0.0.
 
         Returns:
             List of tuples of `(Document, score)` most similar to the query.
@@ -2181,6 +2231,7 @@ class RedisVectorStore(VectorStore):
             - If `return_all` is set to `True`, all fields stored in Redis will be
                 returned, which may include non-indexed fields.
         """
+        _drop_with_vectors(kwargs)
         embedding = self._embeddings.embed_query(query)
         return self.similarity_search_with_score_by_vector(
             embedding,
@@ -2245,36 +2296,22 @@ class RedisVectorStore(VectorStore):
         Returns:
             List of `Document` objects selected by maximal marginal relevance.
         """
-        # Fetch top fetch_k documents based on similarity to the embedding
-        docs_scores_embeddings = self.similarity_search_with_score_by_vector(
+        _drop_with_vectors(kwargs)
+        # Fetch the top fetch_k candidates along with their stored vectors
+        candidates = self._similarity_search_with_score_by_vector(
             embedding, k=fetch_k, with_vectors=True, **kwargs
         )
+        documents = [doc for doc, _, _ in candidates]
+        vectors = [vector for _, _, vector in candidates]
 
-        # Extract documents and embeddings
-        documents = []
-        embeddings = []
-        for item in docs_scores_embeddings:
-            if len(item) == 3:
-                doc, _, emb = item
-                documents.append(doc)
-                embeddings.append(emb)
-            elif len(item) == 2:
-                doc, _ = item
-                documents.append(doc)
-
-        # Perform MMR on the embeddings
-        if embeddings:
-            mmr_selected = maximal_marginal_relevance(
-                np.array(embedding),
-                embeddings,
-                k=min(k, len(documents)),
-                lambda_mult=lambda_mult,
-            )
-
-            # Return the selected documents based on MMR
-            return [documents[i] for i in mmr_selected]
-        else:
-            return []
+        # Re-rank the candidates; no candidates selects nothing
+        mmr_selected = maximal_marginal_relevance(
+            np.array(embedding),
+            vectors,
+            k=min(k, len(documents)),
+            lambda_mult=lambda_mult,
+        )
+        return [documents[i] for i in mmr_selected]
 
     def max_marginal_relevance_search(
         self,
@@ -2301,6 +2338,7 @@ class RedisVectorStore(VectorStore):
         Returns:
             List of `Document` objects selected by maximal marginal relevance.
         """
+        _drop_with_vectors(kwargs)
         query_embedding = self.embeddings.embed_query(query)
         return self.max_marginal_relevance_search_by_vector(
             query_embedding, k=k, fetch_k=fetch_k, lambda_mult=lambda_mult, **kwargs
