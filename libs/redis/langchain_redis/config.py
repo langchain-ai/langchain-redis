@@ -292,6 +292,10 @@ class RedisConfig(BaseModel):
             RedisConfig: A new instance of `RedisConfig` configured based on the
                 provided schema and kwargs.
 
+        Raises:
+            ValueError: If `metadata_schema` (even an empty list) or `schema_path`
+                is also passed. The schema is the only schema source.
+
         Example:
             ```python
             from redisvl.schema import IndexSchema
