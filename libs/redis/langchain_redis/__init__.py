@@ -4,6 +4,10 @@ from langchain_redis.chat_message_history import (
     _noop_push_handler,
 )
 from langchain_redis.config import RedisConfig
+from langchain_redis.migrations import (
+    IndexOwnershipMigrationResult,
+    migrate_index_ownership,
+)
 from langchain_redis.vectorstores import RedisVectorStore
 from langchain_redis.version import __lib_name__, __version__
 
@@ -12,6 +16,8 @@ __all__ = [
     "__lib_name__",
     "RedisVectorStore",
     "RedisConfig",
+    "IndexOwnershipMigrationResult",
+    "migrate_index_ownership",
     "RedisCache",
     "RedisSemanticCache",
     "LangCacheSemanticCache",

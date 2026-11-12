@@ -259,6 +259,60 @@ is not sufficient. Until migration, direct-ID operations remain available for
 legacy TEXT markers, but searches and filter deletion are refused because TEXT
 tokenization cannot provide exact index isolation.
 
+#### Migrating legacy ownership markers
+
+Use `migrate_index_ownership()` to preview and upgrade a legacy index. Supply
+the original, fully populated `RedisConfig` for a generated schema, or the
+original `IndexSchema` for a custom schema. Every call, including previews and
+reruns, requires exactly one source, validated against the live index.
+
+`TEMPORARY` indexes are unsupported: rebuilding them deletes their documents.
+
+Use a separate migration client with `protocol=2`, connected to the application's
+Redis deployment. Explicit `protocol=3` clients are rejected before any Redis
+operations because migration does not yet support their query and cursor replies.
+
+```python
+from redis import Redis
+
+from langchain_redis import migrate_index_ownership
+
+migration_client = Redis.from_url(redis_url, protocol=2)
+
+# Use the same definition that originally created the index.
+migration_source = {"source_config": original_config}
+# For a custom schema, use this instead:
+# migration_source = {"source_schema": original_schema}
+
+aliases = ["products-search"]  # Use [] when the index has no aliases.
+preview = migrate_index_ownership(
+    "products",
+    redis_client=migration_client,
+    aliases=aliases,
+    **migration_source,
+)
+print(preview.schema_action, preview.would_update)
+
+# Stop all writers and back up the index before applying.
+result = migrate_index_ownership(
+    "products",
+    redis_client=migration_client,
+    aliases=aliases,
+    dry_run=False,
+    **migration_source,
+)
+print(result.updated, result.completed)
+# Restart writers and recreate existing RedisVectorStore instances afterwards.
+```
+
+Generated configurations must include `embedding_dimensions`. Validation checks
+reported core vector settings and vector `INDEXMISSING`. All vector tuning is
+taken from the supplied source without comparison; preserve the original tuning
+and phonetic settings there.
+Indexes with overlapping prefixes of the same storage type cannot be migrated
+automatically because ownership of legacy documents is ambiguous. Recreate those
+indexes with disjoint prefixes instead.
+
 #### Vector index tuning
 
 `vector_attrs` exposes algorithm-specific index attributes without writing a
@@ -310,8 +364,8 @@ schemas must define `_index_name` as TAG before they can be searched; missing,
 legacy TEXT, and unsupported marker fields are refused instead of running
 without exact index isolation. Build metadata filters with RedisVL
 `FilterExpression` helpers such as `Tag` and `Num` when values come from user
-input. Trusted raw Redis query strings are also accepted and automatically
-intersected with the index ownership filter.
+input. Non-empty raw Redis query strings are rejected because they cannot be
+safely combined with the index ownership filter.
 
 #### Features
 - Efficient vector storage and retrieval

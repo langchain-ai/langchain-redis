@@ -548,8 +548,8 @@ class RedisConfig(BaseModel):
             - If a `schema_path` is set, the schema will be loaded from the YAML file.
             - Otherwise, a new `IndexSchema` is created based on the current
                 configuration.
-            - The resulting schema includes fields for id, content, and embedding
-                vector, as well as any additional fields specified in `metadata_schema`.
+            - The resulting schema includes content, embedding, ownership and
+                metadata fields, as well as fields specified in `metadata_schema`.
             - The embedding field is configured with the specified dimensions,
                 distance metric, and other relevant attributes.
             - This method is particularly useful when you need to create a new index or
@@ -570,7 +570,7 @@ class RedisConfig(BaseModel):
         else:
             index_info: Dict[str, Any] = {
                 "name": self.index_name,
-                "prefix": self.key_prefix,
+                "prefix": self._schema_key_prefix(),
                 "key_separator": self.key_separator,
                 "storage_type": self.storage_type,
             }
@@ -578,7 +578,6 @@ class RedisConfig(BaseModel):
                 index_info["stopwords"] = self.stopwords
 
             fields = [
-                {"name": self.id_field, "type": "tag"},
                 {"name": self.content_field, "type": "text"},
                 {
                     "name": self.embedding_field,
@@ -591,12 +590,37 @@ class RedisConfig(BaseModel):
                         **(self.vector_attrs or {}),
                     },
                 },
+                {
+                    "name": "_index_name",
+                    "type": "tag",
+                    "attrs": {"case_sensitive": True},
+                },
+                {"name": "_metadata_json", "type": "text"},
             ]
 
             if self.metadata_schema:
-                fields.extend(self.metadata_schema)
+                for field in self.metadata_schema:
+                    field = dict(field)
+                    if field["type"] == "tag":
+                        field["attrs"] = dict(field.get("attrs", {}))
+                        field["attrs"].setdefault(
+                            "separator", self.default_tag_separator
+                        )
+                    fields.append(field)
 
             return IndexSchema.from_dict({"index": index_info, "fields": fields})
+
+    def _schema_key_prefix(self) -> Union[str, List[str]]:
+        """Return the prefix used by generated RedisVL schemas."""
+        key_prefix = self.key_prefix or self.index_name
+        suffix = self._legacy_prefix_suffix()
+        if isinstance(key_prefix, list):
+            return [f"{prefix}{suffix}" for prefix in key_prefix]
+        return f"{key_prefix}{suffix}"
+
+    def _legacy_prefix_suffix(self) -> str:
+        """Return the suffix used by the historical colon key format."""
+        return ":" if self.legacy_key_format and self.key_separator == ":" else ""
 
     def is_sentinel_url(self) -> bool:
         """Check if the `redis_url` is a Sentinel URL.
