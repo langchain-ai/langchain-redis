@@ -739,6 +739,49 @@ def test_rebuild_preserves_field_aliases_sharing_a_path(
 
 
 @pytest.mark.parametrize("storage_type", ["hash", "json"])
+@pytest.mark.parametrize("index_missing", [False, True])
+@pytest.mark.parametrize("dry_run", [True, False], ids=["preview", "apply"])
+def test_vector_indexmissing_mismatch_is_rejected_before_mutation(
+    client: Redis,
+    make_legacy_store: Callable[..., RedisVectorStore],
+    storage_type: str,
+    index_missing: bool,
+    dry_run: bool,
+) -> None:
+    store = make_legacy_store(storage_type, marker_type="text", ids=("one",))
+    source = store.config.to_index_schema().model_copy(deep=True)
+    if index_missing:
+        # RedisVL currently serializes this vector flag as a parameter; use
+        # redis-py to create the live index with the proper field-level flag.
+        redis_fields = source.redis_fields
+        redis_fields[list(source.fields).index("embedding")].append_arg("INDEXMISSING")
+        client.ft(store.index.name).dropindex(delete_documents=False)
+        client.ft(store.index.name).create_index(
+            redis_fields,
+            definition=IndexDefinition(
+                prefix=[store.index.name], index_type=IndexType[storage_type.upper()]
+            ),
+        )
+        wait_for_index_ready(store.index, timeout_seconds=5, poll_interval_seconds=0.05)
+    source.fields["embedding"].attrs.index_missing = not index_missing
+    key = store.index.key("one")
+    before = _read_record(client, store, key)
+    attributes = convert_bytes(client.ft(store.index.name).info())["attributes"]
+
+    with pytest.raises(ValueError):
+        migrate_index_ownership(
+            store.index.name,
+            redis_client=client,
+            source_schema=source,
+            aliases=[],
+            dry_run=dry_run,
+        )
+
+    assert convert_bytes(client.ft(store.index.name).info())["attributes"] == attributes
+    assert _read_record(client, store, key) == before
+
+
+@pytest.mark.parametrize("storage_type", ["hash", "json"])
 @pytest.mark.parametrize(
     ("field_type", "attrs", "values", "expression", "expected_ids"),
     [

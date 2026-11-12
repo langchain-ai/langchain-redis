@@ -283,6 +283,7 @@ def test_source_vector_core_settings_must_match_live_definition(
         "datatype": "FLOAT32",
         "dims": 4,
         "distance_metric": "COSINE",
+        "index_missing": False,
     }
     live_name = {
         "ALGORITHM": "algorithm",
@@ -297,7 +298,10 @@ def test_source_vector_core_settings_must_match_live_definition(
     }
 
 
-def test_source_vector_tuning_remains_authoritative() -> None:
+@pytest.mark.parametrize("index_missing", [False, True])
+def test_source_vector_tuning_remains_authoritative(index_missing: bool) -> None:
+    source = _vector_source()
+    source.fields["embedding"].attrs.index_missing = index_missing
     live_vector = _attribute(
         "embedding",
         "VECTOR",
@@ -311,9 +315,14 @@ def test_source_vector_tuning_remains_authoritative() -> None:
         "COSINE",
         "EF_RUNTIME",
         10,
+        "M",
+        32,
+        "EF_CONSTRUCTION",
+        50,
+        *(["INDEXMISSING"] if index_missing else []),
     )
 
-    _validate_source_schema(_info(live_vector), _vector_source())
+    _validate_source_schema(_info(live_vector), source)
 
 
 @pytest.mark.parametrize(

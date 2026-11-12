@@ -86,10 +86,11 @@ def migrate_index_ownership(
     complete deployment ``source_schema`` or the original ``source_config`` used
     for a generated schema. It is authoritative: only its ownership field is
     changed. The index name, storage type, prefixes, fields, explicit stopwords
-    and reported core vector settings are checked against the live index before
-    mutation. Vector tuning is not inferred or compared with
-    FT.INFO; it remains authoritative from the supplied source. Rebuilding an index
-    with INDEXALL enabled requires manual migration.
+    and reported core vector settings, including the vector INDEXMISSING flag,
+    are checked against the live index before mutation. All vector tuning is taken
+    from the supplied source without comparison, even when FT.INFO reports it.
+    The source must also preserve phonetic matching, which FT.INFO does not expose.
+    Rebuilding an index with INDEXALL enabled requires manual migration.
 
     The operation is not transactional and has no automatic rollback. Re-run
     marker backfills after interruption. ``completed`` reports marker writes,
@@ -427,6 +428,14 @@ def _validate_source_schema(info: Dict[str, Any], source: IndexSchema) -> None:
                 for name in live_core
                 if (value := getattr(source_attrs, name, None)) is not None
             }
+            # RESP2 returns bare flags; mapping-shaped replies group them in flags.
+            flags = (
+                attribute.get("flags", [])
+                if isinstance(attribute, dict)
+                else attribute[6:]
+            )
+            live_core["index_missing"] = "INDEXMISSING" in flags
+            expected_core["index_missing"] = source_attrs.index_missing
             if live_core != expected_core:
                 raise _schema_mismatch(
                     f"Vector field {alias!r} core settings",

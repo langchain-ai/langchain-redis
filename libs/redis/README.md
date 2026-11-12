@@ -305,9 +305,10 @@ print(result.updated, result.completed)
 # Restart writers and recreate existing RedisVectorStore instances afterwards.
 ```
 
-Generated configurations must include `embedding_dimensions`. Core vector
-settings reported by `FT.INFO` are checked against the supplied source; vector
-tuning is taken exactly from that source because it cannot be reliably inferred.
+Generated configurations must include `embedding_dimensions`. Validation checks
+reported core vector settings and vector `INDEXMISSING`. All vector tuning is
+taken from the supplied source without comparison; preserve the original tuning
+and phonetic settings there.
 Indexes with overlapping prefixes of the same storage type cannot be migrated
 automatically because ownership of legacy documents is ambiguous. Recreate those
 indexes with disjoint prefixes instead.
