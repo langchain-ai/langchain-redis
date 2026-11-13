@@ -40,6 +40,7 @@ from redisvl.redis.utils import (  # type: ignore[import]
 )
 from redisvl.schema import FieldTypes, IndexSchema, StorageType  # type: ignore[import]
 from redisvl.schema.fields import VECTOR_NORM_MAP  # type: ignore[import]
+from redisvl.utils.utils import create_ulid  # type: ignore[import]
 
 from langchain_redis.config import RedisConfig
 from langchain_redis.version import __lib_name__
@@ -664,6 +665,11 @@ class RedisVectorStore(VectorStore):
                 )
             keys = ids
 
+        # A text without an id gets a generated one, as it would if no ids were
+        # given. Otherwise every such text would be written to the same key.
+        if keys:
+            keys = [key if key is not None else create_ulid() for key in keys]
+
         redis_keys = self._redis_keys(keys) if keys else None
         if redis_keys:
             self._validate_write_ownership(redis_keys)
@@ -746,6 +752,8 @@ class RedisVectorStore(VectorStore):
         keys: Optional[List[str]] = None,
         return_keys: bool = False,
         batch_size: Optional[int] = None,
+        *,
+        ids: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> RedisVectorStore:
         """Create a `RedisVectorStore` from a list of texts.
@@ -760,6 +768,9 @@ class RedisVectorStore(VectorStore):
             return_keys: Whether to return the keys of the added documents.
             batch_size: Optional number of records to write in each Redis
                 pipeline execution. If omitted, RedisVL's default is used.
+            ids: Optional list of ids to associate with the documents.
+
+                Ignored if `keys` is provided.
             **kwargs: Additional keyword arguments to pass to `RedisConfig` if config is
                 not provided.
 
@@ -823,7 +834,9 @@ class RedisVectorStore(VectorStore):
             metadatas = [{} for _ in range(len(texts))]
 
         vector_store = cls(embeddings=embedding, config=config, **kwargs)
-        out_keys = vector_store.add_texts(texts, metadatas, keys, batch_size=batch_size)
+        out_keys = vector_store.add_texts(
+            texts, metadatas, keys, batch_size=batch_size, ids=ids
+        )
 
         if return_keys:
             return cast(RedisVectorStore, (vector_store, out_keys))
@@ -901,8 +914,9 @@ class RedisVectorStore(VectorStore):
         Note:
             - This method creates a new `RedisVectorStore` instance and adds the
                 provided documents to it.
-            - The method extracts the text content and metadata from
-                each `Document` object.
+            - The method extracts the text content, metadata and id from
+                each `Document` object. `Document.id` is not used if `ids` or `keys`
+                is passed.
             - If a `RedisConfig` object is not provided, one will be created using
                 the additional kwargs passed to this method.
             - The embedding function is used to convert the document text into vector
@@ -910,6 +924,11 @@ class RedisVectorStore(VectorStore):
         """
         texts = [doc.page_content for doc in documents]
         metadatas = [doc.metadata for doc in documents]
+
+        if "ids" not in kwargs:
+            ids = [doc.id for doc in documents]
+            if any(ids):
+                kwargs["ids"] = ids
 
         config = config or RedisConfig.from_kwargs(**kwargs)
 

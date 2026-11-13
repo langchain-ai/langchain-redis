@@ -241,6 +241,21 @@ class TestRedisVectorStore:
         assert index.data[-1]["comma_tags"] == "one,two"
         assert index.data[-1]["pipe_tags"] == "one|two"
 
+    def test_add_texts_generates_keys_for_missing_ids(
+        self, vector_store: RedisVectorStore
+    ) -> None:
+        index = vector_store.index
+        with (
+            patch.object(vector_store, "_validate_write_ownership"),
+            patch.object(index, "load", wraps=index.load) as load,
+        ):
+            vector_store.add_texts(["a", "b", "c"], ids=["a", None, None])
+
+        keys = load.call_args.kwargs["keys"]
+        assert keys[0] == "key:a"
+        assert len(set(keys)) == 3
+        assert "key:None" not in keys
+
     def test_similarity_search(self, vector_store: RedisVectorStore) -> None:
         vector_store.add_texts(["Hello, world!", "Test document"])
         results = vector_store.similarity_search("Hello", k=1)
@@ -450,7 +465,9 @@ class TestRedisVectorStore:
                 config=mock_config,
                 batch_size=2,
             )
-            mock_add_texts.assert_called_once_with(texts, metadatas, None, batch_size=2)
+            mock_add_texts.assert_called_once_with(
+                texts, metadatas, None, batch_size=2, ids=None
+            )
 
     @patch("langchain_redis.vectorstores.RedisVectorStore.add_texts")
     def test_from_documents(
@@ -472,4 +489,69 @@ class TestRedisVectorStore:
                 [{"source": "greeting"}, {"source": "test"}],
                 None,
                 batch_size=2,
+                ids=None,
             )
+
+    @patch("langchain_redis.vectorstores.RedisVectorStore.add_texts")
+    def test_from_texts_forwards_ids(
+        self,
+        mock_add_texts: Mock,
+        mock_embeddings: MockEmbeddings,
+        mock_config: RedisConfig,
+    ) -> None:
+        with patch("langchain_redis.vectorstores.SearchIndex", MockSearchIndex):
+            RedisVectorStore.from_texts(
+                ["a", "b"], mock_embeddings, config=mock_config, ids=["id1", "id2"]
+            )
+        mock_add_texts.assert_called_once_with(
+            ["a", "b"], [{}, {}], None, batch_size=None, ids=["id1", "id2"]
+        )
+
+    @pytest.mark.parametrize(
+        "document_ids",
+        [
+            pytest.param(["doc1", "doc2"], id="all-ids"),
+            pytest.param(["doc1", None], id="mixed"),
+        ],
+    )
+    @patch("langchain_redis.vectorstores.RedisVectorStore.add_texts")
+    def test_from_documents_forwards_document_ids(
+        self,
+        mock_add_texts: Mock,
+        mock_embeddings: MockEmbeddings,
+        mock_config: RedisConfig,
+        document_ids: List[Optional[str]],
+    ) -> None:
+        docs = [
+            Document(page_content=text, id=doc_id)
+            for text, doc_id in zip(["a", "b"], document_ids)
+        ]
+        with patch("langchain_redis.vectorstores.SearchIndex", MockSearchIndex):
+            RedisVectorStore.from_documents(docs, mock_embeddings, config=mock_config)
+        mock_add_texts.assert_called_once_with(
+            ["a", "b"], [{}, {}], None, batch_size=None, ids=document_ids
+        )
+
+    @pytest.mark.parametrize("argument", ["ids", "keys"])
+    def test_from_documents_prefers_explicit_ids_over_document_ids(
+        self,
+        mock_embeddings: MockEmbeddings,
+        mock_config: RedisConfig,
+        argument: str,
+    ) -> None:
+        docs = [
+            Document(page_content="a", id="doc1"),
+            Document(page_content="b", id="doc2"),
+        ]
+        kwargs: Dict[str, Any] = {argument: ["explicit1", "explicit2"]}
+        with (
+            patch("langchain_redis.vectorstores.SearchIndex", MockSearchIndex),
+            patch.object(RedisVectorStore, "_validate_write_ownership"),
+        ):
+            RedisVectorStore.from_documents(
+                docs, mock_embeddings, config=mock_config, **kwargs
+            )
+
+        index = MockSearchIndex.last_instance
+        assert index is not None
+        assert list(index._storage.data) == ["key:explicit1", "key:explicit2"]
