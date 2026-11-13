@@ -86,6 +86,8 @@ def make_legacy_store(
             metadatas=[{"doc_id": doc_id} for doc_id in ids],
             keys=list(ids),
         )
+        # Migration preflight requires the source index to finish indexing.
+        wait_for_index_ready(store.index, timeout_seconds=5, poll_interval_seconds=0.05)
         return store
 
     try:
