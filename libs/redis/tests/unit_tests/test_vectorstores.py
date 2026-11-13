@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from typing import Any, Dict, Iterable, List, Optional, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Union
 from unittest.mock import Mock, patch
 
 import pytest
@@ -273,10 +273,9 @@ class TestRedisVectorStore:
     def test_similarity_search_with_score_return_all_json_no_matches(
         self, vector_store: RedisVectorStore
     ) -> None:
-        """JSON.MGET takes one or more keys, so no matches must mean no fetch."""
+        """A search that matched nothing sends no record fetch to Redis."""
         vector_store.config.storage_type = "json"
         client = Mock()
-        client.json.return_value.mget.return_value = []
 
         with patch.object(vector_store._index, "client", client):
             results = vector_store.similarity_search_with_score(
@@ -284,7 +283,51 @@ class TestRedisVectorStore:
             )
 
         assert results == []
+        client.pipeline.assert_not_called()
         client.json().mget.assert_not_called()
+
+    @pytest.mark.parametrize("storage_type", ["hash", "json"])
+    @pytest.mark.parametrize(
+        "search",
+        [
+            pytest.param(
+                lambda store: store.similarity_search("Hello", k=2, return_all=True),
+                id="similarity_search",
+            ),
+            pytest.param(
+                lambda store: [
+                    doc
+                    for doc, _ in store.similarity_search_with_score(
+                        "Hello", k=2, return_all=True
+                    )
+                ],
+                id="similarity_search_with_score",
+            ),
+        ],
+    )
+    def test_return_all_skips_a_hit_whose_record_is_gone(
+        self,
+        vector_store: RedisVectorStore,
+        storage_type: str,
+        search: Callable[[RedisVectorStore], List[Document]],
+    ) -> None:
+        """A hit deleted between FT.SEARCH and the record fetch is skipped.
+
+        `_fetch_records_by_keys` reports a missing record as `None` (an
+        `HGETALL` of a deleted key returns `{}`), and both searches skip it
+        instead of raising `KeyError` on the content field.
+        """
+        vector_store.config.storage_type = storage_type
+        vector_store.add_texts(["Hello, world!", "Test document"])
+        surviving = {"text": "Test document", "embedding": [0.2, 0.2, 0.2]}
+
+        with patch.object(
+            vector_store, "_fetch_records_by_keys", return_value=[None, surviving]
+        ) as fetch_records:
+            docs = search(vector_store)
+
+        fetch_records.assert_called_once_with(["key_0", "key_1"])
+        assert [doc.page_content for doc in docs] == ["Test document"]
 
     @staticmethod
     def _use_metric(metric: VectorDistanceMetric, field: str = "embedding") -> None:
