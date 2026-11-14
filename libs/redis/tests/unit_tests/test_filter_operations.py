@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 from langchain_core.embeddings import Embeddings
+from redis.client import NEVER_DECODE
 from redisvl.index.index import BulkResult  # type: ignore[import]
 from redisvl.query.filter import (  # type: ignore[import]
     FilterExpression,
@@ -404,7 +405,10 @@ def test_fetch_records_by_keys_uses_non_transactional_hash_pipeline(
         None,
     ]
     client.pipeline.assert_called_once_with(transaction=False)
-    assert pipe.hgetall.call_args_list == [call("prefix:a"), call("prefix:b")]
+    assert pipe.execute_command.call_args_list == [
+        call("HGETALL", "prefix:a", **{NEVER_DECODE: True}),
+        call("HGETALL", "prefix:b", **{NEVER_DECODE: True}),
+    ]
 
 
 def test_delete_by_filter_scopes_to_index_name(store: RedisVectorStore) -> None:

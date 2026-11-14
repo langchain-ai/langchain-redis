@@ -23,6 +23,7 @@ from langchain_core._api import warn_deprecated
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
+from redis.client import NEVER_DECODE
 from redisvl.index import SearchIndex  # type: ignore[import]
 from redisvl.index.index import BulkResult  # type: ignore[import]
 from redisvl.query import (  # type: ignore[import]
@@ -1339,6 +1340,8 @@ class RedisVectorStore(VectorStore):
             return []
 
         redis = self._index.client
+        # NEVER_DECODE is ignored inside MULTI/EXEC, so this pipeline must stay
+        # non-transactional for the HASH read below to return bytes.
         with redis.pipeline(transaction=False) as pipe:
             if self.config.storage_type == StorageType.JSON.value:
                 json_pipe = pipe.json()
@@ -1346,7 +1349,7 @@ class RedisVectorStore(VectorStore):
                     json_pipe.get(key, ".")
             else:
                 for key in keys:
-                    pipe.hgetall(key)
+                    pipe.execute_command("HGETALL", key, **{NEVER_DECODE: True})
             records = pipe.execute()
 
         if self.config.storage_type == StorageType.JSON.value:
