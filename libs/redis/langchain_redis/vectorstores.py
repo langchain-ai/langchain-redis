@@ -40,7 +40,10 @@ from redisvl.redis.utils import (  # type: ignore[import]
 )
 from redisvl.schema import FieldTypes, IndexSchema, StorageType  # type: ignore[import]
 from redisvl.schema.fields import VECTOR_NORM_MAP  # type: ignore[import]
-from redisvl.utils.utils import create_ulid  # type: ignore[import]
+from redisvl.utils.utils import (  # type: ignore[import]
+    create_ulid,
+    validate_vector_dims,
+)
 
 from langchain_redis.config import RedisConfig
 from langchain_redis.version import __lib_name__
@@ -567,6 +570,35 @@ class RedisVectorStore(VectorStore):
     def key_prefix(self) -> Optional[Union[str, List[str]]]:
         return self.config.key_prefix
 
+    def _check_embedding_dimensions(
+        self, embeddings: Sequence[Sequence[float]]
+    ) -> None:
+        """Raise if an embedding doesn't have the vector size of the live index.
+
+        Redis accepts a record whose vector has the wrong size but leaves it out
+        of the index, and RedisVL doesn't validate on load by default, so such a
+        write would otherwise look successful.
+        """
+        schema = getattr(self._index, "schema", None)
+        if not isinstance(schema, IndexSchema):
+            return
+        vector_field = schema.fields.get(self.config.embedding_field)
+        if vector_field is None or vector_field.type != FieldTypes.VECTOR:
+            return
+
+        dims = vector_field.attrs.dims
+        for position, embedding in enumerate(embeddings):
+            try:
+                validate_vector_dims(len(embedding), dims)
+            except ValueError as e:
+                raise ValueError(
+                    f"Embedding {position} has {len(embedding)} dimensions, but "
+                    f"index '{self._index.name}' stores {dims}-dimensional vectors "
+                    f"in '{self.config.embedding_field}'. Redis would keep the "
+                    "document without indexing it. Use the embedding model the "
+                    "index was created with, or a new index_name."
+                ) from e
+
     def add_texts(
         self,
         texts: Iterable[str],
@@ -602,6 +634,10 @@ class RedisVectorStore(VectorStore):
                 does not match the number of `texts`.
             ValueError: If explicit document IDs target an existing record whose
                 ownership does not match this index.
+            ValueError: If an embedding doesn't have the number of dimensions
+                of the index's vector field, which happens when the embedding
+                model differs from the one the index was created with. Nothing
+                is written in that case.
 
         Example:
             ```python
@@ -676,6 +712,7 @@ class RedisVectorStore(VectorStore):
 
         # Generate embeddings for all texts
         document_embeddings = self._embeddings.embed_documents(texts_list)
+        self._check_embedding_dimensions(document_embeddings)
 
         # Check if schema has _index_name and _metadata_json fields
         index_name_field = self._index.schema.fields.get(_INDEX_NAME_FIELD)
