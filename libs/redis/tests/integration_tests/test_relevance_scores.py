@@ -26,8 +26,8 @@ FAR_DOC = "orthogonal to the query"
 
 # Documents for the MMR test, searched with the same QUERY. A plain top-2
 # search returns MMR_CLOSE and MMR_NEAR_DUPLICATE. MMR with lambda_mult=0.5
-# swaps the near duplicate for MMR_DIVERSE, which it only gets right if it
-# receives the real stored vectors.
+# swaps the near duplicate for MMR_DIVERSE. The test also checks the candidate
+# vectors directly, since the selected pair alone does not prove they are correct.
 MMR_CLOSE = "close to the query, off-axis"
 MMR_NEAR_DUPLICATE = "near duplicate of the off-axis document"
 MMR_DIVERSE = "further from the query, in a different direction"
@@ -98,6 +98,7 @@ def _store(
     distance_metric: str,
     storage_type: str = "hash",
     texts: Sequence[str] = DEFAULT_TEXTS,
+    metadatas: List[Dict[str, Any]] | None = None,
 ) -> Generator[RedisVectorStore, None, None]:
     store = RedisVectorStore(
         KeywordEmbeddings(),
@@ -108,7 +109,7 @@ def _store(
         storage_type=storage_type,
     )
     try:
-        store.add_texts(list(texts))
+        store.add_texts(list(texts), metadatas=metadatas)
         yield store
     finally:
         store.index.delete(drop=True)
@@ -251,9 +252,23 @@ def test_mmr_reranks_with_stored_vectors(
     return_all: bool,
     extra_kwargs: Dict[str, Any],
 ) -> None:
-    for store in _store(redis_url, "COSINE", storage_type, texts=MMR_TEXTS):
+    for store in _store(
+        redis_url,
+        "COSINE",
+        storage_type,
+        texts=MMR_TEXTS,
+        metadatas=[{"source": text} for text in MMR_TEXTS],
+    ):
         plain = store.similarity_search(QUERY, k=2, return_all=return_all)
         assert {doc.page_content for doc in plain} == {MMR_CLOSE, MMR_NEAR_DUPLICATE}
+
+        candidates = store._similarity_search_with_score_by_vector(
+            _VECTORS[QUERY], k=3, with_vectors=True, return_all=return_all
+        )
+        assert len(candidates) == len(MMR_TEXTS)
+        assert {doc.page_content for doc, _, _ in candidates} == set(MMR_TEXTS)
+        for doc, _, vector in candidates:
+            assert vector == pytest.approx(_VECTORS[doc.page_content])
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
@@ -280,6 +295,10 @@ def test_mmr_reranks_with_stored_vectors(
         assert [doc.page_content for doc in mmr] == [MMR_CLOSE, MMR_DIVERSE]
         assert [doc.page_content for doc in mmr_by_vector] == [MMR_CLOSE, MMR_DIVERSE]
         assert no_candidates == []
+        if return_all:
+            for results in (mmr, mmr_by_vector):
+                for doc in results:
+                    assert doc.metadata["source"] == doc.page_content
         # One deprecation warning per call that passed `with_vectors`, else none.
         deprecations = [
             w for w in caught if issubclass(w.category, LangChainDeprecationWarning)
