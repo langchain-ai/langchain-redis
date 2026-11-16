@@ -266,6 +266,33 @@ class TestRedisCache:
         assert isinstance(redis_cache.redis.expire, MagicMock)
         redis_cache.redis.expire.assert_called_once_with(key, 3600)
 
+    @pytest.mark.parametrize(
+        ("prefix", "pattern"),
+        [
+            ("redis", "redis:*"),
+            ("my:cache", "my:cache:*"),
+            ("cache[1]", r"cache\[1\]:*"),
+            ("cache*", r"cache\*:*"),
+            ("cache?", r"cache\?:*"),
+            ("cache]", r"cache\]:*"),
+            ("cache\\1", r"cache\\1:*"),
+        ],
+    )
+    def test_clear_scans_for_the_prefix_itself(self, prefix: str, pattern: str) -> None:
+        # _key() writes the prefix verbatim, so clear() has to look for it
+        # verbatim too: an unescaped glob character sends SCAN after the keys of
+        # another cache and leaves this one's entries behind.
+        mock_redis = Mock()
+        mock_redis.scan = Mock(return_value=(0, []))
+        mock_redis.client_setinfo = Mock()
+
+        with patch("langchain_redis.cache.Redis.from_url", return_value=mock_redis):
+            cache = RedisCache(redis_url="redis://localhost:6379", prefix=prefix)
+
+        cache.clear()
+
+        mock_redis.scan.assert_called_once_with(0, match=pattern, count=100)
+
 
 class TestRedisSemanticCache:
     @pytest.fixture

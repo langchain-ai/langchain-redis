@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 from urllib.parse import quote
 
@@ -66,6 +67,15 @@ else:
 
 
 logger = logging.getLogger(__name__)
+
+
+# Characters that Redis reads as SCAN MATCH syntax rather than as themselves
+_GLOB_METACHARACTERS = re.compile(r"([\\*?\[\]])")
+
+
+def _escape_glob(literal: str) -> str:
+    """Escape `literal` so Redis matches it as itself in a SCAN MATCH pattern."""
+    return _GLOB_METACHARACTERS.sub(r"\\\1", literal)
 
 
 def _hash_llm_string(llm_string: str) -> str:
@@ -360,7 +370,7 @@ class RedisCache(BaseCache):
         while True:
             try:
                 cursor, keys = self.redis.scan(
-                    cursor, match=f"{self.prefix}:*", count=100
+                    cursor, match=f"{_escape_glob(str(self.prefix))}:*", count=100
                 )  # type: ignore[misc]
                 if keys:
                     pipe.delete(*keys)
