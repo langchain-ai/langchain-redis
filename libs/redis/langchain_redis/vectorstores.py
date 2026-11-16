@@ -60,10 +60,10 @@ def _drop_with_vectors(kwargs: Dict[str, Any]) -> None:
         return
     del kwargs["with_vectors"]
     warn_deprecated(
-        since="0.3.0",
+        since="0.3.1",
         removal="1.0.0",
         message=(
-            "The `with_vectors` argument was deprecated in langchain-redis 0.3.0 "
+            "The `with_vectors` argument was deprecated in langchain-redis 0.3.1 "
             "and will be removed in 1.0.0. It has no effect: "
             "similarity_search_with_score() and "
             "similarity_search_with_score_by_vector() return (Document, score) "
