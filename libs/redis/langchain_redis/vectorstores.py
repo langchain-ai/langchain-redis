@@ -40,7 +40,10 @@ from redisvl.redis.utils import (  # type: ignore[import]
 )
 from redisvl.schema import FieldTypes, IndexSchema, StorageType  # type: ignore[import]
 from redisvl.schema.fields import VECTOR_NORM_MAP  # type: ignore[import]
-from redisvl.utils.utils import create_ulid  # type: ignore[import]
+from redisvl.utils.utils import (  # type: ignore[import]
+    create_ulid,
+    validate_vector_dims,
+)
 
 from langchain_redis.config import RedisConfig
 from langchain_redis.version import __lib_name__
@@ -585,14 +588,16 @@ class RedisVectorStore(VectorStore):
 
         dims = vector_field.attrs.dims
         for position, embedding in enumerate(embeddings):
-            if len(embedding) != dims:
+            try:
+                validate_vector_dims(len(embedding), dims)
+            except ValueError as e:
                 raise ValueError(
                     f"Embedding {position} has {len(embedding)} dimensions, but "
                     f"index '{self._index.name}' stores {dims}-dimensional vectors "
                     f"in '{self.config.embedding_field}'. Redis would keep the "
                     "document without indexing it. Use the embedding model the "
                     "index was created with, or a new index_name."
-                )
+                ) from e
 
     def add_texts(
         self,
