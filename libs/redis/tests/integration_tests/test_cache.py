@@ -101,6 +101,40 @@ class TestRedisCacheBasicIntegration:
         redis_cache.clear()
         assert redis_cache.lookup("test_prompt", "test_llm") is None
 
+    def test_clear_leaves_another_cache_alone(self, redis_url: str) -> None:
+        # A prefix carrying a glob metacharacter used to be handed to SCAN as a
+        # pattern: `cache[1]` became a character class matching `cache1`, so
+        # clear() emptied the other cache and left its own entries in place.
+        mine = RedisCache(redis_url=redis_url, prefix=f"cache[1]{random_string()}")
+        assert mine.prefix is not None
+        theirs = RedisCache(redis_url=redis_url, prefix=mine.prefix.replace("[1]", "1"))
+
+        my_key = mine._key("prompt", "llm")
+        their_key = theirs._key("prompt", "llm")
+        mine.redis.set(my_key, "mine")
+        theirs.redis.set(their_key, "theirs")
+
+        mine.clear()
+
+        assert mine.redis.exists(my_key) == 0
+        assert theirs.redis.exists(their_key) == 1
+        theirs.clear()
+
+    def test_clear_escapes_the_encoded_prefix(self, redis_url: str) -> None:
+        # Redis matches the pattern against raw key bytes, so escaping the
+        # prefix text and letting redis-py encode the result puts a NUL between
+        # the backslash and the bracket under utf-16, and the escape is lost.
+        client = Redis.from_url(redis_url, encoding="utf-16")
+        cache = RedisCache(redis_client=client, prefix=f"cache[1]{random_string()}")
+
+        key = cache._key("prompt", "llm")
+        client.set(key, "mine")
+
+        cache.clear()
+
+        assert client.exists(key) == 0
+        client.close()
+
     def test_redis_cache_ttl(self, redis_cache: RedisCache) -> None:
         llm = FakeListLLM(cache=redis_cache, responses=["foo", "bar"])
         prompt = random_string()
