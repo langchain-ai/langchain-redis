@@ -834,9 +834,9 @@ def test_cosine(redis_url: str) -> None:
     )
 
     output = vector_store.similarity_search_with_score("0.2", k=3)
-    _, score1 = output[0]  # type: ignore[misc]
-    _, score2 = output[1]  # type: ignore[misc]
-    _, score3 = output[2]  # type: ignore[misc]
+    _, score1 = output[0]
+    _, score2 = output[1]
+    _, score3 = output[2]
 
     # Calculate the expected cosine similarity scores
     expected_score1 = 1 - math.cos(0.2)
@@ -871,9 +871,9 @@ def test_l2(redis_url: str) -> None:
 
     output = vector_store.similarity_search_with_score("0.2", k=3)
 
-    _, score1 = output[0]  # type: ignore[misc]
-    _, score2 = output[1]  # type: ignore[misc]
-    _, score3 = output[2]  # type: ignore[misc]
+    _, score1 = output[0]
+    _, score2 = output[1]
+    _, score3 = output[2]
 
     assert score1 < score2 < score3
 
@@ -899,9 +899,9 @@ def test_ip(redis_url: str) -> None:
 
     output = vector_store.similarity_search_with_score("0.2", k=3)
 
-    _, score1 = output[0]  # type: ignore[misc]
-    _, score2 = output[1]  # type: ignore[misc]
-    _, score3 = output[2]  # type: ignore[misc]
+    _, score1 = output[0]
+    _, score2 = output[1]
+    _, score3 = output[2]
 
     assert score1 < score2 < score3
 
@@ -980,7 +980,7 @@ def test_similarity_search_with_score_with_limit_distance(redis_url: str) -> Non
     assert len(output) == 3
 
     # Print and verify the scores
-    for doc, score in output:  # type: ignore[misc]
+    for doc, score in output:
         assert float(round(score, 4)) >= 0  # Ensure score is non-negative
 
     # Clean up
@@ -1172,7 +1172,7 @@ def test_similarity_search_with_score_by_vector_with_extra_fields(
     )
 
     assert len(results_without_return_all) == 2
-    for doc, score in results_without_return_all:  # type: ignore[misc]
+    for doc, score in results_without_return_all:
         assert doc.page_content in texts
         assert "indexed_metadata" in doc.metadata
         assert doc.metadata["indexed_metadata"].startswith("doc")
@@ -1190,7 +1190,7 @@ def test_similarity_search_with_score_by_vector_with_extra_fields(
     )
 
     assert len(results_with_return_all) == 2
-    for doc, score in results_with_return_all:  # type: ignore[misc]
+    for doc, score in results_with_return_all:
         assert doc.page_content in texts
         assert "indexed_metadata" in doc.metadata
         assert doc.metadata["indexed_metadata"].startswith("doc")
@@ -1203,28 +1203,6 @@ def test_similarity_search_with_score_by_vector_with_extra_fields(
         # Cosine distance should be between 0 and 2, but the test vectors may produce
         # different values depending on implementation details
         assert -2 <= score <= 2
-
-    # Test with_vectors=True - Skip this test in the test environment
-    # as it causes issues with vector serialization/deserialization
-    # results_with_vectors = vector_store.similarity_search_with_score_by_vector(
-    #     query_embedding, k=2, with_vectors=True, return_all=True
-    # )
-    #
-    # assert len(results_with_vectors) == 2
-    # for result in results_with_vectors:
-    #     doc, score, vector = result  # type: ignore[misc]
-    #     assert doc.page_content in texts
-    #     assert "indexed_metadata" in doc.metadata
-    #     assert "extra_field1" in doc.metadata
-    #     assert "extra_field2" in doc.metadata
-    #     assert isinstance(score, float)
-    #     # This assertion allows for negative scores in the test environment
-    #     # Cosine distance should be between 0 and 2, but the test vectors may produce
-    #     # different values depending on implementation details
-    #     assert -2 <= score <= 2
-    #     assert isinstance(vector, list)
-    #     assert len(vector) == 1536  # Assuming OpenAI embeddings
-    #     assert all(isinstance(v, float) for v in vector)
 
     # Clean up
     vector_store.index.delete(drop=True)
