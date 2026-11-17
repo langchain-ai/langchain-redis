@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, Generation
 from langchain_redis import RedisCache, RedisSemanticCache
 from langchain_redis.version import __full_lib_name__
+from redis._parsers.encoders import Encoder
 from redis.exceptions import ResponseError
 
 
@@ -134,6 +135,7 @@ class TestRedisCache:
         mock_redis.delete = Mock()
         mock_redis.client_setinfo = Mock()
         mock_redis.echo = Mock()
+        mock_redis.get_encoder = Mock(return_value=Encoder("utf-8", "strict", False))
 
         with patch("langchain_redis.cache.Redis.from_url", return_value=mock_redis):
             cache = RedisCache(redis_url="redis://localhost:6379", ttl=3600)
@@ -269,22 +271,25 @@ class TestRedisCache:
     @pytest.mark.parametrize(
         ("prefix", "pattern"),
         [
-            ("redis", "redis:*"),
-            ("my:cache", "my:cache:*"),
-            ("cache[1]", r"cache\[1\]:*"),
-            ("cache*", r"cache\*:*"),
-            ("cache?", r"cache\?:*"),
-            ("cache]", r"cache\]:*"),
-            ("cache\\1", r"cache\\1:*"),
+            ("redis", b"redis:*"),
+            ("my:cache", b"my:cache:*"),
+            ("cache[1]", rb"cache\[1\]:*"),
+            ("cache*", rb"cache\*:*"),
+            ("cache?", rb"cache\?:*"),
+            ("cache]", rb"cache\]:*"),
+            ("cache\\1", rb"cache\\1:*"),
         ],
     )
-    def test_clear_scans_for_the_prefix_itself(self, prefix: str, pattern: str) -> None:
+    def test_clear_scans_for_the_prefix_itself(
+        self, prefix: str, pattern: bytes
+    ) -> None:
         # _key() writes the prefix verbatim, so clear() has to look for it
         # verbatim too: an unescaped glob character sends SCAN after the keys of
         # another cache and leaves this one's entries behind.
         mock_redis = Mock()
         mock_redis.scan = Mock(return_value=(0, []))
         mock_redis.client_setinfo = Mock()
+        mock_redis.get_encoder = Mock(return_value=Encoder("utf-8", "strict", False))
 
         with patch("langchain_redis.cache.Redis.from_url", return_value=mock_redis):
             cache = RedisCache(redis_url="redis://localhost:6379", prefix=prefix)
@@ -292,6 +297,26 @@ class TestRedisCache:
         cache.clear()
 
         mock_redis.scan.assert_called_once_with(0, match=pattern, count=100)
+
+    def test_clear_escapes_the_encoded_prefix_not_the_text(self) -> None:
+        # Under a multi-byte encoding the escape has to go between the encoded
+        # bytes, not between the characters: "\\" then "[" encoded as utf-16 is
+        # a backslash, a NUL, a bracket and a NUL, which escapes the NUL and
+        # leaves the bracket opening a character class.
+        mock_redis = Mock()
+        mock_redis.scan = Mock(return_value=(0, []))
+        mock_redis.client_setinfo = Mock()
+        mock_redis.get_encoder = Mock(return_value=Encoder("utf-16", "strict", False))
+
+        with patch("langchain_redis.cache.Redis.from_url", return_value=mock_redis):
+            cache = RedisCache(redis_url="redis://localhost:6379", prefix="cache[1]")
+
+        cache.clear()
+
+        encoded = "cache[1]:".encode("utf-16")
+        assert encoded.count(b"\x00") > 0  # the case this is about
+        expected = encoded.replace(b"[", b"\\[").replace(b"]", b"\\]") + b"*"
+        mock_redis.scan.assert_called_once_with(0, match=expected, count=100)
 
 
 class TestRedisSemanticCache:

@@ -69,13 +69,20 @@ else:
 logger = logging.getLogger(__name__)
 
 
-# Characters that Redis reads as SCAN MATCH syntax rather than as themselves
-_GLOB_METACHARACTERS = re.compile(r"([\\*?\[\]])")
+# Bytes that Redis reads as SCAN MATCH syntax rather than as themselves
+_GLOB_METACHARACTERS = re.compile(rb"([\\*?\[\]])")
 
 
-def _escape_glob(literal: str) -> str:
-    """Escape `literal` so Redis matches it as itself in a SCAN MATCH pattern."""
-    return _GLOB_METACHARACTERS.sub(r"\\\1", literal)
+def _escape_glob(literal: bytes) -> bytes:
+    """Escape `literal` so Redis matches it as itself in a SCAN MATCH pattern.
+
+    Redis matches the pattern against raw key bytes, so the escaping has to
+    happen after the key text has been encoded. Escaping the text first and
+    letting redis-py encode the result puts the encoding of a backslash in
+    front of the encoding of the metacharacter, which under a multi-byte
+    encoding is no longer an escape sequence.
+    """
+    return _GLOB_METACHARACTERS.sub(rb"\\\1", literal)
 
 
 def _hash_llm_string(llm_string: str) -> str:
@@ -366,12 +373,15 @@ class RedisCache(BaseCache):
             - If no keys match the prefix, the method will complete without any errors.
         """
         cursor = 0
+        # Encode first, then escape, and hand SCAN the bytes: passing a str
+        # would let redis-py encode the pattern a second time.
+        match = _escape_glob(self.redis.get_encoder().encode(f"{self.prefix}:")) + b"*"
         pipe = self.redis.pipeline()
         while True:
             try:
-                cursor, keys = self.redis.scan(
-                    cursor, match=f"{_escape_glob(str(self.prefix))}:*", count=100
-                )  # type: ignore[misc]
+                cursor, keys = self.redis.scan(  # type: ignore[misc]
+                    cursor, match=match, count=100
+                )
                 if keys:
                     pipe.delete(*keys)
                     pipe.execute()
