@@ -241,6 +241,71 @@ class TestRedisVectorStore:
         assert index.data[-1]["comma_tags"] == "one,two"
         assert index.data[-1]["pipe_tags"] == "one|two"
 
+    def test_metadata_preflight_normalises_bool_and_non_string_tags(
+        self, vector_store: RedisVectorStore
+    ) -> None:
+        index = MockSearchIndex.last_instance
+        assert index is not None
+        index.schema.fields.update(
+            {
+                "tag_flag": MockField("tag_flag", "tag"),
+                "number_flag": MockField("number_flag", "numeric"),
+                "tags": MockField("tags", "tag", SimpleNamespace(separator="|")),
+            }
+        )
+        vector_store.add_texts(
+            ["document"],
+            metadatas=[
+                {
+                    "tag_flag": True,
+                    "number_flag": False,
+                    "unindexed_bool": True,
+                    "tags": [1, "x", False],
+                }
+            ],
+        )
+        record = index.data[-1]
+        assert record["tag_flag"] == "true"
+        assert record["number_flag"] == 0
+        assert record["unindexed_bool"] == "true"
+        assert record["tags"] == "1|x|False"
+
+    def test_unindexed_nested_metadata_survives_in_json(
+        self, vector_store: RedisVectorStore
+    ) -> None:
+        index = MockSearchIndex.last_instance
+        assert index is not None
+        index.schema.fields["_metadata_json"] = MockField("_metadata_json", "text")
+        vector_store.add_texts(
+            ["document"], metadatas=[{"nested": {"a": 1}, "flag": True}]
+        )
+        record = index.data[-1]
+        assert "nested" not in record
+        assert record["_metadata_json"] == '{"nested": {"a": 1}, "flag": true}'
+        assert record["flag"] == "true"
+
+    def test_unsupported_indexed_metadata_fails_before_embedding(
+        self, vector_store: RedisVectorStore
+    ) -> None:
+        index = MockSearchIndex.last_instance
+        assert index is not None
+        index.schema.fields["nested"] = MockField("nested", "text")
+        with patch.object(vector_store.embeddings, "embed_documents") as embeddings:
+            with pytest.raises(ValueError, match="nested"):
+                vector_store.add_texts(["document"], metadatas=[{"nested": {"a": 1}}])
+            embeddings.assert_not_called()
+
+    def test_invalid_numeric_list_fails_before_embedding(
+        self, vector_store: RedisVectorStore
+    ) -> None:
+        index = MockSearchIndex.last_instance
+        assert index is not None
+        index.schema.fields["score"] = MockField("score", "numeric")
+        with patch.object(vector_store.embeddings, "embed_documents") as embeddings:
+            with pytest.raises(ValueError, match="score"):
+                vector_store.add_texts(["document"], metadatas=[{"score": [1, 2]}])
+            embeddings.assert_not_called()
+
     def test_add_texts_generates_keys_for_missing_ids(
         self, vector_store: RedisVectorStore
     ) -> None:
