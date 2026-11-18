@@ -743,12 +743,17 @@ class RedisVectorStore(VectorStore):
         prepared_metadata: List[tuple[Optional[str], Dict[str, Any]]] = []
         for metadata in metadatas or [{}] * len(texts_list):
             try:
-                metadata_json = json.dumps(metadata) if has_metadata_json_field else None
+                metadata_json = (
+                    json.dumps(metadata) if has_metadata_json_field else None
+                )
             except (TypeError, ValueError) as exc:
                 raise ValueError("metadata must be JSON serialisable") from exc
             fields: Dict[str, Any] = {}
             for field_name, field_value in metadata.items():
-                if field_name in (_INDEX_NAME_FIELD, "_metadata_json") or field_value is None:
+                if (
+                    field_name in (_INDEX_NAME_FIELD, "_metadata_json")
+                    or field_value is None
+                ):
                     continue
                 field = self._index.schema.fields.get(field_name)
                 if isinstance(field_value, bool):
@@ -760,7 +765,8 @@ class RedisVectorStore(VectorStore):
                 elif isinstance(field_value, list):
                     if field is not None and field.type == FieldTypes.NUMERIC:
                         raise ValueError(
-                            f"numeric metadata field {field_name!r} cannot contain a list"
+                            f"numeric metadata field {field_name!r} "
+                            "cannot contain a list"
                         )
                     fields[field_name] = self._tag_separator(field_name).join(
                         str(item) for item in field_value
@@ -768,7 +774,8 @@ class RedisVectorStore(VectorStore):
                 elif isinstance(field_value, dict):
                     if field is not None:
                         raise ValueError(
-                            f"indexed metadata field {field_name!r} cannot contain a mapping"
+                            f"indexed metadata field {field_name!r} "
+                            "cannot contain a mapping"
                         )
                     if has_metadata_json_field:
                         continue  # the original nested value remains in _metadata_json
@@ -776,7 +783,8 @@ class RedisVectorStore(VectorStore):
                         fields[field_name] = field_value
                     else:
                         raise ValueError(
-                            f"metadata field {field_name!r} cannot store a mapping in a Redis HASH"
+                            f"metadata field {field_name!r} "
+                            "cannot store a mapping in a Redis HASH"
                         )
                 elif isinstance(field_value, (str, int, float)) or (
                     isinstance(field_value, bytes)
