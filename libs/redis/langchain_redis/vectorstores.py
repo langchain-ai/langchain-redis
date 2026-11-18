@@ -735,20 +735,77 @@ class RedisVectorStore(VectorStore):
         if redis_keys:
             self._validate_write_ownership(redis_keys)
 
-        # Generate embeddings for all texts
+        # Preflight every metadata record before embedding any text or writing any
+        # batch. Preserve original types in _metadata_json while preparing only
+        # Redis-supported values for separately indexed fields.
+        index_name_field = self._index.schema.fields.get(_INDEX_NAME_FIELD)
+        has_metadata_json_field = "_metadata_json" in self._index.schema.fields
+        prepared_metadata: List[tuple[Optional[str], Dict[str, Any]]] = []
+        for metadata in metadatas or [{}] * len(texts_list):
+            try:
+                metadata_json = (
+                    json.dumps(metadata) if has_metadata_json_field else None
+                )
+            except (TypeError, ValueError) as exc:
+                raise ValueError("metadata must be JSON serialisable") from exc
+            fields: Dict[str, Any] = {}
+            for field_name, field_value in metadata.items():
+                if (
+                    field_name in (_INDEX_NAME_FIELD, "_metadata_json")
+                    or field_value is None
+                ):
+                    continue
+                field = self._index.schema.fields.get(field_name)
+                if isinstance(field_value, bool):
+                    fields[field_name] = (
+                        int(field_value)
+                        if field is not None and field.type == FieldTypes.NUMERIC
+                        else str(field_value).lower()
+                    )
+                elif isinstance(field_value, list):
+                    if field is not None and field.type == FieldTypes.NUMERIC:
+                        raise ValueError(
+                            f"numeric metadata field {field_name!r} "
+                            "cannot contain a list"
+                        )
+                    fields[field_name] = self._tag_separator(field_name).join(
+                        str(item) for item in field_value
+                    )
+                elif isinstance(field_value, dict):
+                    if field is not None:
+                        raise ValueError(
+                            f"indexed metadata field {field_name!r} "
+                            "cannot contain a mapping"
+                        )
+                    if has_metadata_json_field:
+                        continue  # the original nested value remains in _metadata_json
+                    if self.config.storage_type == StorageType.JSON.value:
+                        fields[field_name] = field_value
+                    else:
+                        raise ValueError(
+                            f"metadata field {field_name!r} "
+                            "cannot store a mapping in a Redis HASH"
+                        )
+                elif isinstance(field_value, (str, int, float)) or (
+                    isinstance(field_value, bytes)
+                    and self.config.storage_type == StorageType.HASH.value
+                ):
+                    fields[field_name] = field_value
+                else:
+                    raise ValueError(
+                        f"metadata field {field_name!r} has an unsupported value type"
+                    )
+            prepared_metadata.append((metadata_json, fields))
+
         document_embeddings = self._embeddings.embed_documents(texts_list)
         self._check_embedding_dimensions(document_embeddings)
 
-        # Check if schema has _index_name and _metadata_json fields
-        index_name_field = self._index.schema.fields.get(_INDEX_NAME_FIELD)
-        has_metadata_json_field = "_metadata_json" in self._index.schema.fields
-
         # Build records to load to SearchIndex
         records = []
-        for text, embedding, metadata in zip(
+        for text, embedding, (metadata_json, fields) in zip(
             texts_list,
             document_embeddings,
-            metadatas or [{}] * len(texts_list),
+            prepared_metadata,
         ):
             record = {
                 self.config.content_field: text,
@@ -759,25 +816,9 @@ class RedisVectorStore(VectorStore):
                 ),
             }
 
-            # Only add _metadata_json if the field exists in the schema
-            if has_metadata_json_field:
-                metadata_json = json.dumps(metadata)
+            if metadata_json is not None:
                 record["_metadata_json"] = metadata_json
-            for field_name, field_value in metadata.items():
-                # _index_name is reserved for the internal ownership marker. The
-                # caller's value remains available through _metadata_json.
-                if field_name == _INDEX_NAME_FIELD:
-                    continue
-                # Skip empty values
-                if field_value is None:
-                    continue
-                # Convert lists to tag strings with separator
-                elif isinstance(field_value, list):
-                    record[field_name] = self._tag_separator(field_name).join(
-                        field_value
-                    )
-                else:
-                    record[field_name] = field_value
+            record.update(fields)
 
             # Assign the protected marker after user metadata so it cannot be
             # overridden by a conflicting metadata field.
