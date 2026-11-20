@@ -1,6 +1,6 @@
 """Integration tests for caller-supplied document ids."""
 
-from typing import Any, Dict, Generator, List, Tuple, cast
+from typing import Any, Callable, Dict, Generator, List, Tuple, cast
 from uuid import uuid4
 
 import pytest
@@ -185,3 +185,53 @@ async def test_aadd_documents_generates_ids_for_documents_without_one(
     ids = await store.aadd_documents(batch)
 
     _assert_stored(store, batch, ids)
+
+
+SEARCHES: Dict[str, Callable[[RedisVectorStore], List[Document]]] = {
+    "similarity_search": lambda store: store.similarity_search("apple", k=2),
+    "similarity_search_return_all": lambda store: store.similarity_search(
+        "apple", k=2, return_all=True
+    ),
+    "similarity_search_with_score": lambda store: [
+        doc for doc, _ in store.similarity_search_with_score("apple", k=2)
+    ],
+    "similarity_search_by_vector": lambda store: store.similarity_search_by_vector(
+        [0.1] * DIMS, k=2
+    ),
+    "max_marginal_relevance_search": lambda store: store.max_marginal_relevance_search(
+        "apple", k=2, fetch_k=2
+    ),
+    "full_text_search": lambda store: store.full_text_search("apple", k=2),
+    "hybrid_search": lambda store: store.hybrid_search("apple", k=2),
+}
+
+
+@pytest.mark.parametrize("search", SEARCHES.values(), ids=SEARCHES.keys())
+def test_search_results_carry_the_document_ids(
+    config: Dict[str, Any], search: Callable[[RedisVectorStore], List[Document]]
+) -> None:
+    store = RedisVectorStore(ConstantEmbeddings(), **config)
+    store.add_documents(
+        [
+            Document(page_content="red apple", id="doc-1"),
+            Document(page_content="green apple", id="doc-2"),
+        ]
+    )
+
+    found = search(store)
+
+    assert sorted(doc.id for doc in found if doc.id) == ["doc-1", "doc-2"]
+    # The ids are the ones the other methods take
+    store.delete([doc.id for doc in found if doc.id])
+    assert store.get_by_ids(["doc-1", "doc-2"]) == []
+
+
+async def test_asimilarity_search_results_carry_the_document_ids(
+    config: Dict[str, Any],
+) -> None:
+    store = RedisVectorStore(ConstantEmbeddings(), **config)
+    await store.aadd_documents([Document(page_content="red apple", id="doc-1")])
+
+    found = await store.asimilarity_search("apple", k=1)
+
+    assert [doc.id for doc in found] == ["doc-1"]
