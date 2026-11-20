@@ -28,6 +28,13 @@ TEST_SINGLE_RESULT = [Document(page_content="foo")]
 TEST_RESULT = [Document(page_content="foo"), Document(page_content="foo")]
 
 
+def _without_ids(docs: List[Document]) -> List[Document]:
+    """Search results carry their document ids, see test_document_ids.py."""
+    return [
+        Document(page_content=doc.page_content, metadata=doc.metadata) for doc in docs
+    ]
+
+
 class CustomTestEmbeddings(Embeddings):
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         return [self.embed_query(text) for text in texts]
@@ -63,7 +70,7 @@ def test_with_redis_url(texts: List[str], redis_url: str) -> None:
     )
     vector_store = cast(RedisVectorStore, result)
     output = vector_store.similarity_search("foo", k=1, return_metadata=False)
-    assert output == TEST_SINGLE_RESULT
+    assert _without_ids(output) == TEST_SINGLE_RESULT
     # Clean up
     vector_store.index.delete(drop=True)
 
@@ -81,7 +88,7 @@ def test_with_existing_redis_client(texts: List[str], redis_url: str) -> None:
     )
     vector_store = cast(RedisVectorStore, result)
     output = vector_store.similarity_search("foo", k=1, return_metadata=False)
-    assert output == TEST_SINGLE_RESULT
+    assert _without_ids(output) == TEST_SINGLE_RESULT
     # Clean up
     vector_store.index.delete(drop=True)
 
@@ -99,7 +106,7 @@ def test_redis_new_vector(texts: List[str], redis_url: str) -> None:
     )
     vector_store.add_texts(["foo"])
     output = vector_store.similarity_search("foo", k=2, return_metadata=False)
-    assert output == TEST_RESULT
+    assert _without_ids(output) == TEST_RESULT
     # Clean up
     vector_store.index.delete(drop=True)
 
@@ -124,7 +131,7 @@ def test_redis_from_existing(texts: List[str], redis_url: str) -> None:
         from_existing=True,
     )
     output = vector_store2.similarity_search("foo", k=1, return_metadata=False)
-    assert output == TEST_SINGLE_RESULT
+    assert _without_ids(output) == TEST_SINGLE_RESULT
     # Clean up
     vector_store.index.delete(drop=True)
 
@@ -150,7 +157,7 @@ def test_redis_from_existing_with_class_method(
         redis_url=redis_url,
     )
     output = vector_store2.similarity_search("foo", k=1, return_metadata=False)
-    assert output == TEST_SINGLE_RESULT
+    assert _without_ids(output) == TEST_SINGLE_RESULT
     # Clean up
     vector_store.index.delete(drop=True)
 
@@ -180,7 +187,7 @@ def test_redis_add_texts_to_existing(
     count = existing.index.query(CountQuery(FilterExpression("*")))
     assert count == len(texts) + 1
     output = existing.similarity_search("foo", k=2, return_metadata=False)
-    assert output == TEST_RESULT
+    assert _without_ids(output) == TEST_RESULT
 
     # Clean up
     vector_store.index.delete(drop=True)
@@ -202,7 +209,7 @@ def test_redis_from_texts_return_keys(redis_url: str, texts: List[str]) -> None:
     vector_store, keys = cast(Tuple[RedisVectorStore, List[str]], result)
 
     output = vector_store.similarity_search("foo", k=1, return_metadata=False)
-    assert output == TEST_SINGLE_RESULT
+    assert _without_ids(output) == TEST_SINGLE_RESULT
     assert len(keys) == len(texts)
 
     # Clean up
@@ -313,9 +320,8 @@ def test_custom_keys_from_docs(texts: List[str], redis_url: str) -> None:
     vector_store.index.delete(drop=True)
 
 
-def test_similarity_search_returns_keys(redis_url: str) -> None:
+def test_similarity_search_returns_document_ids(redis_url: str) -> None:
     ids = ["test_key_1", "test_key_2", "test_key_3"]
-    keys = ["wids:test_key_1", "wids:test_key_2", "wids:test_key_3"]
     texts = [
         "The quick brown fox jumps over the lazy dog",
         "The lazy dog is jumped over by the quick brown fox",
@@ -348,7 +354,7 @@ def test_similarity_search_returns_keys(redis_url: str) -> None:
     assert len(results_without_return_all) == 2
     for doc in results_without_return_all:
         assert doc.page_content in texts
-        assert doc.id in keys
+        assert doc.id in ids
 
     # Clean up
     vector_store.index.delete(drop=True)
@@ -524,7 +530,7 @@ def test_similarity_search(redis_url: str) -> None:
 
     # Perform similarity search
     output = vector_store.similarity_search("foo", k=1)
-    assert output == [
+    assert _without_ids(output) == [
         Document(
             page_content="foo",
             metadata={},
@@ -559,7 +565,7 @@ def test_similarity_search_with_scores(redis_url: str) -> None:
     docs = [o[0] for o in output]
     scores = [o[1] for o in output]
 
-    assert docs == [
+    assert _without_ids(docs) == [
         Document(page_content="apple"),
         Document(page_content="orange"),
         Document(page_content="hammer"),
