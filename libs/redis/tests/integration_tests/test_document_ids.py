@@ -226,6 +226,24 @@ def test_search_results_carry_the_document_ids(
     assert store.get_by_ids(["doc-1", "doc-2"]) == []
 
 
+@pytest.mark.parametrize("search", SEARCHES.values(), ids=SEARCHES.keys())
+def test_search_results_carry_the_document_ids_with_a_custom_id_field(
+    config: Dict[str, Any], search: Callable[[RedisVectorStore], List[Document]]
+) -> None:
+    # RedisVL returns the Redis key under `id`, whatever `id_field` is configured
+    store = RedisVectorStore(ConstantEmbeddings(), id_field="doc_id", **config)
+    store.add_documents(
+        [
+            Document(page_content="red apple", id="doc-1"),
+            Document(page_content="green apple", id="doc-2"),
+        ]
+    )
+
+    found = search(store)
+
+    assert sorted(doc.id for doc in found if doc.id) == ["doc-1", "doc-2"]
+
+
 async def test_asimilarity_search_results_carry_the_document_ids(
     config: Dict[str, Any],
 ) -> None:

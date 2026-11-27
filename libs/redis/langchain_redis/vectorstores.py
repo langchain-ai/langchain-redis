@@ -1322,8 +1322,9 @@ class RedisVectorStore(VectorStore):
 
     def _document_id_from_result(self, res: Dict[str, Any]) -> Optional[str]:
         """Return the document ID of a search result, which holds the Redis key."""
-        # FT.SEARCH results have the key under `id`, hybrid results under `__key`
-        redis_key = res.get("__key", res.get(self.config.id_field))
+        # RedisVL returns the key under `id`, whatever `id_field` is set to;
+        # hybrid results have it under `__key`
+        redis_key = res.get("__key", res.get("id"))
         if not isinstance(redis_key, str):
             return None
         return self._ids_from_redis_keys([redis_key])[0]
