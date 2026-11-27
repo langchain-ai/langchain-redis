@@ -1320,6 +1320,15 @@ class RedisVectorStore(VectorStore):
         key_prefix = self._index.key("")
         return [key.removeprefix(key_prefix) for key in redis_keys]
 
+    def _document_id_from_result(self, res: Dict[str, Any]) -> Optional[str]:
+        """Return the document ID of a search result, which holds the Redis key."""
+        # RedisVL returns the key under `id`, whatever `id_field` is set to;
+        # hybrid results have it under `__key`
+        redis_key = res.get("__key", res.get("id"))
+        if not isinstance(redis_key, str):
+            return None
+        return self._ids_from_redis_keys([redis_key])[0]
+
     def _tag_separator(self, field_name: str) -> str:
         """Return a TAG field's live schema separator, or the configured default."""
         field = self._index.schema.fields.get(field_name)
@@ -1702,7 +1711,8 @@ class RedisVectorStore(VectorStore):
         )
 
         embedding = self._embeddings.embed_query(query)
-        return_fields = self._default_return_fields(return_metadata)
+        # Hybrid results only hold the loaded fields, so load the key for the ID
+        return_fields = [*self._default_return_fields(return_metadata), "__key"]
         dtype = self.config.vector_datatype.lower()
         text_field = text_field or self.config.content_field
 
@@ -1837,7 +1847,11 @@ class RedisVectorStore(VectorStore):
             # Fall back to extracting metadata fields from result directly
             metadata = self._extract_metadata_from_result(res)
 
-        return Document(page_content=content, metadata=metadata)
+        return Document(
+            id=self._document_id_from_result(res),
+            page_content=content,
+            metadata=metadata,
+        )
 
     def _extract_metadata_from_result(self, res: Dict[str, Any]) -> Dict[str, Any]:
         """Get metadata fields from a search result without `_metadata_json`."""
@@ -1951,7 +1965,7 @@ class RedisVectorStore(VectorStore):
                 }
 
             lc_doc = Document(
-                id=res[self.config.id_field],
+                id=self._document_id_from_result(res),
                 page_content=fdoc[self.config.content_field],
                 metadata=metadata,
             )
